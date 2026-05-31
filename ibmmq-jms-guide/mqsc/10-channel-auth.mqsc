@@ -1,0 +1,46 @@
+* =============================================================================
+* 10-channel-auth.mqsc — Canal SVRCONN + autenticacao (CONNAUTH) + CHLAUTH
+* Setup de PRODUCAO. Aplicado uma unica vez na criacao do QMgr (em /etc/mqm).
+*
+* NOTA: o teste de integracao (CoaCodEndToEndIT) usa os objetos DEV.* default da
+* imagem (DEV.APP.SVRCONN, app pre-autorizado a DEV.**) para confiabilidade —
+* NAO depende deste arquivo. Este arquivo e o setup de producao referenciado pelo guia.
+* =============================================================================
+
+* ---- Canal de conexao de servidor (SVRCONN) para as aplicacoes ----
+* CHLTYPE(SVRCONN) e o tipo usado por clientes JMS em modo CLIENT.
+DEFINE CHANNEL('APP.SVRCONN') CHLTYPE(SVRCONN) TRPTYPE(TCP) +
+       DESCR('Canal de aplicacao para o guia COA/COD') REPLACE
+
+* ---- Objeto de autenticacao por usuario/senha do sistema operacional ----
+* AUTHTYPE(IDPWOS): valida user/senha contra o SO do QMgr.
+* CHCKCLNT(REQUIRED): exige credenciais de TODOS os clientes (MQCSP).
+* ADOPTCTX(YES): adota o usuario autenticado como contexto da conexao.
+DEFINE AUTHINFO('APP.IDPWOS') AUTHTYPE(IDPWOS) +
+       CHCKCLNT(REQUIRED) ADOPTCTX(YES) +
+       DESCR('Autenticacao user/senha via SO') REPLACE
+
+* ---- Liga o objeto de autenticacao ao QMgr ----
+ALTER QMGR CONNAUTH('APP.IDPWOS')
+
+* ---- Aplica as mudancas de seguranca de conexao ----
+* Necessario apos alterar CONNAUTH para que passe a valer.
+REFRESH SECURITY TYPE(CONNAUTH)
+
+* ---- CHLAUTH: regras de autorizacao de canal (verbo e SET CHLAUTH) ----
+* 1) Bloqueia qualquer usuario administrativo de se conectar por canais cliente.
+*    *MQADMIN cobre os ids privilegiados; defesa contra escalonamento remoto.
+SET CHLAUTH('APP.SVRCONN') TYPE(BLOCKUSER) +
+    USERLIST('*MQADMIN') +
+    DESCR('Bloqueia admins no canal de aplicacao') ACTION(REPLACE)
+
+* 2) Bloqueia o canal coringa SYSTEM.* default contra conexoes (boa pratica).
+SET CHLAUTH('SYSTEM.*') TYPE(ADDRESSMAP) ADDRESS('*') +
+    USERSRC(NOACCESS) +
+    DESCR('Bloqueia canais SYSTEM.* remotos') ACTION(REPLACE)
+
+* 3) Mapeia o usuario cliente 'app' para o MCAUSER 'app' (USERSRC(MAP)).
+*    Apenas conexoes que se autenticam como 'app' assumem essa identidade.
+SET CHLAUTH('APP.SVRCONN') TYPE(USERMAP) +
+    CLNTUSER('app') USERSRC(MAP) MCAUSER('app') +
+    DESCR('Mapeia o usuario de aplicacao app') ACTION(REPLACE)

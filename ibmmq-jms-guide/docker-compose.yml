@@ -1,0 +1,36 @@
+# =============================================================================
+# docker-compose.yml — IBM MQ Advanced for Developers (single QMgr) para o guia.
+#
+# Sobe um gerenciador de filas QM1 com os objetos DEV.* default, listener 1414 e
+# console web 9443. Os arquivos mqsc/ sao montados em /etc/mqm e aplicados UMA VEZ
+# na criacao do QMgr (autoconfig) — adicionam os objetos APP.* de producao por cima.
+#
+# Uso:
+#   docker compose up -d
+#   docker compose logs -f mq      # aguarde "Started queue manager"
+#   docker compose down            # (use 'down -v' para descartar o volume)
+# =============================================================================
+services:
+  mq:
+    # Tag -r2: a imagem nao publica uma tag "9.4.5.0" pura (formato 9.4.<fp>-r<N>).
+    image: icr.io/ibm-messaging/mq:9.4.5.0-r2
+    container_name: ibmmq-guide
+    environment:
+      # Obrigatorio: sem aceitar a licenca o container encerra.
+      LICENSE: accept
+      MQ_QMGR_NAME: QM1
+      # Protege DEV.APP.SVRCONN com senha. ATENCAO: MQ_APP_PASSWORD esta DEPRECADA
+      # a partir da v9.4.0.0 — em producao prefira os secrets mqAppPassword/mqAdminPassword.
+      MQ_APP_PASSWORD: passw0rd
+    ports:
+      - "1414:1414"   # listener MQ (clientes JMS)
+      - "9443:9443"   # console web (https://localhost:9443/ibmmq/console)
+    volumes:
+      # Autoconfig: os .mqsc sao executados na criacao do QMgr (nao a cada start).
+      - ./mqsc/10-channel-auth.mqsc:/etc/mqm/10-channel-auth.mqsc:ro
+      - ./mqsc/20-queues.mqsc:/etc/mqm/20-queues.mqsc:ro
+      # Persiste os dados do QMgr entre reinicios do container.
+      - mqdata:/mnt/mqm
+
+volumes:
+  mqdata:

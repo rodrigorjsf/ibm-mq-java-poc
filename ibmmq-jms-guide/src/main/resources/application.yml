@@ -1,0 +1,30 @@
+micronaut:
+  application:
+    name: ibmmq-jms-guide
+
+# Configuracao IBM MQ — vinculada a com.example.ibmmq.config.MqProperties (@ConfigurationProperties("ibm-mq")).
+# Defaults de DESENVOLVIMENTO (imagem icr.io/ibm-messaging/mq). Em producao use os objetos APP.*
+# definidos nos arquivos mqsc/ e injete a senha via secret/variavel de ambiente.
+ibm-mq:
+  host: localhost
+  port: 1414
+  channel: DEV.APP.SVRCONN
+  queue-manager: QM1
+  # Lista CONNAME para reconexao multi-instancia (formato host(port),host(port)). Vazio = usa host/port.
+  connection-name-list: ""
+  user: app
+  # Em dev a imagem exige senha (MQ_APP_PASSWORD). Sobrescreva via IBM_MQ_PASSWORD / -Dibm-mq.password.
+  password: ${IBM_MQ_PASSWORD:passw0rd}
+  application-name: ibmmq-jms-guide
+  business-queue: DEV.QUEUE.1
+  report-queue: DEV.QUEUE.2
+  reconnect-enabled: true
+  reconnect-timeout-seconds: 1800
+  sharing-conversations: 10
+  # TLS desligado em dev. Para ligar: tls-enabled=true + ssl-cipher-suite (evite ciphers TLS_RSA_*).
+  tls-enabled: false
+  ssl-cipher-suite: ""
+
+logger:
+  levels:
+    com.example.ibmmq: INFO

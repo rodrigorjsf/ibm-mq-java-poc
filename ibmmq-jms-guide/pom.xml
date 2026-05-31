@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>ibmmq-jms-guide</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>ibmmq-jms-guide</name>
+    <description>Micronaut 4 + IBM MQ (JMS 2.0 / javax.jms) — demonstracao de relatorios COA/COD</description>
+
+    <properties>
+        <!-- Producao roda em Java 21; o bytecode gerado tem como alvo o release 21
+             (compilavel/executavel tambem no Corretto 25 instalado localmente). -->
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <!-- Versoes travadas (ver fact sheet Fase A). micronaut-platform 4.9.9 NAO existe:
+             a linha 4.9.x do BOM termina em 4.9.4. -->
+        <micronaut.version>4.9.4</micronaut.version>
+        <micronaut.maven.plugin.version>4.11.6</micronaut.maven.plugin.version>
+
+        <!-- Cliente IBM MQ javax.jms / JMS 2.0. -->
+        <ibm.mq.version>9.4.5.0</ibm.mq.version>
+        <!-- Pool JMS na linha javax (2.x ainda e javax.jms; 3.x = jakarta). -->
+        <pooled.jms.version>2.0.9</pooled.jms.version>
+
+        <jackson.version>2.18.2</jackson.version>
+
+        <!-- Versoes de teste. -->
+        <junit.version>5.11.4</junit.version>
+        <mockito.version>5.14.2</mockito.version>
+        <!-- Testcontainers 2.x (major novo; docker-java moderno, compativel com Docker engine 29.x).
+             Core 2.0.5 + modulo oficial IBM (MQContainer) 2.0.3. -->
+        <testcontainers.version>2.0.5</testcontainers.version>
+        <ibm.mq.testcontainer.version>2.0.3</ibm.mq.testcontainer.version>
+
+        <!-- Aplicacao Micronaut: nome da classe principal. -->
+        <exec.mainClass>com.example.ibmmq.Application</exec.mainClass>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- BOM da plataforma Micronaut: alinha versoes de todos os modulos micronaut-*. -->
+            <dependency>
+                <groupId>io.micronaut.platform</groupId>
+                <artifactId>micronaut-platform</artifactId>
+                <version>${micronaut.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- ===================== Micronaut (apenas DI / ciclo de vida) ===================== -->
+        <!-- Injecao de dependencia e processamento de @ConfigurationProperties/@Factory. -->
+        <dependency>
+            <groupId>io.micronaut</groupId>
+            <artifactId>micronaut-inject</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <!-- Runtime: ApplicationContext, bootstrap, suporte a application.yml. -->
+        <dependency>
+            <groupId>io.micronaut</groupId>
+            <artifactId>micronaut-runtime</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
+        <!-- ===================== JSON ===================== -->
+        <!-- jackson-databind puro (sem serde): evita acoplar o processador serde e
+             a necessidade de @Serdeable nos records. Usamos new ObjectMapper() / @Singleton. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+            <scope>compile</scope>
+        </dependency>
+
+        <!-- ===================== IBM MQ + Pool JMS ===================== -->
+        <!-- allclient = javax.jms (JMS 2.0). Traz com.ibm.mq.*, com.ibm.msg.client.*,
+             com.ibm.mq.constants.* (CMQC/MQConstants) e a javax.jms-api 2.0.1 transitiva. -->
+        <dependency>
+            <groupId>com.ibm.mq</groupId>
+            <artifactId>com.ibm.mq.allclient</artifactId>
+            <version>${ibm.mq.version}</version>
+            <scope>compile</scope>
+        </dependency>
+        <!-- Pool de conexoes JMS (javax). Classe: org.messaginghub.pooled.jms.JmsPoolConnectionFactory. -->
+        <dependency>
+            <groupId>org.messaginghub</groupId>
+            <artifactId>pooled-jms</artifactId>
+            <version>${pooled.jms.version}</version>
+            <scope>compile</scope>
+        </dependency>
+
+        <!-- ===================== Logging ===================== -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- ===================== Testes ===================== -->
+        <dependency>
+            <groupId>io.micronaut.test</groupId>
+            <artifactId>micronaut-test-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>${mockito.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- Testcontainers 2.x + modulo oficial IBM (classe com.ibm.mq.testcontainers.MQContainer).
+             O modulo 2.0.3 traz o core 2.0.3 transitivamente; declaramos o core 2.0.5 diretamente para
+             fixa-lo via "nearest wins" (override). O lifecycle do container e manual (@BeforeAll/@AfterAll),
+             entao NAO precisamos do modulo org.testcontainers:junit-jupiter. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.ibm.mq</groupId>
+            <artifactId>mq-java-testcontainer</artifactId>
+            <version>${ibm.mq.testcontainer.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- docker-java-transport-zerodep 3.7.1 (trazido pelo Testcontainers 2.0.5) referencia
+             org.apache.commons.codec.Charsets, classe removida no commons-codec 1.17+. Fixamos a
+             ultima versao que ainda a possui (1.16.1) para o container subir no teste de integracao. -->
+        <dependency>
+            <groupId>commons-codec</groupId>
+            <artifactId>commons-codec</artifactId>
+            <version>1.16.1</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Plugin Micronaut: empacotamento/execucao. Linha 4.x para Micronaut 4.9.x. -->
+            <plugin>
+                <groupId>io.micronaut.maven</groupId>
+                <artifactId>micronaut-maven-plugin</artifactId>
+                <version>${micronaut.maven.plugin.version}</version>
+            </plugin>
+
+            <!-- Compilador: release 21 + processadores de anotacao do Micronaut. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>${maven.compiler.release}</release>
+                    <annotationProcessorPaths>
+                        <!-- Gera os metadados de DI/bean do Micronaut em tempo de compilacao. -->
+                        <path>
+                            <groupId>io.micronaut</groupId>
+                            <artifactId>micronaut-inject-java</artifactId>
+                            <version>${micronaut.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+
+            <!-- Surefire: testes unitarios (*Test.java). NAO roda *IT.java (vai para o failsafe).
+                 O argLine enable-native-access silencia o aviso de native-access do cliente MQ
+                 (System.loadLibrary) sob Corretto 25. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.2</version>
+                <configuration>
+                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                    <excludes>
+                        <exclude>**/*IT.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+
+            <!-- Failsafe: testes de integracao (*IT.java), ligado a integration-test/verify.
+                 Requer Docker (Testcontainers). Mesmo argLine de native-access. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.5.2</version>
+                <configuration>
+                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                    <includes>
+                        <include>**/*IT.java</include>
+                    </includes>
+                    <environmentVariables>
+                        <!-- Docker 25+ (engine 29.x neste ambiente) exige API >= 1.40 e dropou versoes
+                             antigas. O docker-java embutido no Testcontainers 1.20.x negocia para uma
+                             versao fora dessa faixa, e o daemon responde HTTP 400 -> Testcontainers
+                             reporta "Could not find a valid Docker environment". Fixar a API numa versao
+                             suportada [1.40..1.54] resolve. Para Docker antigo (<25), ajuste/remova. -->
+                        <DOCKER_API_VERSION>1.44</DOCKER_API_VERSION>
+                    </environmentVariables>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -1,0 +1,39 @@
+* =============================================================================
+* 20-queues.mqsc — Filas de negocio, relatorios, DLQ e backout (poison message)
+* Setup de PRODUCAO. Aplicado uma unica vez na criacao do QMgr (em /etc/mqm).
+*
+* NOTA: o teste de integracao usa DEV.QUEUE.1/DEV.QUEUE.2 (defaults da imagem),
+* nao estas filas APP.* — escolha feita por confiabilidade do IT.
+* =============================================================================
+
+* ---- Fila de negocio (destino das mensagens da aplicacao) ----
+* BOTHRESH(5): apos 5 backouts (rollbacks), a mensagem "envenenada" e movida...
+* BOQNAME(APP.BACKOUT.QUEUE): ...para a fila de backout, em vez de travar a fila.
+DEFINE QLOCAL('APP.BUSINESS.QUEUE') +
+       DESCR('Fila de negocio do guia COA/COD') +
+       DEFPSIST(YES) +
+       BOTHRESH(5) BOQNAME('APP.BACKOUT.QUEUE') +
+       REPLACE
+
+* ---- Fila de relatorios (recebe COA/COD/etc via JMSReplyTo) ----
+* DEFPSIST(YES): coerente com mensagens persistentes (o report HERDA a persistencia
+* do original; manter a fila persistente evita perda em restart do QMgr).
+DEFINE QLOCAL('APP.REPORT.QUEUE') +
+       DESCR('Fila de relatorios de entrega (COA/COD)') +
+       DEFPSIST(YES) +
+       REPLACE
+
+* ---- Fila de backout (poison messages que excederam BOTHRESH) ----
+DEFINE QLOCAL('APP.BACKOUT.QUEUE') +
+       DESCR('Mensagens envenenadas da fila de negocio') +
+       DEFPSIST(YES) +
+       REPLACE
+
+* ---- Dead Letter Queue (DLQ) do gerenciador de filas ----
+DEFINE QLOCAL('APP.DLQ') +
+       DESCR('Dead letter queue do QMgr') +
+       DEFPSIST(YES) +
+       REPLACE
+
+* Aponta a DLQ do QMgr para a fila acima (DEADQ deve ser uma fila local).
+ALTER QMGR DEADQ('APP.DLQ')
