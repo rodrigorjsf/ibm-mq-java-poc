@@ -1,0 +1,939 @@
+{
+  "summary": "Validate IBM MQ / JMS 2.0 facts (Maven versions, JMS_IBM/WMQConstants names, feedback codes, COA/COD timing & persistence, JDK support, MQSC, container) against IBM docs and Maven Central before generating the guide and project",
+  "agentCount": 5,
+  "logs": [],
+  "result": {
+    "clusters": [
+      {
+        "cluster": "Maven coordinates, versions, Micronaut & Testcontainers build facts (IBM MQ + JMS 2.0, Java 21 / Micronaut 4.9.9)",
+        "facts": [
+          {
+            "id": "allclient-9.4.5.0-exists",
+            "claim": "com.ibm.mq:com.ibm.mq.allclient version 9.4.5.0 exists on Maven Central.",
+            "verdict": "confirmed",
+            "value": "9.4.5.0 is present in Maven Central metadata for com.ibm.mq:com.ibm.mq.allclient.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/maven-metadata.xml",
+            "source_quote": "<version>9.4.5.0</version> ... <version>9.4.5.1</version> (both appear under <versions> for artifactId com.ibm.mq.allclient)",
+            "notes": "Verified by fetching maven-metadata.xml directly from repo1.maven.org. 9.4.5.0 and 9.4.5.1 both listed."
+          },
+          {
+            "id": "allclient-latest-release",
+            "claim": "Current <latest> and <release> for com.ibm.mq:com.ibm.mq.allclient.",
+            "verdict": "confirmed",
+            "value": "latest = 9.4.5.1, release = 9.4.5.1 (as of fetch on 2026-05-31). 9.4.5.0 is the prior fixpack; 9.4.5.1 is now newest. Guide pins 9.4.5.0, which is valid but no longer the newest.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/maven-metadata.xml",
+            "source_quote": "<latest>9.4.5.1</latest> <release>9.4.5.1</release>",
+            "notes": "Version-current fact. The pinned 9.4.5.0 resolves fine; 9.4.5.1 is a newer 9.4.5 fixpack."
+          },
+          {
+            "id": "allclient-javax-jms",
+            "claim": "com.ibm.mq.allclient is the javax.jms (JMS 2.0) client.",
+            "verdict": "confirmed",
+            "value": "com.ibm.mq.allclient 9.4.5.0 implements JMS 2.0 using the javax.jms namespace. Dispositive from the artifact bytecode.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "JAR contains com/ibm/msg/client/jms/JmsConnectionFactory.class; bytecode scan of 300 com.ibm.msg.client classes -> 77 references to 'javax/jms/', 0 to 'jakarta/jms/'.",
+            "notes": "Downloaded the actual jar and scanned class bytecode. The jar does not bundle the spec API classes (0 javax/jms entries as packaged classes) but compiled-in symbolic references are exclusively javax/jms. IBM 9.4 docs (https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=messaging-mq-classes-jakarta-overview) corroborate that JMS 2.0 = javax: 'Jakarta Messaging 3.0 is functionally equivalent to JMS 2.0, there are some differences in naming ... Oracle retains control of the \"javax\" name.'"
+          },
+          {
+            "id": "jakarta-client-9.4.5.0-exists",
+            "claim": "com.ibm.mq:com.ibm.mq.jakarta.client exists at 9.4.5.0 and is the jakarta.jms client.",
+            "verdict": "confirmed",
+            "value": "com.ibm.mq.jakarta.client 9.4.5.0 exists (latest/release = 9.4.5.1) and implements Jakarta Messaging 3.0 using the jakarta.jms namespace. Dispositive from the artifact bytecode.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.jakarta.client/9.4.5.0/com.ibm.mq.jakarta.client-9.4.5.0.jar",
+            "source_quote": "JAR contains com/ibm/msg/client/jakarta/jms/JmsConnectionFactory.class; bytecode scan of 300 com.ibm.msg.client classes -> 265 references to 'jakarta/jms/', 0 to 'javax/jms/'. maven-metadata: <latest>9.4.5.1</latest> <release>9.4.5.1</release>, versions include <version>9.4.5.0</version>.",
+            "notes": "Two independent confirmations: (1) maven-metadata.xml lists 9.4.5.0 (and 9.4.5.1 as latest); (2) downloaded jar bytecode references jakarta/jms exclusively. Artifact line begins at 9.3.0.0 (Jakarta support introduced in MQ 9.3.0)."
+          },
+          {
+            "id": "pooledjms-namespace-by-version",
+            "claim": "org.messaginghub:pooled-jms 1.x = javax.jms, 3.x = jakarta.jms; latest 1.x version and the fully-qualified JmsPoolConnectionFactory class.",
+            "verdict": "confirmed",
+            "value": "1.x = javax.jms (confirmed: 1.2.8 source imports javax.jms.*); 3.x = jakarta.jms. Latest 1.x = 1.2.8. FQ class = org.messaginghub.pooled.jms.JmsPoolConnectionFactory. Overall latest = 3.2.2.",
+            "source_url": "https://raw.githubusercontent.com/messaginghub/pooled-jms/1.2.8/pooled-jms/src/main/java/org/messaginghub/pooled/jms/JmsPoolConnectionFactory.java",
+            "source_quote": "package org.messaginghub.pooled.jms; ... import javax.jms.ConnectionFactory; import javax.jms.Connection; import javax.jms.JMSContext; (1.2.8 source). pooled-jms README: 'Following the 3.0 release this project has transitioned to the Jakarta JMS API. For those still using JMS 2.0 or 1.1 based clients the previous 2.x release series should be used.'",
+            "notes": "IMPORTANT nuance for the guide: BOTH 1.x AND 2.x are javax.jms (verified 1.2.8 and 2.0.9 source both import javax.jms; package is org.messaginghub.pooled.jms in both). For a NEW javax.jms project the project recommends the 2.x line (latest 2.0.9), not 1.x. The claim '1.x = javax.jms' is correct, but pinning 1.x leaves you on an older series; 2.0.9 is the current maintained javax line. 3.x (latest 3.2.2) = jakarta.jms. Full version list fetched from repo1 maven-metadata: 1.x tops at 1.2.8, 2.x at 2.0.9, 3.x at 3.2.2."
+          },
+          {
+            "id": "micronaut-core-4.9.9-exists",
+            "claim": "Micronaut 4.9.9 exists (io.micronaut.platform BOM / micronaut-core 4.9.x).",
+            "verdict": "refuted",
+            "value": "PARTIALLY TRUE - read carefully: io.micronaut:micronaut-core 4.9.9 EXISTS (POM returns HTTP 200). But io.micronaut.platform:micronaut-platform (the BOM you put in pom.xml) 4.9.9 does NOT exist - the BOM 4.9.x line tops out at 4.9.4, then jumps to 4.10.x. A pom.xml pinning the platform BOM to 4.9.9 will FAIL to resolve.",
+            "source_url": "https://repo1.maven.org/maven2/io/micronaut/platform/micronaut-platform/4.9.9/micronaut-platform-4.9.9.pom",
+            "source_quote": "HEAD micronaut-platform/4.9.9/micronaut-platform-4.9.9.pom -> HTTP/2 404. Control: micronaut-platform/4.9.4/...pom -> HTTP/2 200 (exists), and micronaut-core/4.9.9/micronaut-core-4.9.9.pom -> HTTP/2 200 (exists). platform maven-metadata 4.9.x list = 4.9.0, 4.9.1, 4.9.2, 4.9.3, 4.9.4 (no 4.9.9).",
+            "notes": "BUILD-BREAKING finding. micronaut-core versioning diverges from the io.micronaut.platform BOM versioning. micronaut-core 4.9.x exists up to 4.9.12; the platform BOM 4.9.x stops at 4.9.4. If the guide means 'use BOM io.micronaut.platform:micronaut-platform:4.9.9' it is invalid - pick 4.9.4 (or 4.10.x) for the BOM. Micronaut 4.9.0 was released 2025-06-30 (https://micronaut.io/2025/06/30/micronaut-framework-4-9-0-released/)."
+          },
+          {
+            "id": "micronaut-4-java-baseline",
+            "claim": "Micronaut 4.x requires Java 17+ and supports Java 21.",
+            "verdict": "confirmed",
+            "value": "Micronaut 4.0 baseline is Java 17 (minimum). Java 21 is supported (selectable in Micronaut Launch/CLI from 4.2.0).",
+            "source_url": "https://micronaut.io/2023/02/16/micronaut-framework-4-0-with-java-17-baseline/",
+            "source_quote": "'Starting with Micronaut framework 4.0, to be released in 2023, the Java baseline will be Java 17.' (Java 17 baseline blog). Plus 4.2.0 release blog (https://micronaut.io/2023/11/17/micronaut-framework-4-2-0-released/): 'You can select Java 21 in Micronaut Launch or CLI'.",
+            "notes": "Two primary sources fetched: Java 17 baseline statement and verbatim Java 21 selectability from the 4.2.0 release announcement. Java 21 (LTS) is fully supported on the 4.9.x line."
+          },
+          {
+            "id": "micronaut-maven-plugin-coordinate",
+            "claim": "Latest micronaut-maven-plugin coordinate.",
+            "verdict": "confirmed",
+            "value": "io.micronaut.maven:micronaut-maven-plugin. Latest overall = 5.0.0. BUT 5.0.0 is the Micronaut-5 plugin; for a Micronaut 4.9.x project use the 4.x line, latest = 4.11.6.",
+            "source_url": "https://repo1.maven.org/maven2/io/micronaut/maven/micronaut-maven-plugin/maven-metadata.xml",
+            "source_quote": "<latest>5.0.0</latest> <release>5.0.0</release>; version list includes <version>4.11.6</version> then 5.0.0-M1/M2/M3/RC1/5.0.0.",
+            "notes": "groupId is io.micronaut.maven (not io.micronaut). For a 4.9.9 project pin the plugin to the 4.x line (4.11.6); 5.0.0 aligns with Micronaut 5 / Java 25 baseline."
+          },
+          {
+            "id": "micronaut-jms-4x-jakarta-only",
+            "claim": "io.micronaut.jms:micronaut-jms 4.x module is jakarta-only (justifies excluding it for a javax.jms project).",
+            "verdict": "confirmed",
+            "value": "Confirmed jakarta-only. micronaut-jms 4.0.0 was a major release migrating javax -> jakarta (breaking change). Bytecode of micronaut-jms-core 4.3.0 references jakarta/jms exclusively (0 javax). NOTE the coordinate: the artifact is io.micronaut.jms:micronaut-jms-core (and micronaut-jms-bom), NOT a plain 'micronaut-jms' artifact.",
+            "source_url": "https://repo1.maven.org/maven2/io/micronaut/jms/micronaut-jms-core/4.3.0/micronaut-jms-core-4.3.0.jar",
+            "source_quote": "Bytecode scan of micronaut-jms-core-4.3.0.jar (68 classes): 444 references to 'jakarta/jms/', 0 references to 'javax/jms/'.",
+            "notes": "Dispositive via downloaded jar bytecode. 4.x line = 4.0.0..4.3.0 (latest overall is now 5.0.0). Correctly excluded for a javax.jms project: the 4.x module is jakarta-only and would not bind IBM's allclient (javax) connection factory. The published artifacts under io.micronaut.jms are micronaut-jms-core, micronaut-jms-bom, micronaut-jms-activemq-classic, micronaut-jms-activemq-artemis, micronaut-jms-sqs, micronaut-jms-test (no bare 'micronaut-jms')."
+          },
+          {
+            "id": "testcontainers-mq-module",
+            "claim": "Is there an official org.testcontainers MQ module, or is GenericContainer used? Latest Testcontainers version.",
+            "verdict": "confirmed",
+            "value": "There is NO module under the org.testcontainers groupId for MQ (the org/testcontainers Maven directory has no mq/ibm* entry). However an OFFICIAL IBM-maintained Testcontainers module exists: com.ibm.mq:mq-java-testcontainer, providing class com.ibm.mq.testcontainers.MQContainer. GenericContainer is the namespace-agnostic alternative. Latest Testcontainers core = 2.0.5.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/mq-java-testcontainer/maven-metadata.xml",
+            "source_quote": "mq-java-testcontainer metadata: <groupId>com.ibm.mq</groupId> <artifactId>mq-java-testcontainer</artifactId> <latest>2.0.4</latest> <release>2.0.4</release>. testcontainers/testcontainers metadata: <latest>2.0.5</latest> <release>2.0.5</release>. Directory listing of repo1 org/testcontainers/ contains no mq or ibm* artifact.",
+            "notes": "Two sub-facts: (1) No org.testcontainers:mq module exists. (2) The official module is com.ibm.mq:mq-java-testcontainer (latest 2.0.4; listed on https://testcontainers.com/modules/ibmmq/ which gives 'import com.ibm.mq.testcontainers.MQContainer;'). Latest Testcontainers core library = 2.0.5 (note TC version list is lexically sorted in metadata; 2.0.5 is the true latest, confirmed by <latest>/<release>). If not using the IBM module, GenericContainer with the icr.io/ibm-messaging/mq image is the alternative."
+          },
+          {
+            "id": "ibm-mq-container-image-edition-license",
+            "claim": "IBM MQ container image icr.io/ibm-messaging/mq is 'MQ Advanced for Developers'; License env var LICENSE=accept.",
+            "verdict": "confirmed",
+            "value": "Image icr.io/ibm-messaging/mq is IBM MQ Advanced for Developers (developer image). Set LICENSE=accept to agree to the MQ Advanced for Developers license (LICENSE=view to view it).",
+            "source_url": "https://raw.githubusercontent.com/ibm-messaging/mq-container/master/README.md",
+            "source_quote": "'LICENSE - Set this to accept to agree to the MQ Advanced for Developers license. If you wish to see the license you can set this to view.' and 'You can build an image containing either IBM MQ Advanced, or IBM MQ Advanced for Developers. The developer image includes a default developer configuration'.",
+            "notes": "Primary source = official ibm-messaging/mq-container repo README. Image reference used in docs: icr.io/ibm-messaging/mq (e.g. icr.io/ibm-messaging/mq:latest)."
+          },
+          {
+            "id": "ibm-mq-container-dev-defaults",
+            "claim": "IBM MQ dev image default objects and credentials (queues, channels, users).",
+            "verdict": "confirmed",
+            "value": "Default dev objects (created when MQ_DEV != false): queues DEV.QUEUE.1, DEV.QUEUE.2, DEV.QUEUE.3, and DEV.DEAD.LETTER.QUEUE (set as the QM dead-letter queue). Channels: DEV.ADMIN.SVRCONN (admin user only) and DEV.APP.SVRCONN (app user only, no admin). Users: admin (administration) and app (messaging, in group mqclient). Default queue manager name example: QM1 (via MQ_QMGR_NAME).",
+            "source_url": "https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/developer-config.md",
+            "source_quote": "'DEV.QUEUE.1 / DEV.QUEUE.2 / DEV.QUEUE.3 / DEV.DEAD.LETTER.QUEUE - configured as the Queue Manager's Dead Letter Queue.' ... 'DEV.ADMIN.SVRCONN - configured to only allow the admin user to connect' ... 'DEV.APP.SVRCONN - does not allow administrative users to connect. Only the app user can connect.' ... 'User admin for administration ... User app for messaging (in a group called mqclient)'.",
+            "notes": "IMPORTANT credential change: from IBM MQ v9.4.0.0 the env vars MQ_ADMIN_PASSWORD / MQ_APP_PASSWORD are DEPRECATED; passwords for admin and app MUST be set via container secrets (mqAdminPassword / mqAppPassword). There is no fixed built-in default password; the doc examples use 'passw0rd' (min 8 chars). The admin/app users are only created if their password (secret) is set. Web console on port 9443 (/ibmmq/console), listener on 1414."
+          },
+          {
+            "id": "ibm-mq-container-94-tags",
+            "claim": "Real 9.4.x tags exist for icr.io/ibm-messaging/mq.",
+            "verdict": "confirmed",
+            "value": "Real 9.4.x tags exist in the icr.io registry, format 9.4.<fixpack>-r<N> with per-arch variants (-amd64, -ppc64le, -s390x) plus multi-arch tags and a 'latest' tag. Relevant 9.4.5.x tags: 9.4.5.0-r1, 9.4.5.0-r2, 9.4.5.1-r1. Full 9.4 line ranges 9.4.0.0-r1 .. 9.4.5.1-r1.",
+            "source_url": "https://icr.io/v2/ibm-messaging/mq/tags/list",
+            "source_quote": "Anonymous GET https://icr.io/v2/ibm-messaging/mq/tags/list -> HTTP 200, 426 total tags, 176 with prefix '9.4.', including '9.4.5.0-r1','9.4.5.0-r2','9.4.5.1-r1','9.4.4.0-r4','9.4.3.1-r3', and 'latest'.",
+            "notes": "Primary source = icr.io Docker Registry v2 tags API (anonymous, HTTP 200 - no token needed for listing). Tags carry a build revision suffix '-rN' (e.g. 9.4.5.0-r2), so the JMS client version 9.4.5.0 maps to image tag 9.4.5.0-r1/r2, not a bare '9.4.5.0'. Use 'latest' or a pinned '9.4.x.y-rN' tag."
+          }
+        ]
+      },
+      {
+        "cluster": "IBM MQ 9.4 COA/COD report constants, feedback codes, report semantics (JMS 2.0 / com.ibm.mq.allclient 9.4.5.0)",
+        "facts": [
+          {
+            "id": "allclient-version",
+            "claim": "com.ibm.mq:com.ibm.mq.allclient version 9.4.5.0 exists on Maven Central (javax.jms namespace classes).",
+            "verdict": "confirmed",
+            "value": "9.4.5.0 published 2026-01-30; main jar 8477900 bytes; sha1 26c8f5cd163847990d270acf2f4f0a7f773c3bbd",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/",
+            "source_quote": "com.ibm.mq.allclient-9.4.5.0.jar  2026-01-30 14:47  8477900",
+            "notes": "Maven Central directory listing fetched via curl (HTTP 200). Downloaded jar sha1 matches the published .sha1 (26c8f5cd163847990d270acf2f4f0a7f773c3bbd), so all bytecode-derived facts below come from the authentic artifact. Build id inside WMQConstants.class: sn=p945 (= 9.4.5)."
+          },
+          {
+            "id": "JMS-property-field-naming-scheme",
+            "claim": "Each JMS report property is exposed as an UPPERCASE Java static final String field whose String VALUE is the mixed-case JMS property name. Declared in com.ibm.msg.client.jms.JmsConstants and inherited by WMQConstants.",
+            "verdict": "confirmed",
+            "value": "Java field = UPPER_SNAKE (e.g. JMS_IBM_REPORT_COA); its String value = mixed-case JMS property name (e.g. \"JMS_IBM_Report_COA\"). Inheritance: WMQConstants implements CommonConstants extends JmsConstants.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "FIELD: JMS_IBM_REPORT_COA  desc=Ljava/lang/String;  VALUE='JMS_IBM_Report_COA'",
+            "notes": "CRITICAL for an exhaustive reference: the field identifier is the all-caps form; the literal property string (used at message.setProperty / WMQConstants reference) is the mixed-case form. CommonConstants does not declare these fields itself; it inherits them from JmsConstants, so they are reachable as WMQConstants.JMS_IBM_REPORT_COA etc. Extracted by parsing the class field-table + ConstantValue attributes of com/ibm/msg/client/jms/JmsConstants.class."
+          },
+          {
+            "id": "JMS_IBM_Report_COA",
+            "claim": "JMS property to request COA reports and the field that holds it.",
+            "verdict": "confirmed",
+            "value": "Field WMQConstants.JMS_IBM_REPORT_COA (declared in JmsConstants) = String \"JMS_IBM_Report_COA\". Maps to MQRO_COA / MQRO_COA_WITH_DATA / MQRO_COA_WITH_FULL_DATA.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "FIELD: JMS_IBM_REPORT_COA  VALUE='JMS_IBM_Report_COA'",
+            "notes": "Value-mapping (MQRO_COA or MQRO_COA_WITH_DATA or MQRO_COA_WITH_FULL_DATA) confirmed by IBM doc mirror https://www.setgetweb.com/p/MQ92/dev/q032050_.htm (ibm.com returned HTTP 403)."
+          },
+          {
+            "id": "JMS_IBM_Report_COD",
+            "claim": "JMS property to request COD reports and the field that holds it.",
+            "verdict": "confirmed",
+            "value": "Field WMQConstants.JMS_IBM_REPORT_COD = String \"JMS_IBM_Report_COD\". Maps to MQRO_COD / MQRO_COD_WITH_DATA / MQRO_COD_WITH_FULL_DATA.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "FIELD: JMS_IBM_REPORT_COD  VALUE='JMS_IBM_Report_COD'",
+            "notes": "Value-mapping confirmed by IBM doc mirror https://www.setgetweb.com/p/MQ92/dev/q032050_.htm."
+          },
+          {
+            "id": "JMS_IBM_Report_Exception",
+            "claim": "JMS property to request exception reports and the field that holds it.",
+            "verdict": "confirmed",
+            "value": "Field WMQConstants.JMS_IBM_REPORT_EXCEPTION = String \"JMS_IBM_Report_Exception\". Maps to MQRO_EXCEPTION / _WITH_DATA / _WITH_FULL_DATA.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "FIELD: JMS_IBM_REPORT_EXCEPTION  VALUE='JMS_IBM_Report_Exception'",
+            "notes": "Mapping confirmed by IBM doc mirror q032050."
+          },
+          {
+            "id": "JMS_IBM_Report_Expiration",
+            "claim": "JMS property to request expiration reports and the field that holds it.",
+            "verdict": "confirmed",
+            "value": "Field WMQConstants.JMS_IBM_REPORT_EXPIRATION = String \"JMS_IBM_Report_Expiration\". Maps to MQRO_EXPIRATION / _WITH_DATA / _WITH_FULL_DATA.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "FIELD: JMS_IBM_REPORT_EXPIRATION  VALUE='JMS_IBM_Report_Expiration'",
+            "notes": "Mapping confirmed by IBM doc mirror q032050."
+          },
+          {
+            "id": "JMS_IBM_Report_PAN",
+            "claim": "JMS property to request PAN (positive action notification) and the field that holds it.",
+            "verdict": "confirmed",
+            "value": "Field WMQConstants.JMS_IBM_REPORT_PAN = String \"JMS_IBM_Report_PAN\". Maps to MQRO_PAN.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "FIELD: JMS_IBM_REPORT_PAN  VALUE='JMS_IBM_Report_PAN'",
+            "notes": "Mapping confirmed by IBM doc mirror q032050. PAN reports are generated by the consuming application, not the queue manager."
+          },
+          {
+            "id": "JMS_IBM_Report_NAN",
+            "claim": "JMS property to request NAN (negative action notification) and the field that holds it.",
+            "verdict": "confirmed",
+            "value": "Field WMQConstants.JMS_IBM_REPORT_NAN = String \"JMS_IBM_Report_NAN\". Maps to MQRO_NAN.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "FIELD: JMS_IBM_REPORT_NAN  VALUE='JMS_IBM_Report_NAN'",
+            "notes": "Mapping confirmed by IBM doc mirror q032050. NAN reports are generated by the consuming application."
+          },
+          {
+            "id": "JMS_IBM_Report_Pass_Msg_ID",
+            "claim": "JMS property to request msg-id pass-through and the field that holds it.",
+            "verdict": "confirmed",
+            "value": "Field WMQConstants.JMS_IBM_REPORT_PASS_MSG_ID = String \"JMS_IBM_Report_Pass_Msg_ID\". Maps to MQRO_PASS_MSG_ID.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "FIELD: JMS_IBM_REPORT_PASS_MSG_ID  VALUE='JMS_IBM_Report_Pass_Msg_ID'",
+            "notes": "Note casing: 'Pass_Msg_ID' (ID upper). Mapping confirmed by IBM doc mirror q032050."
+          },
+          {
+            "id": "JMS_IBM_Report_Pass_Correl_ID",
+            "claim": "JMS property to request correl-id pass-through and the field that holds it.",
+            "verdict": "confirmed",
+            "value": "Field WMQConstants.JMS_IBM_REPORT_PASS_CORREL_ID = String \"JMS_IBM_Report_Pass_Correl_ID\". Maps to MQRO_PASS_CORREL_ID.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "FIELD: JMS_IBM_REPORT_PASS_CORREL_ID  VALUE='JMS_IBM_Report_Pass_Correl_ID'",
+            "notes": "Note casing: 'Pass_Correl_ID'. Mapping confirmed by IBM doc mirror q032050."
+          },
+          {
+            "id": "JMS_IBM_Report_Discard_Msg",
+            "claim": "JMS property to request discard-on-undeliverable and the field that holds it.",
+            "verdict": "confirmed",
+            "value": "Field WMQConstants.JMS_IBM_REPORT_DISCARD_MSG = String \"JMS_IBM_Report_Discard_Msg\". Maps to MQRO_DISCARD_MSG.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "FIELD: JMS_IBM_REPORT_DISCARD_MSG  VALUE='JMS_IBM_Report_Discard_Msg'",
+            "notes": "Note casing: 'Discard_Msg'. Mapping confirmed by IBM doc mirror q032050."
+          },
+          {
+            "id": "MQRO-MQFB-declaring-class",
+            "claim": "The MQRO_* and MQFB_* integer constants are declared in com.ibm.mq.constants.CMQC (aggregated by MQConstants), NOT in WMQConstants.",
+            "verdict": "confirmed",
+            "value": "MQRO_*/MQFB_* are in CMQC. WMQConstants.class declares only 1 field (sccsid). MQConstants.class declares them via static init from CMQC, not as literal fields.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "CMQC.class: MQRO_COA declared here: True | MQFB_COA declared here: True | total fields: 2450; WMQConstants.class total fields: 1",
+            "notes": "Correction to the task framing 'WMQConstants MQRO_* values': MQRO/MQFB live in com.ibm.mq.constants.CMQC / MQConstants (IBM MQ classes for Java), referenced as MQConstants.MQRO_COA. They are NOT WMQConstants fields. For JMS, applications typically pass these integer values into the JMS_IBM_Report_* properties."
+          },
+          {
+            "id": "MQRO_COA_value",
+            "claim": "MQRO_COA constant value.",
+            "verdict": "confirmed",
+            "value": "MQRO_COA = 256 (0x100)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_COA = 256",
+            "notes": "Extracted from CMQC bytecode ConstantValue attribute."
+          },
+          {
+            "id": "MQRO_COA_WITH_DATA_value",
+            "claim": "MQRO_COA_WITH_DATA value.",
+            "verdict": "confirmed",
+            "value": "MQRO_COA_WITH_DATA = 768 (0x300)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_COA_WITH_DATA = 768",
+            "notes": "CMQC bytecode."
+          },
+          {
+            "id": "MQRO_COA_WITH_FULL_DATA_value",
+            "claim": "MQRO_COA_WITH_FULL_DATA value.",
+            "verdict": "confirmed",
+            "value": "MQRO_COA_WITH_FULL_DATA = 1792 (0x700)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_COA_WITH_FULL_DATA = 1792",
+            "notes": "CMQC bytecode."
+          },
+          {
+            "id": "MQRO_COD_value",
+            "claim": "MQRO_COD value.",
+            "verdict": "confirmed",
+            "value": "MQRO_COD = 2048 (0x800)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_COD = 2048",
+            "notes": "CMQC bytecode."
+          },
+          {
+            "id": "MQRO_COD_WITH_DATA_value",
+            "claim": "MQRO_COD_WITH_DATA value.",
+            "verdict": "confirmed",
+            "value": "MQRO_COD_WITH_DATA = 6144 (0x1800)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_COD_WITH_DATA = 6144",
+            "notes": "CMQC bytecode."
+          },
+          {
+            "id": "MQRO_COD_WITH_FULL_DATA_value",
+            "claim": "MQRO_COD_WITH_FULL_DATA value.",
+            "verdict": "confirmed",
+            "value": "MQRO_COD_WITH_FULL_DATA = 14336 (0x3800)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_COD_WITH_FULL_DATA = 14336",
+            "notes": "CMQC bytecode."
+          },
+          {
+            "id": "MQRO_EXCEPTION_value",
+            "claim": "MQRO_EXCEPTION value.",
+            "verdict": "confirmed",
+            "value": "MQRO_EXCEPTION = 16777216 (0x1000000)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_EXCEPTION = 16777216",
+            "notes": "CMQC bytecode. _WITH_DATA = 50331648 (0x3000000), _WITH_FULL_DATA = 117440512 (0x7000000)."
+          },
+          {
+            "id": "MQRO_EXCEPTION_WITH_DATA_value",
+            "claim": "MQRO_EXCEPTION_WITH_DATA value.",
+            "verdict": "confirmed",
+            "value": "MQRO_EXCEPTION_WITH_DATA = 50331648 (0x3000000)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_EXCEPTION_WITH_DATA = 50331648",
+            "notes": "CMQC bytecode."
+          },
+          {
+            "id": "MQRO_EXCEPTION_WITH_FULL_DATA_value",
+            "claim": "MQRO_EXCEPTION_WITH_FULL_DATA value.",
+            "verdict": "confirmed",
+            "value": "MQRO_EXCEPTION_WITH_FULL_DATA = 117440512 (0x7000000)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_EXCEPTION_WITH_FULL_DATA = 117440512",
+            "notes": "CMQC bytecode."
+          },
+          {
+            "id": "MQRO_EXPIRATION_value",
+            "claim": "MQRO_EXPIRATION value.",
+            "verdict": "confirmed",
+            "value": "MQRO_EXPIRATION = 2097152 (0x200000)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_EXPIRATION = 2097152",
+            "notes": "CMQC bytecode. _WITH_DATA = 6291456 (0x600000), _WITH_FULL_DATA = 14680064 (0xE00000)."
+          },
+          {
+            "id": "MQRO_EXPIRATION_WITH_DATA_value",
+            "claim": "MQRO_EXPIRATION_WITH_DATA value.",
+            "verdict": "confirmed",
+            "value": "MQRO_EXPIRATION_WITH_DATA = 6291456 (0x600000)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_EXPIRATION_WITH_DATA = 6291456",
+            "notes": "CMQC bytecode."
+          },
+          {
+            "id": "MQRO_EXPIRATION_WITH_FULL_DATA_value",
+            "claim": "MQRO_EXPIRATION_WITH_FULL_DATA value.",
+            "verdict": "confirmed",
+            "value": "MQRO_EXPIRATION_WITH_FULL_DATA = 14680064 (0xE00000)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_EXPIRATION_WITH_FULL_DATA = 14680064",
+            "notes": "CMQC bytecode."
+          },
+          {
+            "id": "MQRO_PAN_value",
+            "claim": "MQRO_PAN value.",
+            "verdict": "confirmed",
+            "value": "MQRO_PAN = 1 (0x1)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_PAN = 1",
+            "notes": "CMQC bytecode. Report generated by the retrieving application, not the queue manager."
+          },
+          {
+            "id": "MQRO_NAN_value",
+            "claim": "MQRO_NAN value.",
+            "verdict": "confirmed",
+            "value": "MQRO_NAN = 2 (0x2)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_NAN = 2",
+            "notes": "CMQC bytecode. Report generated by the retrieving application."
+          },
+          {
+            "id": "MQRO_COPY_MSG_ID_TO_CORREL_ID_value",
+            "claim": "MQRO_COPY_MSG_ID_TO_CORREL_ID value.",
+            "verdict": "confirmed",
+            "value": "MQRO_COPY_MSG_ID_TO_CORREL_ID = 0 (0x0)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_COPY_MSG_ID_TO_CORREL_ID = 0",
+            "notes": "CMQC bytecode. Value 0 = it is the DEFAULT action (see COA-id-propagation-default fact)."
+          },
+          {
+            "id": "MQRO_PASS_MSG_ID_value",
+            "claim": "MQRO_PASS_MSG_ID value.",
+            "verdict": "confirmed",
+            "value": "MQRO_PASS_MSG_ID = 128 (0x80)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_PASS_MSG_ID = 128",
+            "notes": "CMQC bytecode."
+          },
+          {
+            "id": "MQRO_PASS_CORREL_ID_value",
+            "claim": "MQRO_PASS_CORREL_ID value.",
+            "verdict": "confirmed",
+            "value": "MQRO_PASS_CORREL_ID = 64 (0x40)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_PASS_CORREL_ID = 64",
+            "notes": "CMQC bytecode."
+          },
+          {
+            "id": "MQRO_NEW_MSG_ID_value",
+            "claim": "MQRO_NEW_MSG_ID value.",
+            "verdict": "confirmed",
+            "value": "MQRO_NEW_MSG_ID = 0 (0x0)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_NEW_MSG_ID = 0",
+            "notes": "CMQC bytecode. Value 0 = default action: a new MsgId is generated for the report/reply. IBM: 'If this option is not specified, MQRO_NEW_MSG_ID is assumed.'"
+          },
+          {
+            "id": "MQRO_DISCARD_MSG_value",
+            "claim": "MQRO_DISCARD_MSG value.",
+            "verdict": "confirmed",
+            "value": "MQRO_DISCARD_MSG = 134217728 (0x8000000)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_DISCARD_MSG = 134217728",
+            "notes": "CMQC bytecode. IBM: 'discards the message if it cannot be delivered to the destination queue.'"
+          },
+          {
+            "id": "MQRO_DEAD_LETTER_Q_value",
+            "claim": "MQRO_DEAD_LETTER_Q value.",
+            "verdict": "confirmed",
+            "value": "MQRO_DEAD_LETTER_Q = 0 (0x0)",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQRO_DEAD_LETTER_Q = 0",
+            "notes": "CMQC bytecode. Value 0 = this is the DEFAULT behaviour for an undeliverable message: 'places the message on the dead-letter queue if the message cannot be delivered to the destination queue.' (mutually exclusive with MQRO_DISCARD_MSG). Source: IBM doc mirror https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm."
+          },
+          {
+            "id": "MQFB_COA_value",
+            "claim": "Feedback code MQFB_COA integer value.",
+            "verdict": "confirmed",
+            "value": "MQFB_COA = 259",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQFB_COA = 259",
+            "notes": "CMQC bytecode of 9.4.5.0. Cross-confirmed by IBM doc mirror http://www.setgetweb.com/p/WAS60/MQ/com.ibm.mq.csqzaq.doc/csqzaq00122.htm (MQFB_COA | 259). NOTE: 271 is MQFB_XMIT_Q_MSG_ERROR, not COA."
+          },
+          {
+            "id": "MQFB_COD_value",
+            "claim": "Feedback code MQFB_COD integer value.",
+            "verdict": "confirmed",
+            "value": "MQFB_COD = 260",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQFB_COD = 260",
+            "notes": "CMQC bytecode. Cross-confirmed by IBM doc mirror csqzaq00122 (MQFB_COD | 260)."
+          },
+          {
+            "id": "MQFB_EXPIRATION_value",
+            "claim": "Feedback code MQFB_EXPIRATION integer value.",
+            "verdict": "confirmed",
+            "value": "MQFB_EXPIRATION = 258",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQFB_EXPIRATION = 258",
+            "notes": "CMQC bytecode. Cross-confirmed by IBM doc mirror csqzaq00122 (MQFB_EXPIRATION | 258)."
+          },
+          {
+            "id": "MQFB_PAN_value",
+            "claim": "Feedback code MQFB_PAN integer value.",
+            "verdict": "confirmed",
+            "value": "MQFB_PAN = 275",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQFB_PAN = 275",
+            "notes": "CMQC bytecode. Cross-confirmed by IBM doc mirror csqzaq00122 (MQFB_PAN | 275)."
+          },
+          {
+            "id": "MQFB_NAN_value",
+            "claim": "Feedback code MQFB_NAN integer value.",
+            "verdict": "confirmed",
+            "value": "MQFB_NAN = 276",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "MQFB_NAN = 276",
+            "notes": "CMQC bytecode. Cross-confirmed by IBM doc mirror csqzaq00122 (MQFB_NAN | 276)."
+          },
+          {
+            "id": "exception-feedback-determination",
+            "claim": "How Exception report feedback codes are determined.",
+            "verdict": "confirmed",
+            "value": "Exception report messages do NOT use a fixed MQFB_* value; the MQMD Feedback field is set to an IBM MQ reason code (an MQRC_* value, e.g. MQRC_PUT_INHIBITED, MQRC_Q_FULL, MQRC_NOT_AUTHORIZED) describing why the message could not be delivered.",
+            "source_url": "https://setgetweb.com/p/MQ92/ref.dev/q097510_.htm",
+            "source_quote": "For exception report messages, Feedback contains an IBM MQ reason code [such as MQRC_PUT_INHIBITED, MQRC_Q_FULL, MQRC_NOT_AUTHORIZED]. The range MQFB_SYSTEM_FIRST..MQFB_SYSTEM_LAST includes the general MQFB_* codes and the MQRC_* reason codes that can occur when the message cannot be put on the destination queue.",
+            "notes": "IBM Feedback (MQLONG) page via mirror (ibm.com 403). Ranges confirmed in 9.4.5.0 bytecode: MQFB_SYSTEM_FIRST=1, MQFB_SYSTEM_LAST=65535, MQFB_APPL_FIRST=65536, MQFB_APPL_LAST=999999999. So an Exception report's feedback is read as the reason code, not a single 'MQFB_EXCEPTION' constant (which does not exist)."
+          },
+          {
+            "id": "COA-id-propagation-default",
+            "claim": "When a report is requested without an explicit msg-id/correl-id option, MQRO_COPY_MSG_ID_TO_CORREL_ID is assumed (original MessageId -> report CorrelationId).",
+            "verdict": "confirmed",
+            "value": "TRUE. MQRO_COPY_MSG_ID_TO_CORREL_ID (value 0) is the default action: the original message's MsgId is copied to the CorrelId of the report/reply message. (For the report's own MsgId, MQRO_NEW_MSG_ID is the default = a new MsgId is generated.)",
+            "source_url": "https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm",
+            "source_quote": "MQRO_COPY_MSG_ID_TO_CORREL_ID: This is the default action, and indicates that if a report or reply is generated as a result of this message, the MsgId of this message is copied to the CorrelId of the report or reply message.",
+            "notes": "IBM Report (MQLONG) page via mirror (ibm.com 403). Value 0 confirmed in 9.4.5.0 bytecode. Note the two independent id options: CorrelId default = COPY_MSG_ID_TO_CORREL_ID; report's MsgId default = NEW_MSG_ID ('If this option is not specified, MQRO_NEW_MSG_ID is assumed.'). Both are value 0 / the assumed defaults."
+          },
+          {
+            "id": "COA-timing",
+            "claim": "COA is generated when the message ARRIVES on the destination queue.",
+            "verdict": "confirmed",
+            "value": "TRUE. A COA report is generated by the queue manager that owns the destination queue when the message is placed on the destination queue.",
+            "source_url": "https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm",
+            "source_quote": "MQRO_COA ... This type of report is generated by the queue manager that owns the destination queue when the message is placed on the destination queue.",
+            "notes": "IBM Report (MQLONG) page via mirror (ibm.com 403). Version-stable across MQ 9.x."
+          },
+          {
+            "id": "COD-timing",
+            "claim": "COD is generated when the message is RETRIEVED/consumed.",
+            "verdict": "confirmed",
+            "value": "TRUE. A COD report is generated by the queue manager when an application retrieves the message from the destination queue in a way that deletes the message from the queue (a destructive MQGET).",
+            "source_url": "https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm",
+            "source_quote": "MQRO_COD ... This type of report is generated by the queue manager when an application retrieves the message from the destination queue in a way that deletes the message from the queue.",
+            "notes": "IBM Report (MQLONG) page via mirror. A COD is NOT generated if the message Format is MQFMT_DEAD_LETTER_HEADER (i.e. it went to the DLQ), and MQRO_COD is not valid for an XCF destination queue."
+          },
+          {
+            "id": "COA-syncpoint-visibility",
+            "claim": "Under syncpoint the message is not visible (COA does not flow / report not retrievable) until the producer COMMITS.",
+            "verdict": "confirmed",
+            "value": "TRUE. If the message is put as part of a unit of work, the COA report message generated by the queue manager can be retrieved only if (after) the unit of work is committed. For COD, the report is generated within the consumer's unit of work and is not available until that unit of work commits; if it is backed out, the report is not sent.",
+            "source_url": "https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm",
+            "source_quote": "If the message is put as part of a unit of work, and the destination queue is a local queue, the COA report message generated by the queue manager can be retrieved only if the unit of work is committed. ... If the message is retrieved as part of a unit of work, the report message is generated within the same unit of work, so that the report is not available until the unit of work is committed. If the unit of work is backed out, the report is not sent.",
+            "notes": "IBM Report (MQLONG) page via mirror (ibm.com 403). Confirms the producer-commit gating for COA and consumer-commit gating for COD."
+          },
+          {
+            "id": "report-persistence-inherits",
+            "claim": "Default persistence of a generated report relative to the original: can a report be non-persistent even if the original is persistent, or does it inherit persistence?",
+            "verdict": "refuted",
+            "value": "REFUTED as stated. A generated report message INHERITS the original message's persistence by default ('Copied from the original message descriptor'). Therefore a persistent original yields a persistent report by default; the report is NOT non-persistent when the original is persistent. (Applies uniformly to COA, COD, exception, expiration, PAN, NAN reports per the IBM 'Contents of the message descriptor for a report message' table.)",
+            "source_url": "https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm",
+            "source_quote": "Contents of the message descriptor for a report message — Persistence: Copied from the original message descriptor.",
+            "notes": "IBM Report (MQLONG) page via mirror (ibm.com 403). LOAD-BEARING: the IBM table lists Persistence as 'Copied from the original message descriptor' with no COA/COD carve-out, so the common belief that COA/COD reports are non-persistent by default is incorrect for IBM MQ. (Behaviour can be altered separately via the destination/queue or PUT options, but the DEFAULT for a queue-manager-generated report is to inherit the original's persistence.) Confusion likely stems from activity/trace-route reports, which are a separate mechanism."
+          }
+        ]
+      },
+      {
+        "cluster": "WMQConstants connection property names + TLS/security (IBM MQ 9.4 JMS), validated against com.ibm.mq.allclient-9.4.5.0.jar constant pool + IBM MQ 9.4 official PDFs (mq94.develop.pdf, mq94.refadmin.pdf) + Maven Central + IBM mq-jms-spring source.",
+        "facts": [
+          {
+            "id": "allclient-version",
+            "claim": "com.ibm.mq:com.ibm.mq.allclient version 9.4.5.0 exists on Maven Central (javax.jms allclient jar).",
+            "verdict": "confirmed",
+            "value": "9.4.5.0 is a published version on Maven Central (latest in the 9.4.x line at time of check is 9.4.5.1). The artifact jar com.ibm.mq.allclient-9.4.5.0.jar downloads successfully (8,477,900 bytes).",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/maven-metadata.xml",
+            "source_quote": "<version>9.4.5.0</version>\\n<version>9.4.5.1</version>  ...  <latest>9.4.5.1</latest><release>9.4.5.1</release>",
+            "notes": "9.4.5.0 confirmed present. 9.4.5.1 is the newest 9.4.x. The allclient jar carries the javax.jms (non-Jakarta) classes; the Jakarta variant is com.ibm.mq.jakarta.client. develop.pdf confirms com.ibm.mq.allclient.jar is the javax classpath jar."
+          },
+          {
+            "id": "WMQ_CONNECTION_MODE",
+            "claim": "Field WMQConstants.WMQ_CONNECTION_MODE (connection mode property).",
+            "verdict": "confirmed",
+            "value": "Field name WMQ_CONNECTION_MODE; type String; value \"XMSC_WMQ_CONNECTION_MODE\". Set via setIntProperty.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_CONNECTION_MODE  Ljava/lang/String;  'XMSC_WMQ_CONNECTION_MODE'  [CommonConstants]",
+            "notes": "Defined in com/ibm/msg/client/wmq/common/CommonConstants (WMQConstants extends it). IBM develop.pdf JMS example: factory.setIntProperty(WMQConstants.WMQ_CONNECTION_MODE, WMQConstants.WMQ_CM_CLIENT)."
+          },
+          {
+            "id": "WMQ_CM_CLIENT_value",
+            "claim": "Value constant WMQConstants.WMQ_CM_CLIENT for client connection mode equals integer 1.",
+            "verdict": "confirmed",
+            "value": "WMQ_CM_CLIENT = int 1 (and WMQ_CM_BINDINGS = int 0).",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_CM_CLIENT  I  ('int', 1)   [CommonConstants]   /   WMQ_CM_BINDINGS  I  ('int', 0)",
+            "notes": "Integer values read directly from the class constant pool of CommonConstants in the 9.4.5.0 jar."
+          },
+          {
+            "id": "WMQ_HOST_NAME",
+            "claim": "Field WMQConstants.WMQ_HOST_NAME for the host name.",
+            "verdict": "confirmed",
+            "value": "WMQ_HOST_NAME; type String; value \"XMSC_WMQ_HOST_NAME\".",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_HOST_NAME  Ljava/lang/String;  'XMSC_WMQ_HOST_NAME'  [CommonConstants]",
+            "notes": "Also shown verbatim in develop.pdf: factory.setStringProperty(WMQConstants.WMQ_HOST_NAME, \"HOST1\")."
+          },
+          {
+            "id": "WMQ_PORT",
+            "claim": "Field WMQConstants.WMQ_PORT for the port (integer property).",
+            "verdict": "confirmed",
+            "value": "WMQ_PORT; type String; value \"XMSC_WMQ_PORT\". Set via setIntProperty (e.g. 1414).",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_PORT  Ljava/lang/String;  'XMSC_WMQ_PORT'  [CommonConstants]",
+            "notes": "develop.pdf: factory.setIntProperty(WMQConstants.WMQ_PORT, 1415)."
+          },
+          {
+            "id": "WMQ_CHANNEL",
+            "claim": "Field WMQConstants.WMQ_CHANNEL for the server-connection channel.",
+            "verdict": "confirmed",
+            "value": "WMQ_CHANNEL; type String; value \"XMSC_WMQ_CHANNEL\".",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_CHANNEL  Ljava/lang/String;  'XMSC_WMQ_CHANNEL'  [CommonConstants]",
+            "notes": "develop.pdf: factory.setStringProperty(WMQConstants.WMQ_CHANNEL, \"QM1.SVR\")."
+          },
+          {
+            "id": "WMQ_QUEUE_MANAGER",
+            "claim": "Field WMQConstants.WMQ_QUEUE_MANAGER for the queue manager name.",
+            "verdict": "confirmed",
+            "value": "WMQ_QUEUE_MANAGER; type String; value \"XMSC_WMQ_QUEUE_MANAGER\".",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_QUEUE_MANAGER  Ljava/lang/String;  'XMSC_WMQ_QUEUE_MANAGER'  [CommonConstants]",
+            "notes": "Confirmed in jar and in develop.pdf/mq-jms-spring."
+          },
+          {
+            "id": "WMQ_CONNECTION_NAME_LIST",
+            "claim": "Field WMQConstants.WMQ_CONNECTION_NAME_LIST for a multi-host CONNAME list (host(port),host(port)).",
+            "verdict": "confirmed",
+            "value": "WMQ_CONNECTION_NAME_LIST; type String; value \"XMSC_WMQ_CONNECTION_NAME_LIST\".",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_CONNECTION_NAME_LIST  Ljava/lang/String;  'XMSC_WMQ_CONNECTION_NAME_LIST'  [CommonConstants]",
+            "notes": "IBM-maintained mq-jms-spring sets it: cf.setStringProperty(WMQConstants.WMQ_CONNECTION_NAME_LIST, connName). Admin/short name is CONNECTIONNAMELIST (CRHOSTS); format host(port),host(port)."
+          },
+          {
+            "id": "WMQ_CCDTURL",
+            "claim": "Field WMQConstants.WMQ_CCDTURL for the CCDT URL.",
+            "verdict": "confirmed",
+            "value": "WMQ_CCDTURL; type String; value \"XMSC_WMQ_CCDTURL\". Note casing: CCDTURL all caps, no underscore before URL.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_CCDTURL  Ljava/lang/String;  'XMSC_WMQ_CCDTURL'  [CommonConstants]",
+            "notes": "develop.pdf: cf.setStringProperty(WMQConstants.WMQ_CCDTURL,\"https://ccdturl.com/CCDT.json\"). HTTPS CCDT endpoints supported; a custom factory can be set via WMQ_CCDT_SSL_SOCKET_FACTORY."
+          },
+          {
+            "id": "WMQ_CLIENT_RECONNECT_OPTIONS",
+            "claim": "Field WMQConstants.WMQ_CLIENT_RECONNECT_OPTIONS controls automatic client reconnect.",
+            "verdict": "confirmed",
+            "value": "WMQ_CLIENT_RECONNECT_OPTIONS; type String; value \"XMSC_WMQ_CLIENT_RECONNECT_OPTIONS\". Admin/short name CLIENTRECONNECTOPTIONS (CROPT).",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_CLIENT_RECONNECT_OPTIONS  Ljava/lang/String;  'XMSC_WMQ_CLIENT_RECONNECT_OPTIONS'  [CommonConstants]",
+            "notes": "Requires TRANSPORT=CLIENT and CONNECTIONNAMELIST or CCDTURL set (develop.pdf, Automatic JMS client reconnection)."
+          },
+          {
+            "id": "WMQ_CLIENT_RECONNECT_value",
+            "claim": "Value constant WMQConstants.WMQ_CLIENT_RECONNECT (reconnect to ANY queue manager) integer value.",
+            "verdict": "confirmed",
+            "value": "WMQ_CLIENT_RECONNECT = int 16777216 (0x01000000). Equivalent to MQI MQCNO_RECONNECT / admin value ANY.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_CLIENT_RECONNECT  I  ('int', 16777216)   [CommonConstants]",
+            "notes": "Cross-checked: MQCNO_RECONNECT appears in mq94.reference.pdf as the MQI equivalent. Value read from jar constant pool."
+          },
+          {
+            "id": "WMQ_CLIENT_RECONNECT_Q_MGR_value",
+            "claim": "Value constant WMQConstants.WMQ_CLIENT_RECONNECT_Q_MGR (reconnect only to same QMgr) integer value.",
+            "verdict": "confirmed",
+            "value": "WMQ_CLIENT_RECONNECT_Q_MGR = int 67108864 (0x04000000). Equivalent to MQI MQCNO_RECONNECT_Q_MGR / admin value QMGR.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_CLIENT_RECONNECT_Q_MGR  I  ('int', 67108864)   [CommonConstants]",
+            "notes": "Note field name uses Q_MGR (with underscore). MQCNO_RECONNECT_Q_MGR confirmed as MQI equivalent in mq94.reference.pdf."
+          },
+          {
+            "id": "WMQ_CLIENT_RECONNECT_AS_DEF_value",
+            "claim": "Value constant WMQConstants.WMQ_CLIENT_RECONNECT_AS_DEF (use DefRecon default) integer value.",
+            "verdict": "confirmed",
+            "value": "WMQ_CLIENT_RECONNECT_AS_DEF = int 0 (0x00000000). Equivalent to MQI MQCNO_RECONNECT_AS_DEF / admin value ASDEF.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_CLIENT_RECONNECT_AS_DEF  I  ('int', 0)   [CommonConstants]",
+            "notes": "Behavior driven by DefRecon attribute in the client config Channels stanza. There is also WMQ_CLIENT_RECONNECT_DISABLED = int 33554432 (MQCNO_RECONNECT_DISABLED)."
+          },
+          {
+            "id": "WMQ_CLIENT_RECONNECT_TIMEOUT",
+            "claim": "Field WMQConstants.WMQ_CLIENT_RECONNECT_TIMEOUT sets the reconnect timeout.",
+            "verdict": "confirmed",
+            "value": "WMQ_CLIENT_RECONNECT_TIMEOUT; type String; value \"XMSC_WMQ_CLIENT_RECONNECT_TIMEOUT\". It is a STRING property KEY (an int seconds value is assigned to it), NOT an integer constant.",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_CLIENT_RECONNECT_TIMEOUT  Ljava/lang/String;  'XMSC_WMQ_CLIENT_RECONNECT_TIMEOUT'  [CommonConstants]",
+            "notes": "Important distinction: the constant is a property-name key. The documented DEFAULT VALUE of the reconnect timeout property is 1800 seconds (30 min) per IBM docs; that 1800 is the property default, not the integer value of this constant. Do not equate the two."
+          },
+          {
+            "id": "WMQ_SHARE_CONV_ALLOWED",
+            "claim": "Field WMQConstants.WMQ_SHARE_CONV_ALLOWED (SHARECNV behavior).",
+            "verdict": "confirmed",
+            "value": "WMQ_SHARE_CONV_ALLOWED; type String; value \"XMSC_WMQ_SHARE_CONV_ALLOWED\".",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_SHARE_CONV_ALLOWED  Ljava/lang/String;  'XMSC_WMQ_SHARE_CONV_ALLOWED'  [CommonConstants]",
+            "notes": "Field name confirmed from jar. (Its int value-constants such as WMQ_SHARE_CONV_ALLOWED_YES/_NO were not in scope of this check.)"
+          },
+          {
+            "id": "WMQ_APPLICATIONNAME",
+            "claim": "Field WMQConstants.WMQ_APPLICATIONNAME sets the application name (APPLTAG).",
+            "verdict": "confirmed",
+            "value": "WMQ_APPLICATIONNAME; type String; value \"XMSC_WMQ_APPNAME\". Note: field name is APPLICATIONNAME (one word) but its property-value string is XMSC_WMQ_APPNAME (APPNAME).",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_APPLICATIONNAME  Ljava/lang/String;  'XMSC_WMQ_APPNAME'  [CommonConstants]",
+            "notes": "develop.pdf: factory.setStringProperty(WMQConstants.WMQ_APPLICATIONNAME, \"My Application\"). The Java field name and its underlying property key differ in spelling (APPLICATIONNAME vs APPNAME)."
+          },
+          {
+            "id": "WMQ_USER_AUTHENTICATION_MQCSP",
+            "claim": "Field WMQConstants.WMQ_USER_AUTHENTICATION_MQCSP enables MQCSP user authentication.",
+            "verdict": "refuted",
+            "value": "There is NO field named WMQ_USER_AUTHENTICATION_MQCSP in 9.4.5.0. The correct field is WMQConstants.USER_AUTHENTICATION_MQCSP (no WMQ_ prefix); type String; value \"XMSC_USER_AUTHENTICATION_MQCSP\". It is a BOOLEAN property: set via cf.setBooleanProperty(WMQConstants.USER_AUTHENTICATION_MQCSP, true).",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "USER_AUTHENTICATION_MQCSP  Ljava/lang/String;  ('String', 'XMSC_USER_AUTHENTICATION_MQCSP')  [JmsConstants]  --- and a jar-wide scan finds no field literally named WMQ_USER_AUTHENTICATION_MQCSP",
+            "notes": "Inherited by WMQConstants from com/ibm/msg/client/jms/JmsConstants (not from CommonConstants). POSITIVE confirmation: IBM-maintained mq-jms-spring source uses WMQConstants.USER_AUTHENTICATION_MQCSP verbatim. The underlying MQCSP-enable int (JmqiConnectOptions.USER_AUTHENTICATION_MQCSP) = 128. Use setBooleanProperty, true=use MQCSP (user+password), false=compat/userid-only."
+          },
+          {
+            "id": "WMQ_USERID_PASSWORD",
+            "claim": "Fields for userid and password on the connection factory.",
+            "verdict": "confirmed",
+            "value": "Field names WMQConstants.USERID (value \"XMSC_USERID\") and WMQConstants.PASSWORD. Both inherited from JmsConstants (no WMQ_ prefix).",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "USERID  Ljava/lang/String;  ('String', 'XMSC_USERID')  [JmsConstants]   /   PASSWORD  Ljava/lang/String;  [JmsConstants]",
+            "notes": "USERID value confirmed as XMSC_USERID. PASSWORD field NAME confirmed (jar + mq-jms-spring uses WMQConstants.PASSWORD). PASSWORD's value is INFERRED as XMSC_PASSWORD (that string is present in the JmsConstants pool) but it was NOT read as a compile-time ConstantValue in the bytecode, so the value is high-confidence-inferred, not bytecode-verified."
+          },
+          {
+            "id": "WMQ_SSL_CIPHER_SUITE",
+            "claim": "Field WMQConstants.WMQ_SSL_CIPHER_SUITE names the CipherSuite (Java side) for TLS.",
+            "verdict": "confirmed",
+            "value": "WMQ_SSL_CIPHER_SUITE; type String; value \"XMSC_WMQ_SSL_CIPHER_SUITE\".",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_SSL_CIPHER_SUITE  Ljava/lang/String;  'XMSC_WMQ_SSL_CIPHER_SUITE'  [CommonConstants]",
+            "notes": "Setting SSLCIPHERSUITE is what enables TLS on the connection factory (develop.pdf). There is also WMQ_SSL_CIPHER_SPEC (XMSC_WMQ_SSL_CIPHER_SPEC) for specifying a CipherSpec instead."
+          },
+          {
+            "id": "WMQ_SSL_PEER_NAME",
+            "claim": "Field WMQConstants.WMQ_SSL_PEER_NAME for SSLPEER distinguished-name matching.",
+            "verdict": "confirmed",
+            "value": "WMQ_SSL_PEER_NAME; type String; value \"XMSC_WMQ_SSL_PEER_NAME\".",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "WMQ_SSL_PEER_NAME  Ljava/lang/String;  'XMSC_WMQ_SSL_PEER_NAME'  [CommonConstants]",
+            "notes": "develop.pdf: SSLPEERNAME checks the server cert DN at connect time; ignored if SSLCIPHERSUITE not set. mq-jms-spring uses WMQConstants.WMQ_SSL_PEER_NAME."
+          },
+          {
+            "id": "WMQ_SSL_CERT_STORES",
+            "claim": "Field WMQConstants.WMQ_SSL_CERT_STORES gives the locations of CRL/cert-store (LDAP) servers.",
+            "verdict": "refuted",
+            "value": "In 9.4.5.0 there is NO field literally named WMQ_SSL_CERT_STORES. The actual fields are WMQConstants.WMQ_SSL_CERT_STORES_COL (value \"XMSC_WMQ_SSL_CERT_STORES_COL\", a Collection form) and WMQConstants.WMQ_SSL_CERT_STORES_STR (value \"XMSC_WMQ_SSL_CERT_STORES_STR\", a String form).",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar",
+            "source_quote": "CommonConstants byte scan: WMQ_SSL_CERT_STORES variants = ['WMQ_SSL_CERT_STORES_COL', 'WMQ_SSL_CERT_STORES_STR']; bare 'WMQ_SSL_CERT_STORES' (negative-lookahead for trailing _/A-Z) FIELD=[] and jar-wide count=0",
+            "notes": "Verified by a parser-independent raw-byte regex over the whole jar (not just the field parser): the bare token never appears. IBM's published Javadoc historically documents WMQ_SSL_CERT_STORES; in the shipped 9.4.5.0 jar the concrete fields are the _COL and _STR variants. If the guide must reference the certificate-store property, use _STR (single LDAP URL) or _COL (collection). Treat the bare name as unavailable in this version."
+          },
+          {
+            "id": "keystore-truststore-mechanism",
+            "claim": "How keystore/truststore are supplied to IBM MQ classes for JMS for TLS (javax.net.ssl.* system properties vs sslSocketFactory).",
+            "verdict": "confirmed",
+            "value": "Two mechanisms: (1) the DEFAULT JSSE SSLSocketFactory, which uses the standard JVM system properties javax.net.ssl.keyStore / javax.net.ssl.keyStorePassword (and the trustStore equivalents); or (2) a CUSTOM javax.net.ssl.SSLSocketFactory supplied via MQConnectionFactory.setSSLSocketFactory(), which lets you change the keystore and truststore in use. TLS is only active if a CipherSuite is set.",
+            "source_url": "https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.develop.pdf",
+            "source_quote": "\"...want to: ... Change the keystore and truststore in use. ... create a javax.net.ssl.SSLSocketFactory object ... use the MQConnectionFactory.setSSLSocketFactory() method to configure JMS to use the customized SSLSocketFactory object. ... If this property is not set, the default SSLSocketFactory object is used.\"  (plus permission entries javax.net.ssl.keyStore / javax.net.ssl.keyStorePassword)",
+            "notes": "develop.pdf 'Supplying a customized SSLSocketFactory'. Default path relies on JVM JSSE settings (javax.net.ssl.keyStore/trustStore). Note: after setSSLSocketFactory() the MQConnectionFactory can no longer be bound into JNDI. From IBM MQ 9.4.5 you can also supply a custom SSLSocketFactory specifically for JWT/HTTPS token retrieval (WMQ_SSL_SOCKET_FACTORY field = XMSC_WMQ_SSL_SOCKET_FACTORY)."
+          },
+          {
+            "id": "cipher-pair-tls12",
+            "claim": "A concrete TLS 1.2 CipherSpec (QMgr/MQSC) <-> CipherSuite (Java) pair.",
+            "verdict": "confirmed",
+            "value": "CipherSpec ECDHE_RSA_AES_128_GCM_SHA256 (set on the SVRCONN channel) maps to CipherSuite SSL_ECDHE_RSA_WITH_AES_128_GCM_SHA256 (IBM JRE) / TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 (Oracle JRE), protocol TLS 1.2, FIPS 140-2 and 140-3 compatible. (256-bit variant: CipherSpec ECDHE_RSA_AES_256_GCM_SHA384 -> SSL_/TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384.)",
+            "source_url": "https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.develop.pdf",
+            "source_quote": "ECDHE_RSA_AES_128_GCM_SHA256  SSL_ECDHE_RSA_WITH_AES_128_GCM_SHA256  TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256  TLS 1.2 Yes Yes",
+            "notes": "From Table 41 'CipherSpecs supported by IBM MQ and their equivalent CipherSuites' (IBM JRE vs Oracle JRE columns). The IBM JRE CipherSuite uses an SSL_ prefix while Oracle/standard uses TLS_ for TLS 1.2 names - this naming divergence is the historical reason for the useIBMCipherMappings property."
+          },
+          {
+            "id": "cipher-pair-tls13",
+            "claim": "A concrete TLS 1.3 CipherSpec <-> CipherSuite pair.",
+            "verdict": "confirmed",
+            "value": "For TLS 1.3 the CipherSpec and the CipherSuite have the SAME name in both JREs, e.g. CipherSpec TLS_AES_128_GCM_SHA256 = CipherSuite TLS_AES_128_GCM_SHA256 (also TLS_AES_256_GCM_SHA384). Protocol TLS 1.3; FIPS 140-3 compatible.",
+            "source_url": "https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.develop.pdf",
+            "source_quote": "TLS_AES_128_GCM_SHA256  TLS_AES_128_GCM_SHA256  TLS_AES_128_GCM_SHA256  TLS 1.3 No Yes   /   TLS_AES_256_GCM_SHA384 ... TLS 1.3 No Yes",
+            "notes": "Same Table 41. TLS_AES_128_GCM_SHA256 and TLS_AES_256_GCM_SHA384 are enabled by default for TLS 1.3; TLS_CHACHA20_POLY1305_SHA256 is supported but not enabled by default. Generic specs ANY_TLS13, ANY_TLS12, ANY_TLS12_OR_HIGHER, ANY_TLS13_OR_HIGHER also exist."
+          },
+          {
+            "id": "useIBMCipherMappings",
+            "claim": "The system property com.ibm.mq.cfg.useIBMCipherMappings selects IBM vs Oracle/standard cipher naming.",
+            "verdict": "refuted",
+            "value": "For IBM MQ 9.4 (and thus 9.4.5.0) this property is NO LONGER NEEDED and has been REMOVED from the product as of IBM MQ 9.4.0. From 9.4.0 a Cipher can be defined as either the CipherSpec or the CipherSuite name and is handled correctly automatically. (In earlier MQ versions the property controlled which mapping table - IBM SSL_ vs Oracle TLS_ - was used.)",
+            "source_url": "https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.develop.pdf",
+            "source_quote": "\"From IBM MQ 9.4.0, a Cipher can be defined as either the CipherSpec or CipherSuite name and is handled correctly by IBM MQ. Note: The Java System Property com.ibm.mq.cfg.useIBMCipherMappings, which controlled which mappings were used in earlier versions of IBM MQ, is no longer needed and is removed from the product at IBM MQ 9.4.0.\"",
+            "notes": "Stated verbatim TWICE in mq94.develop.pdf (Java classes section ~p270 and JMS classes section ~p399). This is a version-specific correction: any 9.4 guide should NOT instruct setting useIBMCipherMappings. Also from Java 11 the SSL_/TLS_ prefixes are no longer interchangeable, so the cipher name must be exact."
+          },
+          {
+            "id": "CHCKCLNT-values",
+            "claim": "AUTHINFO IDPWOS CONNAUTH CHCKCLNT keyword and its allowed values for client password checking.",
+            "verdict": "confirmed",
+            "value": "Keyword CHCKCLNT on AUTHINFO TYPE(IDPWOS) (and IDPWLDAP). Values: NONE (credentials ignored), OPTIONAL (checked only if supplied), REQUIRED (all client apps must supply valid user+password), REQDADM (privileged user IDs must supply credentials; non-privileged treated as OPTIONAL).",
+            "source_url": "https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.refadmin.pdf",
+            "source_quote": "\"CHCKCLNT ... valid only for an AUTHTYPE of IDPWOS or IDPWLDAP. ... NONE ... OPTIONAL ... REQUIRED All client applications must provide authentication credentials in the MQCSP structure. ... REQDADM All client applications using a privileged user ID must provide authentication credentials...\"  Syntax: CHCKCLNT(NONE)/CHCKCLNT(OPTIONAL)/CHCKCLNT(REQUIRED)/CHCKCLNT(REQDADM)",
+            "notes": "To require user/password from clients: DEFINE/ALTER AUTHINFO(...) AUTHTYPE(IDPWOS) CHCKCLNT(REQUIRED) ADOPTCTX(YES), then ALTER QMGR CONNAUTH(<authinfo-name>) and REFRESH SECURITY TYPE(CONNAUTH). The QMGR CONNAUTH CHCKCLNT is the default; a matching CHLAUTH rule's CHCKCLNT can override it (or use ASQMGR to defer to the QMGR setting). REQDADM not valid on z/OS."
+          },
+          {
+            "id": "CHLAUTH-mqsc-keywords",
+            "claim": "MQSC keyword spellings for CHLAUTH: command, TYPE values, USERSRC values, block/allow/require-user mappings.",
+            "verdict": "confirmed",
+            "value": "Command: SET CHLAUTH(channel-profile-name) TYPE(...) ACTION(ADD|REPLACE|REMOVE|REMOVEALL). TYPE values: BLOCKUSER, BLOCKADDR, SSLPEERMAP, ADDRESSMAP, USERMAP, QMGRMAP. Mapping rules use USERSRC(MAP|NOACCESS|CHANNEL) and MCAUSER(user). Block a user/admins: TYPE(BLOCKUSER) USERLIST(name | *MQADMIN). Block IPs: TYPE(BLOCKADDR) ADDRLIST(...). Allow/map a user: TYPE(USERMAP) CLNTUSER(client-user) USERSRC(MAP) MCAUSER(user). Per-rule client checking: CHCKCLNT(ASQMGR|REQUIRED|REQDADM).",
+            "source_url": "https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.refadmin.pdf",
+            "source_quote": "\"SET CHLAUTH ( channel-profile-name ) ... TYPE ... (BLOCKUSER) USERLIST(...) (BLOCKADDR) ADDRLIST(...) (SSLPEERMAP) (ADDRESSMAP) (USERMAP) CLNTUSER(...) CHCKCLNT(ASQMGR|REQDADM|REQUIRED) (QMGRMAP) QMNAME(...) USERSRC(MAP) MCAUSER(...) USERSRC(NOACCESS) USERSRC(CHANNEL) ADDRESS(...)\"",
+            "notes": "Canonical MQSC verb is SET CHLAUTH (there is no separate DEFINE CHLAUTH; use SET/REMOVE via ACTION). USERMAP rules apply only to SVRCONN channels. *MQADMIN in a USERLIST = privileged/admin users (on Linux/AIX = mqm group members). Queue-manager attribute CHLAUTH(DISABLED|ENABLED) gates whether rules are enforced: 'This attribute specifies whether the rules defined by channel authentication records are used.'"
+          },
+          {
+            "id": "CHLAUTH-block-by-default",
+            "claim": "IBM MQ blocks remote administrative (privileged) access by default via default CHLAUTH records on a newly created queue manager.",
+            "verdict": "uncertain",
+            "value": "Strongly supported but no clean verbatim primary-source quote could be captured (the IBM Documentation/Support pages that state this are JavaScript-rendered and could not be fetched as text). The MECHANISM is confirmed: CHLAUTH(ENABLED) enforces rules, and default rules use USERSRC(NOACCESS) plus BLOCKUSER('*MQADMIN') to block privileged users on SYSTEM.* / SYSTEM.ADMIN.SVRCONN channels.",
+            "source_url": "https://www.ibm.com/support/pages/mq-rc-2035-mqrcnotauthorized-or-amq4036-or-jmswmq2013-when-using-client-connection-mq-administrator-chlauth-channel-authentication-records",
+            "source_quote": "(IBM Support page title) 'MQ RC 2035 MQRC_NOT_AUTHORIZED ... when using client connection as an MQ Administrator (CHLAUTH, channel authentication records)' - page body is JS-rendered and not extractable as verbatim text.",
+            "notes": "Honest gap: the well-known 'remote admins blocked by default since MQ 7.1' behavior is confirmed at the mechanism level from mq94.refadmin.pdf (CHLAUTH attribute meaning, *MQADMIN, USERSRC(NOACCESS)), but I could not fetch a verbatim 'blocked by default' sentence from a primary IBM page. To allow a remote admin: add a CHLAUTH USERMAP/ADDRESSMAP rule with USERSRC(MAP) MCAUSER(...), or set ALTER QMGR CHLAUTH(DISABLED) (not recommended for production)."
+          }
+        ]
+      },
+      {
+        "cluster": "JDK support matrix + MQSC + container runtime (IBM MQ 9.4 / 9.4.5, com.ibm.mq.allclient JMS 2.0)",
+        "facts": [
+          {
+            "id": "allclient-version-9450",
+            "claim": "com.ibm.mq:com.ibm.mq.allclient:9.4.5.0 exists in Maven Central",
+            "verdict": "confirmed",
+            "value": "9.4.5.0 is published in Maven Central. As of this check the latest/release version is 9.4.5.1 (so 9.4.5.0 is one fix-pack behind the current head, but it is a real published artifact).",
+            "source_url": "https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/maven-metadata.xml",
+            "source_quote": "<latest>9.4.5.1</latest> <release>9.4.5.1</release> ... <version>9.4.5.0</version> <version>9.4.5.1</version>",
+            "notes": "Full 9.4.x list present in metadata: 9.4.0.0 ... 9.4.4.1, 9.4.5.0, 9.4.5.1. Fetched via curl (repo1 is a plain file server); WebFetch was 403-blocked."
+          },
+          {
+            "id": "allclient-javax-jms-namespace",
+            "claim": "com.ibm.mq.allclient uses the javax.jms namespace (JMS 2.0), not jakarta.jms",
+            "verdict": "confirmed",
+            "value": "javax.jms / JMS 2.0. The 9.4.5.0 POM declares a dependency on javax.jms:javax.jms-api:2.0.1, and IBM's own doc labels com.ibm.mq.allclient.jar as 'JMS 2.0' while the separate com.ibm.mq.jakarta.client.jar is 'Jakarta Messaging 3.0'.",
+            "source_url": "https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=applications-java-application-development-using-maven-repository",
+            "source_quote": "You can find the com.ibm.mq.jakarta.client.jar file ( Jakarta Messaging 3.0 ) and the com.ibm.mq.allclient.jar file ( JMS 2.0 ).",
+            "notes": "POM (https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.pom) lists <groupId>javax.jms</groupId><artifactId>javax.jms-api</artifactId><version>2.0.1</version>. So the integration guide's 'javax.jms namespace' is correct for allclient."
+          },
+          {
+            "id": "java21-supported-94x",
+            "claim": "IBM MQ 9.4 supports running the MQ classes for JMS/Java on Java 21",
+            "verdict": "confirmed",
+            "value": "Java 21 is supported in IBM MQ 9.4.x. The bundled JRE for IBM MQ 9.4.5.0 (Windows/Linux/AIX) is IBM Semeru 21 (Semeru 21.0.10), and the 9.4.x product documentation has a dedicated 'Java 21' subsection under 'Important changes in Java versions'.",
+            "source_url": "https://www.ibm.com/support/pages/levels-jre-and-gskit-bundled-ibm-mq",
+            "source_quote": "IBM MQ 9.4.x Continuous Delivery (CD) GSKit Level JRE Level ... 9.4.5.0 (Windows, Linux, AIX) ... Semeru 21.0.10",
+            "notes": "Per-platform timing nuance: the bundled Semeru 21 runtime for non-z/OS Multiplatforms first shipped at IBM MQ 9.4.4 (announcement: 'Java Semeru 21 support allows all non-z/OS components in IBM MQ 9.4.4 to run on IBM's latest Java runtime'); for z/OS, Java 21 is supported from MQ 9.3.0 and above (Semeru Certified Edition for z/OS v21 released 2024-11-22). See https://www.ibm.com/new/announcements/enhanced-resilience-compliance-and-simplicity-with-ibm-mq-9-4-4 and https://community.ibm.com/community/user/blogs/johnny-murphy/2024/12/11/mq-zos-j21"
+          },
+          {
+            "id": "java21-from-940-exact-wording",
+            "claim": "The exact statement 'From IBM MQ 9.4.0, IBM MQ supports Java 21'",
+            "verdict": "uncertain",
+            "value": "Could not locate that exact sentence in primary IBM sources. Java 21 IS supported in 9.4.x (see java21-supported-94x), but the specific 'From IBM MQ 9.4.0' phrasing for Multiplatforms is not verbatim and is partly contradicted by the timing evidence (bundled Semeru 21 for non-z/OS arrived at 9.4.4, not 9.4.0). For z/OS the 'from 9.3.0 and above' phrasing is what IBM uses.",
+            "source_url": "https://community.ibm.com/community/user/blogs/johnny-murphy/2024/12/11/mq-zos-j21",
+            "source_quote": "IBM MQ for z/OS will support Java 21 in versions 9.3.0 and above, which covers all currently in-support versions of MQ.",
+            "notes": "Recommend the guide say 'IBM MQ 9.4.x supports Java 21 (bundled Semeru 21 on Multiplatforms from 9.4.4; supported on z/OS from 9.3.0)' rather than asserting 'from 9.4.0'. The authoritative per-version certified list is the SPCR System Requirements report, which is JS-rendered and was not programmatically confirmable."
+          },
+          {
+            "id": "jdk-certified-matrix-8-11-17-21",
+            "claim": "JDKs 8, 11, 17, 21 are all certified for the MQ classes for JMS on IBM MQ 9.4",
+            "verdict": "uncertain",
+            "value": "The exhaustive certified per-version JDK enumeration could not be confirmed from a primary source. The IBM 'Prerequisites for IBM MQ classes for Java' page explicitly defers the supported-JDK list to the SPCR 'System Requirements for IBM MQ' report, which is JavaScript-rendered and did not yield the version list to programmatic fetch. What IS primary-source confirmed: the bundled JRE for 9.4.5.0 is Semeru 21, and the product docs reference operational guidance for Java 21 and Java 25 (and historically 8/11/17). Do NOT assert '8/11/17/21 certified' as a hard fact without the SPCR matrix.",
+            "source_url": "https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=java-prerequisites-mq-classes",
+            "source_quote": "To develop IBM MQ classes for Java applications, you need a Java Development Kit (JDK). Details of the JDKs supported with your operating system can be found in the System Requirements for IBM MQ information.",
+            "notes": "Per the task's 'do not guess' rule, the full enumeration is marked uncertain. To resolve, open the SPCR report for IBM MQ 9.4.5 (deliverableId=218CA2470429462EB2BC62CD566F4030) in a browser under Supported Software -> Java."
+          },
+          {
+            "id": "java25-listed-for-94x",
+            "claim": "Java 25 is NOT listed/certified for MQ 9.4.5 (task's prior assumption)",
+            "verdict": "refuted",
+            "value": "Java 25 IS referenced/in-scope in the IBM MQ 9.4.x documentation. The 9.4.x 'Important changes in Java versions' topic has a dedicated 'Java 25' section giving operational guidance for running the MQ classes on Java 25 (TLS_RSA CipherSpecs disabled; native-access warnings for com.ibm.mq.allclient.jar). IBM does not publish version-specific run guidance for a Java level it does not expect customers to run. (The exhaustive 'certified' confirmation still belongs in the SPCR report, which was not programmatically confirmable.)",
+            "source_url": "https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=applications-developing-jmsjakarta-messaging-java",
+            "source_quote": "TLS_RSA_* CipherSpecs are disabled from Java 25 . If your IBM MQ classes for JMS / Jakarta Messaging or IBM MQ classes for Java application uses any of these CipherSpecs, do one of the following: Update the application to use a supported CipherSpec. ... If you see the following warning when running your application with Java 25 , you can suppress it by passing the --enable-native-access=ALL-UNNAMED JVM parameter",
+            "notes": "This directly affects running on Amazon Corretto 25. Practical action: pass --enable-native-access=ALL-UNNAMED and avoid TLS_RSA_* CipherSpecs. The task framing 'likely NOT listed' is refuted by this primary doc."
+          },
+          {
+            "id": "securitymanager-jdk24-breakage",
+            "claim": "IBM MQ classes for JMS / allclient relies on SecurityManager in a way that breaks on JDK 24/25 (JEP 486)",
+            "verdict": "refuted",
+            "value": "No. Running under the Java Security Manager is an OPTIONAL capability of the MQ classes for JMS, not a requirement: it must be explicitly enabled with a policy file, and the supplied sample apps and run scripts do NOT enable it. JEP 486 (permanent SecurityManager disablement in JDK 24+) therefore does not 'break' the client. The actual JDK 24/25 issues IBM documents for com.ibm.mq.allclient.jar are (a) native-access restriction on System.loadLibrary (fix: --enable-native-access=ALL-UNNAMED) and (b) TLS_RSA_* CipherSpecs disabled from Java 25 - neither is SecurityManager-related.",
+            "source_url": "https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=icmcjm-running-mq-classes-jms-applications-under-java-security-manager",
+            "source_quote": "IBM MQ classes for JMS can run with the Java security manager enabled. To run applications successfully with the Java security manager enabled, you must configure your Java Virtual Machine (JVM) with a suitable policy configuration file. ... The sample applications supplied with IBM MQ classes for JMS , and scripts to run them, do not enable the security manager.",
+            "notes": "No IBM APAR/known-issue tying the MQ client to SecurityManager-on-JDK24 breakage was found. The native-access warning is the real Corretto 25 concern: 'WARNING: java.lang.System::loadLibrary has been called by com.ibm.mq.jmqi.local.LocalMQ in an unnamed module (file:/opt/mqm/java/lib/com.ibm.mq.allclient.jar) ... Use --enable-native-access=ALL-UNNAMED'."
+          },
+          {
+            "id": "mqsc-define-qlocal-bothresh-boqname",
+            "claim": "DEFINE QLOCAL supports BOTHRESH and BOQNAME for poison-message / backout handling",
+            "verdict": "confirmed",
+            "value": "Exact keywords: BOTHRESH(integer) and BOQNAME(queue-name). BOTHRESH is the backout threshold (range 0 - 999,999,999); when exceeded the message is transferred to the queue named by BOQNAME. Both are valid only on local and model queues. IBM MQ classes for JMS use these attributes to drive backout/requeue.",
+            "source_url": "https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-queues",
+            "source_quote": "BOQNAME ( queue-name ) The excessive backout requeue name. ... IBM MQ classes for JMS transfers a message that is backed out the maximum number of times to this queue. The maximum is specified by the BOTHRESH parameter. BOTHRESH ( integer ) The backout threshold. ... When the value is exceeded, the message is transferred to the queue named by the BOQNAME parameter. Specify a value in the range 0 - 999,999,999.",
+            "notes": "Casing exact: BOTHRESH, BOQNAME. The 'report queue' in MQSC terms is just a normal DEFINE QLOCAL(...) - there is no special 'report queue' object type; report messages (COA/COD) are routed via the message's ReplyToQ/report options, not a distinct queue definition."
+          },
+          {
+            "id": "mqsc-define-channel-svrconn",
+            "claim": "DEFINE CHANNEL(...) CHLTYPE(SVRCONN) defines a server-connection channel",
+            "verdict": "confirmed",
+            "value": "Exact syntax: DEFINE CHANNEL(channel-name) CHLTYPE(SVRCONN). The channel-type keyword is CHLTYPE and the server-connection value is SVRCONN.",
+            "source_url": "https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-channel-define-new-channel",
+            "source_quote": "SVRCONN : server-connection channel ... CHLTYPE",
+            "notes": "Casing exact: CHLTYPE, SVRCONN. Other CHLTYPE values include SDR, RCVR, SVR, RQSTR, CLNTCONN, CLUSSDR, CLUSRCVR, AMQP, MQTT."
+          },
+          {
+            "id": "mqsc-define-authinfo-idpwos",
+            "claim": "DEFINE AUTHINFO(...) AUTHTYPE(IDPWOS) defines an OS user-id/password authentication info object",
+            "verdict": "confirmed",
+            "value": "Exact syntax: DEFINE AUTHINFO(name) AUTHTYPE(IDPWOS). The AUTHTYPE keyword selects the authentication-info type; IDPWOS = check user id and password using the operating system. Valid AUTHTYPE values in 9.4: CRLLDAP, OCSP, IDPWOS, IDPWLDAP.",
+            "source_url": "https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-authinfo-define-authentication-information-object",
+            "source_quote": "Syntax diagram for TYPE(IDPWOS) ... AUTHTYPE(IDPWOS) ... AUTHTYPE(CRLLDAP) ... AUTHTYPE(OCSP) ... Syntax diagram for TYPE(IDPWLDAP)",
+            "notes": "Casing exact: AUTHTYPE, IDPWOS. IDPWLDAP = check via LDAP server; IDPWOS = check via the operating system."
+          },
+          {
+            "id": "mqsc-alter-qmgr-connauth-deadq",
+            "claim": "ALTER QMGR CONNAUTH(...) wires up the AUTHINFO object; ALTER QMGR DEADQ(...) sets the dead-letter queue",
+            "verdict": "confirmed",
+            "value": "Exact keywords: CONNAUTH(string) and DEADQ(string), both valid on ALTER QMGR. CONNAUTH names the authentication-information object that provides the location of user-id/password authentication. DEADQ is the local name of the dead-letter (undelivered-message) queue. After changing CONNAUTH, run REFRESH SECURITY TYPE(CONNAUTH).",
+            "source_url": "https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-alter-qmgr-alter-queue-manager-settings",
+            "source_quote": "CONNAUTH ... the location of user ID and password authentication. ... REFRESH SECURITY TYPE(CONNAUTH) command is issued. ... DEADQ ( string ) The local name of a dead-letter queue (or undelivered-message queue) on which messages that cannot be routed to their correct destination are put. The queue named must be a local queue",
+            "notes": "Casing exact: CONNAUTH, DEADQ. Also note CHLAUTH(ENABLED|DISABLED) is the queue-manager attribute that turns channel-authentication-record checking on/off."
+          },
+          {
+            "id": "mqsc-set-chlauth-types",
+            "claim": "SET CHLAUTH supports TYPE(BLOCKUSER), TYPE(ADDRESSMAP), TYPE(USERMAP)",
+            "verdict": "confirmed",
+            "value": "Exact command: SET CHLAUTH(channel-profile-name) TYPE(...). Confirmed TYPE values include BLOCKUSER (must be accompanied by USERLIST), ADDRESSMAP (must be accompanied by ADDRESS), USERMAP (must be accompanied by CLNTUSER). Full TYPE set in 9.4: BLOCKUSER, BLOCKADDR, SSLPEERMAP, ADDRESSMAP, USERMAP, QMGRMAP.",
+            "source_url": "https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-set-chlauth-create-modify-channel-authentication-record",
+            "source_quote": "BLOCKUSER ... BLOCKUSER must be accompanied by a USERLIST parameter. ... ADDRESSMAP ... ADDRESSMAP must be accompanied by an ADDRESS parameter. ADDRESSMAP operates at the channel. ... USERMAP ... USERMAP must be accompanied by a CLNTUSER ... USERMAP rules are valid, only for server connection channels.",
+            "notes": "Casing exact: TYPE, BLOCKUSER, BLOCKADDR, SSLPEERMAP, ADDRESSMAP, USERMAP, QMGRMAP. USERMAP/ADDRESSMAP rules apply only to SVRCONN channels. BLOCKADDR operates at the listener before the channel name is known."
+          },
+          {
+            "id": "container-license-qmgr-env",
+            "claim": "icr.io/ibm-messaging/mq container uses LICENSE and MQ_QMGR_NAME env vars",
+            "verdict": "confirmed",
+            "value": "LICENSE must be set to 'accept' (or 'view' to display terms; LANG selects language) or the container terminates. MQ_QMGR_NAME sets the queue manager name (e.g. QM1). Image ref icr.io/ibm-messaging/mq:latest.",
+            "source_url": "https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/usage.md",
+            "source_quote": "This is achieved by specifying the environment variable `LICENSE` equal to `accept` when running the image.  You can also view the license terms by setting this variable to `view`. ... --env LICENSE=accept --env MQ_QMGR_NAME=QM1 --publish 1414:1414",
+            "notes": "From the official ibm-messaging/mq-container repo (the source for the icr.io/ibm-messaging/mq image)."
+          },
+          {
+            "id": "container-app-admin-password-deprecated",
+            "claim": "MQ_APP_PASSWORD and MQ_ADMIN_PASSWORD env vars set the app/admin user passwords",
+            "verdict": "confirmed",
+            "value": "The env vars MQ_ADMIN_PASSWORD and MQ_APP_PASSWORD still exist and set the admin/app passwords (min 8 chars; setting MQ_APP_PASSWORD secures DEV.APP.SVRCONN). IMPORTANT FOR PRODUCTION: from IBM MQ v9.4.0.0 these env vars are DEPRECATED - you must instead supply passwords via container secrets named mqAdminPassword and mqAppPassword.",
+            "source_url": "https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/developer-config.md",
+            "source_quote": "From IBM MQ v9.4.0.0, environment variables `MQ_ADMIN_PASSWORD` and `MQ_APP_PASSWORD` are deprecated. Secrets as detailed in the previous section must be used to set the passwords for `admin` and `app` user. ... **MQ_APP_PASSWORD** - Specify the password of the `app` user. If set, this will cause the `DEV.APP.SVRCONN` channel to become secured and only allow connections that supply a valid userid and password. Must be at least 8 characters long.",
+            "notes": "Resolves the earlier conflict: both 'env var exists' and 'env var deprecated' are true. For a production guide, use secrets (printf '...' | podman secret create mqAppPassword -), not the env vars."
+          },
+          {
+            "id": "container-mqsc-autoconfig",
+            "claim": "Custom MQSC can be auto-run at container start by placing *.mqsc files",
+            "verdict": "confirmed",
+            "value": "Place your own MQSC file into the /etc/mqm directory in a custom image (e.g. COPY 20-config.mqsc /etc/mqm/). The file is run when the queue manager is created.",
+            "source_url": "https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/usage.md",
+            "source_quote": "By creating your own image and adding your own MQSC file into the `/etc/mqm` directory on the image.  This file will be run when your queue manager is created. ... COPY 20-config.mqsc /etc/mqm/",
+            "notes": "Directory is /etc/mqm; files end in .mqsc. Runs once at queue-manager creation, not on every start."
+          },
+          {
+            "id": "container-default-dev-objects",
+            "claim": "Default dev objects: DEV.QUEUE.1, DEV.APP.SVRCONN, DEV.ADMIN.SVRCONN",
+            "verdict": "confirmed",
+            "value": "MQ Advanced for Developers default config (MQ_DEV=true) creates queues DEV.QUEUE.1, DEV.QUEUE.2, DEV.QUEUE.3, DEV.DEAD.LETTER.QUEUE (set as the QM dead-letter queue), topic DEV.BASE.TOPIC (string 'dev/'), and channels DEV.ADMIN.SVRCONN (admin user only) and DEV.APP.SVRCONN (app user only, no admins). Users: admin, app (group mqclient).",
+            "source_url": "https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/developer-config.md",
+            "source_quote": "* DEV.QUEUE.1 * DEV.QUEUE.2 * DEV.QUEUE.3 * DEV.DEAD.LETTER.QUEUE - configured as the Queue Manager's Dead Letter Queue. * DEV.BASE.TOPIC - uses a topic string of `dev/`. ... * DEV.ADMIN.SVRCONN - configured to only allow the admin user to connect into it. ... * DEV.APP.SVRCONN - does not allow administrative users to connect.  Only the `app` user can connect.",
+            "notes": "Set MQ_DEV=false to suppress default object creation. Names are exact and case-sensitive."
+          },
+          {
+            "id": "container-default-listener-port-1414",
+            "claim": "Default listener port inside the MQ container is 1414",
+            "verdict": "confirmed",
+            "value": "1414. A listener is always created on port 1414 inside the container (web console is on 9443). Publish with --publish 1414:1414 (and 9443:9443 for the console).",
+            "source_url": "https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/usage.md",
+            "source_quote": "Note that a listener is always created on port 1414 inside the container.  This port can be mapped to any port on the Docker host.",
+            "notes": "Web console default HTTPS port is 9443 (https://<Container IP>:9443/ibmmq/console)."
+          }
+        ]
+      }
+    ],
+    "factSheet": "The advisor confirmed my plan and gave me a complete inventory. I have everything inline. Let me produce the Markdown directly.\n\n## ⚠️ CONFLITOS / REFUTADOS / INCERTOS\n\nEsta seção lista todo fato com veredito `refuted` ou `uncertain`, mais correções de enquadramento em fatos `confirmed` cujas `notes` contradizem a premissa do brief.\n\n### Refutados (REFUTED)\n\n| Fato | Premissa errada | Valor correto | Source |\n|---|---|---|---|\n| `micronaut-core-4.9.9-exists` | **BUILD-BREAKING.** O BOM `io.micronaut.platform:micronaut-platform:4.9.9` no `pom.xml` não resolve. | O BOM `io.micronaut.platform:micronaut-platform` para 4.9.x termina em **4.9.4** (depois pula para 4.10.x); um `pom.xml` fixando 4.9.9 **falha**. Apenas `io.micronaut:micronaut-core` 4.9.9 existe (versionamento divergente). Use o BOM em **4.9.4** (ou 4.10.x). | https://repo1.maven.org/maven2/io/micronaut/platform/micronaut-platform/4.9.4/micronaut-platform-4.9.4.pom |\n| `report-persistence-inherits` | \"Reports COA/COD são não-persistentes por padrão\" / report pode ser não-persistente mesmo com original persistente. | **FALSO.** O report **herda** a persistência do original (\"Persistence: Copied from the original message descriptor\"). Original persistente → report persistente por padrão. Vale para COA/COD/exception/expiration/PAN/NAN. | https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm |\n| `WMQ_USER_AUTHENTICATION_MQCSP` | Campo `WMQConstants.WMQ_USER_AUTHENTICATION_MQCSP`. | **Não existe.** O campo correto é `WMQConstants.USER_AUTHENTICATION_MQCSP` (sem prefixo `WMQ_`), valor `\"XMSC_USER_AUTHENTICATION_MQCSP\"`, propriedade **boolean**: `cf.setBooleanProperty(WMQConstants.USER_AUTHENTICATION_MQCSP, true)`. Herdado de `JmsConstants`. | https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar |\n| `WMQ_SSL_CERT_STORES` | Campo `WMQConstants.WMQ_SSL_CERT_STORES`. | **Não existe campo com esse nome literal em 9.4.5.0.** Existem `WMQ_SSL_CERT_STORES_COL` (`\"XMSC_WMQ_SSL_CERT_STORES_COL\"`, Collection) e `WMQ_SSL_CERT_STORES_STR` (`\"XMSC_WMQ_SSL_CERT_STORES_STR\"`, String/URL LDAP único). | https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar |\n| `useIBMCipherMappings` | Definir `com.ibm.mq.cfg.useIBMCipherMappings` para escolher naming IBM vs Oracle. | **REMOVIDA do produto a partir de IBM MQ 9.4.0.** Um guia 9.4 **não deve** instruir defini-la. De 9.4.0 em diante o Cipher pode ser informado como CipherSpec **ou** CipherSuite e é tratado automaticamente. | https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.develop.pdf |\n| `java25-listed-for-94x` | \"Java 25 NÃO está listado/certificado para MQ 9.4.5.\" | **Refutado.** A doc 9.4.x tem seção dedicada a **Java 25** com orientação operacional (TLS_RSA_* CipherSpecs desabilitadas a partir do Java 25; avisos de native-access para `com.ibm.mq.allclient.jar`). Ação prática ao rodar em Corretto 25: `--enable-native-access=ALL-UNNAMED` e evitar TLS_RSA_*. | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=applications-developing-jmsjakarta-messaging-java |\n| `securitymanager-jdk24-breakage` | \"allclient depende do SecurityManager de modo que quebra no JDK 24/25 (JEP 486).\" | **Refutado.** Rodar sob Java Security Manager é **opcional** (exige policy file; samples/scripts não o habilitam). JEP 486 não quebra o cliente. Os reais problemas em JDK 24/25 são: (a) native-access em `System.loadLibrary` → `--enable-native-access=ALL-UNNAMED`; (b) TLS_RSA_* desabilitadas no Java 25. Nenhum é relativo a SecurityManager. | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=icmcjm-running-mq-classes-jms-applications-under-java-security-manager |\n\n### Incertos (UNCERTAIN)\n\n| Fato | Status | Detalhe | Source |\n|---|---|---|---|\n| `CHLAUTH-block-by-default` | Mecanismo confirmado, sem citação primária verbatim | Comportamento de bloqueio de admin remoto por padrão é fortemente suportado (CHLAUTH(ENABLED) + regras default `USERSRC(NOACCESS)`/`BLOCKUSER('*MQADMIN')`), mas a frase \"blocked by default\" não pôde ser extraída de página IBM (JS-rendered). Para liberar admin remoto: regra `USERMAP`/`ADDRESSMAP` com `USERSRC(MAP) MCAUSER(...)`, ou `ALTER QMGR CHLAUTH(DISABLED)` (não recomendado em produção). | https://www.ibm.com/support/pages/mq-rc-2035-mqrcnotauthorized-or-amq4036-or-jmswmq2013-when-using-client-connection-mq-administrator-chlauth-channel-authentication-records |\n| `java21-from-940-exact-wording` | Frase exata não localizada | Java 21 **é** suportado em 9.4.x, mas o phrasing \"From IBM MQ 9.4.0\" não é verbatim e é parcialmente contraditado: o Semeru 21 empacotado para Multiplatforms (não-z/OS) chegou em **9.4.4**; em z/OS é suportado **desde 9.3.0**. Recomendação: dizer \"9.4.x suporta Java 21 (Semeru 21 empacotado em Multiplatforms a partir de 9.4.4; z/OS desde 9.3.0)\". | https://community.ibm.com/community/user/blogs/johnny-murphy/2024/12/11/mq-zos-j21 |\n| `jdk-certified-matrix-8-11-17-21` | Enumeração não confirmável | A lista exaustiva de JDKs certificados por versão é deferida ao relatório SPCR (JS-rendered, não obtível programaticamente). Confirmado por fonte primária apenas: JRE empacotado de 9.4.5.0 = Semeru 21; doc referencia Java 21 e Java 25. **Não** afirmar \"8/11/17/21 certificados\" como fato duro sem a matriz SPCR. | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=java-prerequisites-mq-classes |\n\n### Correção de enquadramento (veredito `confirmed`, mas a premissa do brief está errada)\n\n| Fato | Enquadramento do brief | Correção | Source |\n|---|---|---|---|\n| `MQRO-MQFB-declaring-class` | \"valores MQRO_* do WMQConstants\" | As constantes inteiras **MQRO_*** e **MQFB_*** são declaradas em `com.ibm.mq.constants.CMQC` (agregadas por `MQConstants`), **não** em `WMQConstants` (que declara só 1 campo, `sccsid`). Referencie como `MQConstants.MQRO_COA`. Em JMS, esses inteiros são passados nas propriedades `JMS_IBM_Report_*`. | https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar |\n| `pooledjms-namespace-by-version` | Fixar `pooled-jms` 1.x para javax | \"1.x = javax.jms\" está correto, **mas** 2.x também é javax.jms (verificado 2.0.9). Para um projeto javax **novo**, o projeto recomenda a linha **2.x** (mais recente 2.0.9), não 1.x. Fixar 1.x deixa você numa série mais antiga. 3.x = jakarta.jms. | https://raw.githubusercontent.com/messaginghub/pooled-jms/1.2.8/pooled-jms/src/main/java/org/messaginghub/pooled/jms/JmsPoolConnectionFactory.java |\n| `WMQ_APPLICATIONNAME` | (atenção ao casing) | Nome do campo é `WMQ_APPLICATIONNAME` (uma palavra), mas o valor da propriedade é `\"XMSC_WMQ_APPNAME\"` (APPNAME) — o nome do campo Java e a chave de propriedade divergem na grafia. | https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar |\n\n---\n\n## Cluster 1 — Maven & Micronaut\n\n| Name | Value | Note | Source |\n|---|---|---|---|\n| `com.ibm.mq:com.ibm.mq.allclient` 9.4.5.0 | Existe; jar 8.477.900 bytes; sha1 `26c8f5cd163847990d270acf2f4f0a7f773c3bbd`; publicado 2026-01-30 | `<latest>`/`<release>` = **9.4.5.1** (9.4.5.0 é fixpack anterior, resolve normalmente). Cliente **javax.jms** (JMS 2.0); POM depende de `javax.jms:javax.jms-api:2.0.1` | https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/maven-metadata.xml |\n| `com.ibm.mq:com.ibm.mq.jakarta.client` | 9.4.5.0 existe (latest/release 9.4.5.1) | Cliente **jakarta.jms** (Jakarta Messaging 3.0); bytecode referencia só `jakarta/jms/`. Linha começa em 9.3.0.0 | https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.jakarta.client/9.4.5.0/com.ibm.mq.jakarta.client-9.4.5.0.jar |\n| `org.messaginghub:pooled-jms` | 1.x = javax (latest **2.0.9** também javax); 3.x = jakarta (latest 3.2.2) | FQ class `org.messaginghub.pooled.jms.JmsPoolConnectionFactory`. Ver correção de enquadramento acima | https://raw.githubusercontent.com/messaginghub/pooled-jms/1.2.8/.../JmsPoolConnectionFactory.java |\n| `io.micronaut:micronaut-core` 4.9.9 | Existe (POM HTTP 200) | Mas o **BOM** `io.micronaut.platform:micronaut-platform` 4.9.x para em **4.9.4** (ver TOP). Micronaut 4.9.0 lançado 2025-06-30 | https://repo1.maven.org/maven2/io/micronaut/platform/micronaut-platform/4.9.4/micronaut-platform-4.9.4.pom |\n| Micronaut 4.x baseline Java | Mínimo Java **17**; Java **21** suportado (selecionável em Launch/CLI a partir de 4.2.0) | Java 21 (LTS) totalmente suportado na linha 4.9.x | https://micronaut.io/2023/02/16/micronaut-framework-4-0-with-java-17-baseline/ |\n| `io.micronaut.maven:micronaut-maven-plugin` | Latest geral **5.0.0**; para projeto 4.9.x usar linha **4.x** (latest **4.11.6**) | groupId é `io.micronaut.maven` (não `io.micronaut`). 5.0.0 alinha com Micronaut 5 / Java 25 | https://repo1.maven.org/maven2/io/micronaut/maven/micronaut-maven-plugin/maven-metadata.xml |\n| `io.micronaut.jms` módulo 4.x | **jakarta-only** (corretamente excluído de projeto javax) | Coordenada real é `io.micronaut.jms:micronaut-jms-core` (+ `micronaut-jms-bom`); **não** existe artefato `micronaut-jms` puro. Bytecode 4.3.0: só `jakarta/jms` | https://repo1.maven.org/maven2/io/micronaut/jms/micronaut-jms-core/4.3.0/micronaut-jms-core-4.3.0.jar |\n| Módulo Testcontainers para MQ | **Não há** módulo sob `org.testcontainers` para MQ | Módulo oficial IBM: `com.ibm.mq:mq-java-testcontainer` (latest 2.0.4), classe `com.ibm.mq.testcontainers.MQContainer`. Alternativa: `GenericContainer` + imagem `icr.io/ibm-messaging/mq`. Core Testcontainers latest = **2.0.5** | https://repo1.maven.org/maven2/com/ibm/mq/mq-java-testcontainer/maven-metadata.xml |\n| Imagem `icr.io/ibm-messaging/mq` | IBM MQ **Advanced for Developers**; `LICENSE=accept` (ou `view`) | Image ref ex. `icr.io/ibm-messaging/mq:latest`. Container encerra se LICENSE não aceita | https://raw.githubusercontent.com/ibm-messaging/mq-container/master/README.md |\n| Objetos/credenciais dev default | Queues `DEV.QUEUE.1/2/3`, `DEV.DEAD.LETTER.QUEUE` (DLQ); topic `DEV.BASE.TOPIC` (`dev/`); channels `DEV.ADMIN.SVRCONN` (só admin), `DEV.APP.SVRCONN` (só app); users `admin`, `app` (grupo `mqclient`); QMgr ex. `QM1` | A partir de v9.4.0.0, `MQ_ADMIN_PASSWORD`/`MQ_APP_PASSWORD` **deprecadas** → usar secrets `mqAdminPassword`/`mqAppPassword` (mín. 8 chars). Listener 1414, console 9443 (`/ibmmq/console`) | https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/developer-config.md |\n| Tags 9.4.x da imagem | Formato `9.4.<fixpack>-r<N>` (+ `-amd64`/`-ppc64le`/`-s390x`) + multi-arch + `latest` | Relevantes: `9.4.5.0-r1`, `9.4.5.0-r2`, `9.4.5.1-r1`. Não existe tag `9.4.5.0` \"pura\" | https://icr.io/v2/ibm-messaging/mq/tags/list |\n\n---\n\n## Cluster 2 — Constantes de report & feedback codes\n\n**Esquema de nomes JMS:** campo Java = UPPER_SNAKE (ex. `JMS_IBM_REPORT_COA`); o **valor String** é a propriedade mixed-case (ex. `\"JMS_IBM_Report_COA\"`). Herdados de `com.ibm.msg.client.jms.JmsConstants` (alcançáveis via `WMQConstants`).\n\n### Propriedades JMS (campo → valor String → mapeamento MQRO_*)\n\n| Name (campo) | Valor String | Mapeia para | Source |\n|---|---|---|---|\n| `JMS_IBM_REPORT_COA` | `JMS_IBM_Report_COA` | `MQRO_COA` / `_WITH_DATA` / `_WITH_FULL_DATA` | allclient-9.4.5.0.jar |\n| `JMS_IBM_REPORT_COD` | `JMS_IBM_Report_COD` | `MQRO_COD` / `_WITH_DATA` / `_WITH_FULL_DATA` | allclient-9.4.5.0.jar |\n| `JMS_IBM_REPORT_EXCEPTION` | `JMS_IBM_Report_Exception` | `MQRO_EXCEPTION` / `_WITH_DATA` / `_WITH_FULL_DATA` | allclient-9.4.5.0.jar |\n| `JMS_IBM_REPORT_EXPIRATION` | `JMS_IBM_Report_Expiration` | `MQRO_EXPIRATION` / `_WITH_DATA` / `_WITH_FULL_DATA` | allclient-9.4.5.0.jar |\n| `JMS_IBM_REPORT_PAN` | `JMS_IBM_Report_PAN` | `MQRO_PAN` | allclient-9.4.5.0.jar |\n| `JMS_IBM_REPORT_NAN` | `JMS_IBM_Report_NAN` | `MQRO_NAN` | allclient-9.4.5.0.jar |\n| `JMS_IBM_REPORT_PASS_MSG_ID` | `JMS_IBM_Report_Pass_Msg_ID` | `MQRO_PASS_MSG_ID` | allclient-9.4.5.0.jar |\n| `JMS_IBM_REPORT_PASS_CORREL_ID` | `JMS_IBM_Report_Pass_Correl_ID` | `MQRO_PASS_CORREL_ID` | allclient-9.4.5.0.jar |\n| `JMS_IBM_REPORT_DISCARD_MSG` | `JMS_IBM_Report_Discard_Msg` | `MQRO_DISCARD_MSG` | allclient-9.4.5.0.jar |\n\n> Casing verbatim: `Pass_Msg_ID`, `Pass_Correl_ID`, `Discard_Msg` (ID maiúsculo). Source jar: `.../9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar`. Mapeamentos cross-confirmados em https://www.setgetweb.com/p/MQ92/dev/q032050_.htm\n\n### Valores inteiros MQRO_* (declarados em `CMQC`, não em `WMQConstants`)\n\n| Constante | Valor decimal | Hex | Note |\n|---|---|---|---|\n| `MQRO_COA` | 256 | 0x100 | |\n| `MQRO_COA_WITH_DATA` | 768 | 0x300 | |\n| `MQRO_COA_WITH_FULL_DATA` | 1792 | 0x700 | |\n| `MQRO_COD` | 2048 | 0x800 | |\n| `MQRO_COD_WITH_DATA` | 6144 | 0x1800 | |\n| `MQRO_COD_WITH_FULL_DATA` | 14336 | 0x3800 | |\n| `MQRO_EXCEPTION` | 16777216 | 0x1000000 | |\n| `MQRO_EXCEPTION_WITH_DATA` | 50331648 | 0x3000000 | |\n| `MQRO_EXCEPTION_WITH_FULL_DATA` | 117440512 | 0x7000000 | |\n| `MQRO_EXPIRATION` | 2097152 | 0x200000 | |\n| `MQRO_EXPIRATION_WITH_DATA` | 6291456 | 0x600000 | |\n| `MQRO_EXPIRATION_WITH_FULL_DATA` | 14680064 | 0xE00000 | |\n| `MQRO_PAN` | 1 | 0x1 | Gerado pela app consumidora, não pelo QMgr |\n| `MQRO_NAN` | 2 | 0x2 | Gerado pela app consumidora |\n| `MQRO_COPY_MSG_ID_TO_CORREL_ID` | 0 | 0x0 | **Default**: MsgId original → CorrelId do report |\n| `MQRO_PASS_MSG_ID` | 128 | 0x80 | |\n| `MQRO_PASS_CORREL_ID` | 64 | 0x40 | |\n| `MQRO_NEW_MSG_ID` | 0 | 0x0 | **Default**: novo MsgId para o report |\n| `MQRO_DISCARD_MSG` | 134217728 | 0x8000000 | Descarta se indeliverable |\n| `MQRO_DEAD_LETTER_Q` | 0 | 0x0 | **Default**: vai para DLQ se indeliverable (mutuamente exclusivo com DISCARD_MSG) |\n\n> Todos extraídos do bytecode `CMQC` em allclient-9.4.5.0.jar. `WMQConstants.class` declara só 1 campo (`sccsid`).\n\n### Feedback codes (`MQFB_*`, em `CMQC`)\n\n| Constante | Valor | Note | Source |\n|---|---|---|---|\n| `MQFB_COA` | 259 | **Não** confundir com 271 (`MQFB_XMIT_Q_MSG_ERROR`) | csqzaq00122 + bytecode |\n| `MQFB_COD` | 260 | | csqzaq00122 + bytecode |\n| `MQFB_EXPIRATION` | 258 | | csqzaq00122 + bytecode |\n| `MQFB_PAN` | 275 | | csqzaq00122 + bytecode |\n| `MQFB_NAN` | 276 | | csqzaq00122 + bytecode |\n| Exception (sem MQFB fixo) | reason code MQRC_* | Feedback do MQMD recebe um **MQRC_*** (ex. `MQRC_PUT_INHIBITED`, `MQRC_Q_FULL`, `MQRC_NOT_AUTHORIZED`) — não existe constante `MQFB_EXCEPTION`. Ranges: `MQFB_SYSTEM_FIRST`=1, `MQFB_SYSTEM_LAST`=65535, `MQFB_APPL_FIRST`=65536, `MQFB_APPL_LAST`=999999999 | https://setgetweb.com/p/MQ92/ref.dev/q097510_.htm |\n\n### Semântica de report\n\n| Tema | Valor | Source |\n|---|---|---|\n| Default de propagação de id | `MQRO_COPY_MSG_ID_TO_CORREL_ID` (=0) assumido: MsgId original → CorrelId do report. Para o MsgId do próprio report, default = `MQRO_NEW_MSG_ID` (=0). **CONFIRMADO** | https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm |\n| Timing COA | Gerado pelo QMgr dono da fila de destino quando a msg é **colocada** na fila | https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm |\n| Timing COD | Gerado quando a app **recupera** a msg de forma destrutiva (MQGET destrutivo). Não gerado se Format = `MQFMT_DEAD_LETTER_HEADER`; inválido para fila XCF | https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm |\n| Syncpoint | COA só recuperável após o **producer commitar**; COD gerado dentro da UoW do consumer, indisponível até commit — se backed out, report não é enviado | https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm |\n| Persistência do report | **HERDA do original** (\"Copied from the original message descriptor\") — ver TOP (refutado) | https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm |\n\n---\n\n## Cluster 3 — Propriedades de conexão & segurança\n\n### Propriedades de conexão (campo → valor String)\n\n| Name (campo) | Valor String | Note | Source |\n|---|---|---|---|\n| `WMQ_CONNECTION_MODE` | `XMSC_WMQ_CONNECTION_MODE` | `setIntProperty`; em `CommonConstants` | allclient-9.4.5.0.jar |\n| `WMQ_CM_CLIENT` (int) | **1** | `WMQ_CM_BINDINGS` = 0 | allclient-9.4.5.0.jar |\n| `WMQ_HOST_NAME` | `XMSC_WMQ_HOST_NAME` | | allclient-9.4.5.0.jar |\n| `WMQ_PORT` | `XMSC_WMQ_PORT` | `setIntProperty` (ex. 1414) | allclient-9.4.5.0.jar |\n| `WMQ_CHANNEL` | `XMSC_WMQ_CHANNEL` | | allclient-9.4.5.0.jar |\n| `WMQ_QUEUE_MANAGER` | `XMSC_WMQ_QUEUE_MANAGER` | | allclient-9.4.5.0.jar |\n| `WMQ_CONNECTION_NAME_LIST` | `XMSC_WMQ_CONNECTION_NAME_LIST` | Admin: `CONNECTIONNAMELIST` (CRHOSTS); formato `host(port),host(port)` | allclient-9.4.5.0.jar |\n| `WMQ_CCDTURL` | `XMSC_WMQ_CCDTURL` | Casing: `CCDTURL` (sem underscore antes de URL); suporta CCDT HTTPS | allclient-9.4.5.0.jar |\n| `WMQ_CLIENT_RECONNECT_OPTIONS` | `XMSC_WMQ_CLIENT_RECONNECT_OPTIONS` | Admin `CLIENTRECONNECTOPTIONS` (CROPT); exige `TRANSPORT=CLIENT` + CONNAMELIST/CCDT | allclient-9.4.5.0.jar |\n| `WMQ_CLIENT_RECONNECT` (int) | **16777216** (0x01000000) | = MQI `MQCNO_RECONNECT` / admin `ANY` | allclient-9.4.5.0.jar |\n| `WMQ_CLIENT_RECONNECT_Q_MGR` (int) | **67108864** (0x04000000) | = `MQCNO_RECONNECT_Q_MGR` / admin `QMGR`; campo usa `Q_MGR` | allclient-9.4.5.0.jar |\n| `WMQ_CLIENT_RECONNECT_AS_DEF` (int) | **0** | = `MQCNO_RECONNECT_AS_DEF` / `ASDEF`. Também `WMQ_CLIENT_RECONNECT_DISABLED`=33554432 | allclient-9.4.5.0.jar |\n| `WMQ_CLIENT_RECONNECT_TIMEOUT` | `XMSC_WMQ_CLIENT_RECONNECT_TIMEOUT` | É **chave String** (recebe int em segundos), não constante int. Default documentado da propriedade = 1800s (≠ valor do constant) | allclient-9.4.5.0.jar |\n| `WMQ_SHARE_CONV_ALLOWED` | `XMSC_WMQ_SHARE_CONV_ALLOWED` | | allclient-9.4.5.0.jar |\n| `WMQ_APPLICATIONNAME` | `XMSC_WMQ_APPNAME` | **Atenção**: campo `APPLICATIONNAME` vs valor `APPNAME` (ver TOP) | allclient-9.4.5.0.jar |\n\n### Autenticação / TLS\n\n| Name | Valor | Note | Source |\n|---|---|---|---|\n| `USER_AUTHENTICATION_MQCSP` | `XMSC_USER_AUTHENTICATION_MQCSP` | **Sem prefixo `WMQ_`** (ver TOP); boolean; `setBooleanProperty(..., true)`. Int subjacente = 128. Herdado de `JmsConstants` | allclient-9.4.5.0.jar |\n| `USERID` | `XMSC_USERID` | Herdado de `JmsConstants` | allclient-9.4.5.0.jar |\n| `PASSWORD` | (`XMSC_PASSWORD` — inferido alta-confiança, não lido como ConstantValue) | Nome do campo confirmado (jar + mq-jms-spring) | allclient-9.4.5.0.jar |\n| `WMQ_SSL_CIPHER_SUITE` | `XMSC_WMQ_SSL_CIPHER_SUITE` | Definir SSLCIPHERSUITE é o que **habilita TLS** no CF. Há `WMQ_SSL_CIPHER_SPEC` para CipherSpec | allclient-9.4.5.0.jar |\n| `WMQ_SSL_PEER_NAME` | `XMSC_WMQ_SSL_PEER_NAME` | SSLPEER DN matching; ignorado se SSLCIPHERSUITE não definido | allclient-9.4.5.0.jar |\n| `WMQ_SSL_CERT_STORES_COL` / `_STR` | `XMSC_WMQ_SSL_CERT_STORES_COL` / `_STR` | **Não existe `WMQ_SSL_CERT_STORES` puro** (ver TOP); `_STR`=URL LDAP único, `_COL`=Collection | allclient-9.4.5.0.jar |\n| keystore/truststore | (1) JSSE default via `javax.net.ssl.keyStore`/`keyStorePassword` (+ trustStore); (2) custom via `MQConnectionFactory.setSSLSocketFactory()` | TLS só ativo com CipherSuite definido. Após `setSSLSocketFactory()` o CF não pode ir para JNDI. Em 9.4.5: `WMQ_SSL_SOCKET_FACTORY` (`XMSC_WMQ_SSL_SOCKET_FACTORY`) para JWT/HTTPS | https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.develop.pdf |\n| CipherSpec↔CipherSuite TLS 1.2 | CipherSpec `ECDHE_RSA_AES_128_GCM_SHA256` ↔ CipherSuite `SSL_ECDHE_RSA_WITH_AES_128_GCM_SHA256` (IBM JRE) / `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256` (Oracle JRE) | TLS 1.2; FIPS 140-2/140-3. 256-bit: `ECDHE_RSA_AES_256_GCM_SHA384` | mq94.develop.pdf (Table 41) |\n| CipherSpec↔CipherSuite TLS 1.3 | Mesmo nome nos dois JREs: `TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384` | Habilitados por padrão em TLS 1.3; `TLS_CHACHA20_POLY1305_SHA256` suportado mas não default. Specs genéricas: `ANY_TLS13`, `ANY_TLS12`, `ANY_TLS12_OR_HIGHER`, `ANY_TLS13_OR_HIGHER` | mq94.develop.pdf (Table 41) |\n| `useIBMCipherMappings` | **REMOVIDA em 9.4.0** (ver TOP) | A partir do Java 11 os prefixos `SSL_`/`TLS_` não são intercambiáveis | mq94.develop.pdf |\n\n### MQSC de segurança\n\n| Item | Valor | Note | Source |\n|---|---|---|---|\n| `CHCKCLNT` (em AUTHINFO IDPWOS/IDPWLDAP) | `NONE` / `OPTIONAL` / `REQUIRED` / `REQDADM` | Requerer user/pass: `AUTHINFO ... AUTHTYPE(IDPWOS) CHCKCLNT(REQUIRED) ADOPTCTX(YES)` → `ALTER QMGR CONNAUTH(...)` → `REFRESH SECURITY TYPE(CONNAUTH)`. Regra CHLAUTH pode sobrepor (`ASQMGR` defere ao QMgr). `REQDADM` inválido em z/OS | mq94.refadmin.pdf |\n| `SET CHLAUTH(...)` | `TYPE(BLOCKUSER \\| BLOCKADDR \\| SSLPEERMAP \\| ADDRESSMAP \\| USERMAP \\| QMGRMAP)` `ACTION(ADD\\|REPLACE\\|REMOVE\\|REMOVEALL)` | Verbo canônico é **`SET CHLAUTH`** (não há `DEFINE CHLAUTH`). `USERSRC(MAP\\|NOACCESS\\|CHANNEL)`, `MCAUSER(...)`. Bloquear: `TYPE(BLOCKUSER) USERLIST(*MQADMIN)`. Mapear: `TYPE(USERMAP) CLNTUSER(...) USERSRC(MAP) MCAUSER(...)`. USERMAP/ADDRESSMAP só SVRCONN; BLOCKADDR opera no listener | mq94.refadmin.pdf |\n| `CHLAUTH(ENABLED\\|DISABLED)` (atributo QMgr) | Liga/desliga aplicação das regras | Ver `CHLAUTH-block-by-default` no TOP (incerto) | mq94.refadmin.pdf |\n\n---\n\n## Cluster 4 — JDK support, MQSC & container\n\n### JDK / runtime\n\n| Item | Valor | Note | Source |\n|---|---|---|---|\n| `allclient` namespace | javax.jms / JMS 2.0 | POM depende de `javax.jms:javax.jms-api:2.0.1`; doc IBM rotula `com.ibm.mq.allclient.jar` = \"JMS 2.0\" | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=applications-java-application-development-using-maven-repository |\n| Java 21 em 9.4.x | **Suportado** | JRE empacotado de 9.4.5.0 (Win/Linux/AIX) = IBM Semeru 21.0.10. Semeru 21 em Multiplatforms a partir de **9.4.4**; z/OS desde 9.3.0 (ver TOP `java21-from-940-exact-wording`) | https://www.ibm.com/support/pages/levels-jre-and-gskit-bundled-ibm-mq |\n| Matriz 8/11/17/21 certificada | **Não confirmável** (SPCR JS-rendered) — ver TOP | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=java-prerequisites-mq-classes |\n| Java 25 em 9.4.x | **Documentado/in-scope** (refuta \"não listado\") — ver TOP | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=applications-developing-jmsjakarta-messaging-java |\n| SecurityManager / JEP 486 | **Não quebra** o cliente (opcional) — ver TOP | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=icmcjm-running-mq-classes-jms-applications-under-java-security-manager |\n\n### MQSC (sintaxe exata)\n\n| Comando/keyword | Valor | Note | Source |\n|---|---|---|---|\n| `DEFINE QLOCAL` poison-msg | `BOTHRESH(integer)` (0–999.999.999) + `BOQNAME(queue-name)` | Válidos só em local/model queues. Não há tipo de objeto \"report queue\" — reports vão por ReplyToQ/report options | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-queues |\n| `DEFINE CHANNEL(...)` | `CHLTYPE(SVRCONN)` | Outros CHLTYPE: `SDR`, `RCVR`, `SVR`, `RQSTR`, `CLNTCONN`, `CLUSSDR`, `CLUSRCVR`, `AMQP`, `MQTT` | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-channel-define-new-channel |\n| `DEFINE AUTHINFO(...)` | `AUTHTYPE(IDPWOS)` | Valores 9.4: `CRLLDAP`, `OCSP`, `IDPWOS` (via SO), `IDPWLDAP` (via LDAP) | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-authinfo-define-authentication-information-object |\n| `ALTER QMGR` | `CONNAUTH(string)` + `DEADQ(string)` | Após mudar CONNAUTH: `REFRESH SECURITY TYPE(CONNAUTH)`. DEADQ deve ser fila local | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-alter-qmgr-alter-queue-manager-settings |\n| `SET CHLAUTH` types | `BLOCKUSER`+`USERLIST`, `ADDRESSMAP`+`ADDRESS`, `USERMAP`+`CLNTUSER` | Set completo: `BLOCKUSER`, `BLOCKADDR`, `SSLPEERMAP`, `ADDRESSMAP`, `USERMAP`, `QMGRMAP` | https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-set-chlauth-create-modify-channel-authentication-record |\n\n### Container\n\n| Item | Valor | Note | Source |\n|---|---|---|---|\n| Env vars base | `LICENSE=accept` (ou `view`; `LANG` idioma) + `MQ_QMGR_NAME` (ex. QM1) | Image ref `icr.io/ibm-messaging/mq:latest`; container encerra sem LICENSE | https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/usage.md |\n| `MQ_APP_PASSWORD` / `MQ_ADMIN_PASSWORD` | Existem (mín. 8 chars; setar APP_PASSWORD protege `DEV.APP.SVRCONN`) — **deprecadas a partir de v9.4.0.0** | Produção: usar secrets `mqAdminPassword`/`mqAppPassword` | https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/developer-config.md |\n| MQSC auto-config | Arquivos `*.mqsc` em `/etc/mqm` (ex. `COPY 20-config.mqsc /etc/mqm/`) | Executado **uma vez** na criação do QMgr, não a cada start | https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/usage.md |\n| Objetos dev default | `DEV.QUEUE.1/2/3`, `DEV.DEAD.LETTER.QUEUE` (DLQ), `DEV.BASE.TOPIC` (`dev/`), `DEV.ADMIN.SVRCONN`, `DEV.APP.SVRCONN`; users `admin`, `app` (grupo `mqclient`) | `MQ_DEV=false` suprime criação. Nomes case-sensitive | https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/developer-config.md |\n| Porta listener default | **1414** (sempre criada dentro do container) | Console web em **9443** (`https://<IP>:9443/ibmmq/console`). Publicar `1414:1414` (e `9443:9443`) | https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/usage.md |\n\n---\n\n## Impacto nas premissas do brief\n\n**P2 — `allclient 9.4.5.0` / Java 21:** SEM CONTRADIÇÃO. Ambos válidos: `com.ibm.mq.allclient:9.4.5.0` é artefato real (javax.jms, JMS 2.0), e Java 21 é suportado em 9.4.x (Semeru 21 empacotado). Ressalvas: 9.4.5.1 é o fixpack mais novo (9.4.5.0 resolve normalmente); a tag de imagem correspondente é `9.4.5.0-r1/r2`, não `9.4.5.0` pura.\n\n**P6 — Constantes de report / default COPY_MSG_ID / persistência:** PARCIALMENTE CONTRADITA.\n- Default `MQRO_COPY_MSG_ID_TO_CORREL_ID`: **CONFIRMADO** (valor 0, é o assumido).\n- Persistência: **REFUTADA** — reports **herdam** a persistência do original; original persistente → report persistente. A crença de que COA/COD são não-persistentes por padrão está errada.\n- Enquadramento \"valores MQRO_* do WMQConstants\": **CORRIGIDO** — MQRO_*/MQFB_* vivem em `com.ibm.mq.constants.CMQC`/`MQConstants`, não em `WMQConstants`.\n\n**P10 — `pooled-jms` versão javax:** NÃO CONTRADITA, mas SUBÓTIMA. \"1.x = javax.jms\" está correto, porém a **2.x também é javax** (latest 2.0.9) e é a linha javax mantida recomendada para projeto novo. Fixar 1.x deixa numa série mais antiga, não numa errada. (3.x = jakarta.jms.)\n\n**Runtime Corretto 25 (certificação JDK / Security Manager):** VIÁVEL com ressalvas, e duas suposições do brief são REFUTADAS.\n- \"Java 25 não listado para 9.4.5\": **REFUTADO** — há orientação operacional dedicada na doc 9.4.x.\n- \"allclient quebra no JDK 24/25 por SecurityManager (JEP 486)\": **REFUTADO** — SecurityManager é opcional e não habilitado pelos samples/scripts.\n- Ações reais ao rodar em Corretto 25: passar `--enable-native-access=ALL-UNNAMED` (aviso de native-access em `System.loadLibrary`) e **evitar TLS_RSA_* CipherSpecs** (desabilitadas a partir do Java 25).\n- A enumeração \"8/11/17/21 certificados\" permanece **não confirmável** por fonte primária (relatório SPCR JS-rendered) — não afirmar como fato duro."
+  }
+}
