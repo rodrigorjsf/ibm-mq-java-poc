@@ -15,7 +15,7 @@
     <properties>
         <!-- Producao roda em Java 21; o bytecode gerado tem como alvo o release 21
              (compilavel/executavel tambem no Corretto 25 instalado localmente). -->
-        <maven.compiler.release>21</maven.compiler.release>
+        <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!-- Versoes travadas (ver fact sheet Fase A). micronaut-platform 4.9.9 NAO existe:
