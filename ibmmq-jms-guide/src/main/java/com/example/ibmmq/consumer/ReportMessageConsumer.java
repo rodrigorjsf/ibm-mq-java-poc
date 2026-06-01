@@ -6,6 +6,7 @@ import com.example.ibmmq.model.DeliveryEvent;
 import com.example.ibmmq.model.PendingMessage;
 import com.example.ibmmq.model.ReportType;
 import com.example.ibmmq.persistence.DeliveryReportWriteRepository;
+import com.example.ibmmq.report.ReportDescriptor;
 import com.example.ibmmq.report.ReportFeedbackRouter;
 import com.ibm.msg.client.wmq.WMQConstants;
 import io.micronaut.core.annotation.Nullable;
@@ -15,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 import javax.jms.JMSConsumer;
@@ -71,8 +73,14 @@ public class ReportMessageConsumer {
     public DeliveryEvent receiveOneReport(long timeoutMillis) {
         try (JMSContext context = connectionFactory.createContext(JMSContext.AUTO_ACKNOWLEDGE)) {
 
+            // Enable MQMD read on the consume destination via the URI form (issue #19): the
+            // JMS_IBM_MQMD_* properties (ApplIdentityData, AccountingToken, MsgId, PutDate/PutTime) are
+            // populated ONLY when mdReadEnabled=true on the report destination — there is no setter on the
+            // ConnectionFactory. The URI property is preferred over an MQDestination cast because it
+            // survives the JmsPoolConnectionFactory wrapper (no provider cast). The canonical
+            // JMS_IBM_Feedback used for classification needs no read-enable.
             JMSConsumer consumer = context.createConsumer(
-                    context.createQueue("queue:///" + props.getReportQueue()));
+                    context.createQueue("queue:///" + props.getReportQueue() + "?mdReadEnabled=true"));
 
             Message report = consumer.receive(timeoutMillis);
             if (report == null) {
@@ -95,6 +103,12 @@ public class ReportMessageConsumer {
             String correlationId = report.getJMSCorrelationID();
 
             ReportType type = feedbackRouter.classify(feedback);
+
+            // Issue #19: recover the six MQMD values from the report's OWN descriptor (verdict (R)-all).
+            // Fully null-safe and non-throwing — when mdReadEnabled is off (e.g. unit tests with a bare
+            // mock) every MQMD getter returns null, so the descriptor degrades gracefully and the
+            // already-acked report path is never aborted.
+            ReportDescriptor descriptor = ReportDescriptor.from(report, type);
 
             // Correlaciona de volta a mensagem original (CorrelationId == MessageId original).
             Optional<PendingMessage> pending = correlationStore.findByMessageId(correlationId);
@@ -125,7 +139,7 @@ public class ReportMessageConsumer {
                                 correlationId, originalMessageId);
                         // Append-only audit row (writer datasource). Best-effort: a persist failure must NOT
                         // break the reconciliation path that follows (the report is already acked).
-                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt);
+                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt, descriptor);
                         // Reconcilia tambem aqui: sob competing consumers, o COD pode ter sido processado
                         // ANTES do COA em outro pod — entao e o COA que completa o par. Independente de ordem.
                         reconcileIfComplete(correlationId, originalMessageId);
@@ -135,7 +149,7 @@ public class ReportMessageConsumer {
                         correlationStore.markCodReceived(correlationId);
                         LOG.info("[stage=COD] Confirmacao de entrega (delivery) registrada: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
-                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt);
+                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt, descriptor);
                         reconcileIfComplete(correlationId, originalMessageId);
                     }
                     case EXPIRATION, NAN, EXCEPTION ->
@@ -144,11 +158,21 @@ public class ReportMessageConsumer {
                     default -> { /* PAN/UNKNOWN: apenas registra no resumo abaixo. */ }
                 }
 
+                // Full 6-field event (issue #19): only this call site builds the extended DeliveryEvent;
+                // pre-#19 call sites keep using the 5-arg secondary constructor unchanged.
                 DeliveryEvent event = new DeliveryEvent(
-                        type, feedback, correlationId, originalMessageId, observedAt);
+                        type, feedback, correlationId, originalMessageId, observedAt,
+                        descriptor.applIdentityData(),
+                        descriptor.accountingToken(),
+                        descriptor.correlationIdBytes(),
+                        descriptor.messageIdBytes(),
+                        descriptor.putTimestampUtc(),
+                        descriptor.reportTypeChar());
 
-                LOG.info("[stage=REPORT-DONE] Relatorio processado: tipo={}, feedback={}, correlId={}, originalMsgId={}, conhecido={}",
-                        type, feedback, correlationId, originalMessageId, pending.isPresent());
+                LOG.info("[stage=REPORT-DONE] Relatorio processado: tipo={}, feedback={}, correlId={}, originalMsgId={}, "
+                                + "conhecido={}, putTsUtc={}, reportTypeChar={}, msgIdHex={}",
+                        type, feedback, correlationId, originalMessageId, pending.isPresent(),
+                        descriptor.putTimestampUtc(), descriptor.reportTypeChar(), descriptor.messageIdBytesHex());
 
                 return event;
             } finally {
@@ -198,13 +222,26 @@ public class ReportMessageConsumer {
      * </ul>
      */
     private void persistAudit(ReportType type, int feedback, String correlationId,
-                              String originalMessageId, Instant observedAt) {
+                              String originalMessageId, Instant observedAt, ReportDescriptor descriptor) {
         if (auditRepository == null) {
             return; // No datasource configured (e.g. unit/context test) — audit persistence is inert.
         }
         try {
+            // Issue #19: additively persist the six recovered MQMD values (all nullable). The byte[]
+            // fields go in as hex strings; the report-type char goes in as a one-char String (null when
+            // it is the sentinel, so non-COA/COD reports leave the column NULL rather than storing '?').
+            char domainChar = descriptor.reportTypeChar();
+            String reportTypeChar = domainChar == ReportType.DOMAIN_CHAR_OTHER
+                    ? null : String.valueOf(domainChar);
+            LocalDateTime putTimestampUtc = descriptor.putTimestampUtc();
             int inserted = auditRepository.insertIfAbsent(
-                    correlationId, originalMessageId, type.name(), feedback, observedAt);
+                    correlationId, originalMessageId, type.name(), feedback, observedAt,
+                    descriptor.applIdentityData(),
+                    descriptor.accountingTokenHex(),
+                    descriptor.correlationIdBytesHex(),
+                    descriptor.messageIdBytesHex(),
+                    putTimestampUtc,
+                    reportTypeChar);
             if (inserted == 0) {
                 LOG.debug("[stage=AUDIT] Report already persisted (idempotent duplicate): type={}, correlId={}",
                         type, correlationId);
