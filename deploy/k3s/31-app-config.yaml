@@ -9,9 +9,11 @@
 #   IBM_MQ_BUSINESS_QUEUE       -> ibm-mq.business-queue
 #   IBM_MQ_REPORT_QUEUE         -> ibm-mq.report-queue
 #   CORRELATION_STORE           -> correlation.store         (=jdbc activates JdbcCorrelationStore)
-#   DATASOURCES_DEFAULT_*       -> datasources.default.*      (HikariCP / Postgres JDBC)
+#   DATASOURCES_DEFAULT_*       -> datasources.default.*      (HikariCP / Postgres — WRITER/primary)
+#   DATASOURCES_READER_*        -> datasources.reader.*       (HikariCP / Postgres — READER/replica)
 #
-# Credentials (IBM_MQ_PASSWORD, DATASOURCES_DEFAULT_PASSWORD) come from Secrets, NOT here.
+# Credentials (IBM_MQ_PASSWORD, DATASOURCES_DEFAULT_PASSWORD, DATASOURCES_READER_PASSWORD) come from
+# Secrets, NOT here.
 # HARNESS_ROLE is set per-Deployment (publisher / business-consumer / report-consumer), not here.
 # =============================================================================
 apiVersion: v1
@@ -31,9 +33,37 @@ data:
 
   # Activate the shared JDBC correlation store (else InMemoryCorrelationStore loads — per-pod, useless
   # cluster-wide). The JDBC datasource: HikariCP via micronaut-jdbc-hikari, Postgres Service DNS.
+  #
+  # READ/WRITE SPLIT (issue #40, ADR-0005). Two datasources:
+  #   * default = WRITER/primary  -> postgres (rw)        : JdbcCorrelationStore (exactly-once
+  #       reconciliation, bare DataSource injection resolves to `default`) + the delivery_report
+  #       audit INSERTs. Naming the writer `default` is load-bearing — see ADR-0005 / the fact sheet.
+  #   * reader  = READER/replica  -> postgres-replica (ro): the delivery_report audit READ-MODEL only.
+  #       Never used for a read that gates a write/dedup decision (replica lag). Query/projection only.
   CORRELATION_STORE: "jdbc"
   DATASOURCES_DEFAULT_URL: "jdbc:postgresql://postgres.ibmmq-harness.svc.cluster.local:5432/correlation"
   DATASOURCES_DEFAULT_DRIVER_CLASS_NAME: "org.postgresql.Driver"
   DATASOURCES_DEFAULT_USERNAME: "corr"
-  # Small pool per pod; competing-consumer parallelism comes from replicas, not threads.
+  DATASOURCES_READER_URL: "jdbc:postgresql://postgres-replica.ibmmq-harness.svc.cluster.local:5432/correlation"
+  DATASOURCES_READER_DRIVER_CLASS_NAME: "org.postgresql.Driver"
+  DATASOURCES_READER_USERNAME: "corr"
+
+  # ---------------------------------------------------------------------------------------------------
+  # HikariCP pool sizing — per-pod x replica math against the standby's max_connections (AC6).
+  #
+  #   default (writer) pool:  4 connections / pod
+  #   reader  (replica) pool: 2 connections / pod   (reads are lighter; query/projection only)
+  #
+  # report-consumer runs at replicas: 2 (see 52-report-consumer.yaml). Worst-case connection demand:
+  #   PRIMARY  (writer)  = 4 (default) x 2 pods = 8 connections
+  #   REPLICA  (reader)  = 2 (reader)  x 2 pods = 4 connections    PLUS the WRITER pools of any other
+  #     role that opens the `default` datasource (publisher + business-consumer register/reconcile on
+  #     the writer; they do NOT open the reader pool). The standby's max_connections (Postgres default
+  #     100, and the bitnami replica here) comfortably covers 8 writer + 4 reader = 12 concurrent.
+  #
+  # If you scale report-consumer replicas, recompute: writer = 4 x R, reader = 2 x R, and keep
+  #   (writer + reader connections, summed across ALL roles) < primary.max_connections (and the standby's).
+  # Competing-consumer parallelism comes from REPLICAS, not threads, so pools stay small per pod.
+  # ---------------------------------------------------------------------------------------------------
   DATASOURCES_DEFAULT_MAXIMUM_POOL_SIZE: "4"
+  DATASOURCES_READER_MAXIMUM_POOL_SIZE: "2"

@@ -197,8 +197,9 @@ class LoggingFlowTest {
     class ReportStages {
 
         private ReportMessageConsumer reportConsumer(InMemoryCorrelationStore store) {
+            // auditRepository=null: sem datasource neste teste de log; a persistencia de auditoria fica inerte.
             return new ReportMessageConsumer(
-                    mock(ConnectionFactory.class), new MqProperties(), store, new ReportFeedbackRouter());
+                    mock(ConnectionFactory.class), new MqProperties(), store, new ReportFeedbackRouter(), null);
         }
 
         @Test

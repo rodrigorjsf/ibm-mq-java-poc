@@ -116,6 +116,42 @@ WHERE NOT (coa_received AND cod_received)
 ORDER BY sent_at;
 ```
 
+## Read/write-split datasources for the delivery-report audit (issue #40, ADR-0005)
+
+Beyond the transient `pending_message` ledger, the consumer also appends every COA/COD report to a
+durable, append-only **`delivery_report`** audit table, against an **Aurora-like read/write connection
+split** — a `default` (writer/primary) datasource and a `reader` (replica) datasource. The app config is
+already wired for both:
+
+- `31-app-config.yaml` sets `DATASOURCES_DEFAULT_*` (→ `datasources.default.*`, the **writer**, used by
+  `JdbcCorrelationStore` reconciliation **and** the audit `INSERT`s) and `DATASOURCES_READER_*`
+  (→ `datasources.reader.*`, the **replica**, audit read-model queries only), with HikariCP
+  `maximum-pool-size` sized per-pod × replica (see the comments in that file).
+- `10-secrets.yaml` carries `DATASOURCES_DEFAULT_PASSWORD` and `DATASOURCES_READER_PASSWORD`.
+
+> **Status — primary+replica StatefulSet is a HITL follow-up (issue #21).** The `reader` URL in
+> `31-app-config.yaml` points at a `postgres-replica` Service
+> (`postgres-replica.ibmmq-harness.svc.cluster.local`). The current `20-postgres.yaml` ships **only the
+> single-replica `postgres` StatefulSet** (the writer/primary) that backs the shared correlation store —
+> it does **not** yet provision the streaming-replicated standby + its `postgres-replica` Service. Standing
+> up the primary+replica StatefulSet pair on a live cluster and validating physical replication + the
+> read-from-reader path is **issue #21 (HITL)**, deliberately out of #40's scope.
+>
+> Until that manifest lands, on a live cluster you can either (a) point `DATASOURCES_READER_URL` at the
+> same `postgres` Service as the writer (single-instance, immediately consistent — the split degrades to
+> the writer with no behavior change, since the reader is query-only), or (b) add a
+> `bitnami/postgresql` primary+replica StatefulSet pair mirroring `ibmmq-jms-guide/docker-compose.yml`'s
+> `postgres-primary`/`postgres-replica` services (image `bitnami/postgresql:16.4.0`,
+> `POSTGRESQL_REPLICATION_MODE=master`/`slave`, repl user `repluser`) and expose the standby as the
+> `postgres-replica` Service. The read/write split is **connection-level**, so neither option touches the
+> application code — and a real Aurora deployment maps `default`/`reader` straight onto the Aurora
+> writer/reader endpoints.
+>
+> The split's persist + idempotency logic is verified off-cluster by `DeliveryReportPersistenceIT` (in
+> the default `verify` gate) and the physical-replication read-from-reader path by the opt-in
+> `DeliveryReportReplicationIT` (`mvn -pl ibmmq-jms-guide verify -Preplication`). See `docs/runbook.md`
+> §2.5.
+
 ## Build the image and load it into k3s (no registry)
 
 There is no image registry in this harness; build locally and import into the k3s containerd store.
@@ -332,7 +368,7 @@ drains `pending_message` to 0); they are documented so the reference is honest a
 | --- | --- |
 | `00-namespace.yaml` | `ibmmq-harness` namespace |
 | `10-secrets.yaml` | MQ app/admin, app client, and Postgres credentials |
-| `20-postgres.yaml` | Postgres StatefulSet + headless Service + PVC (shared store backend) |
+| `20-postgres.yaml` | Postgres StatefulSet + headless Service + PVC (shared store backend = the `default`/writer datasource; the `reader`/replica StatefulSet is a #21 HITL follow-up — see "Read/write-split datasources") |
 | `30-mq-config.yaml` | MQSC ConfigMap — report-PUT authority grant (`AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)`) |
 | `31-app-config.yaml` | Non-secret app config (MQ connection, `correlation.store=jdbc`, datasource) |
 | `40-ibmmq.yaml` | IBM MQ StatefulSet + headless Service + PVC |

@@ -2,6 +2,7 @@ package com.example.ibmmq.correlation;
 
 import com.example.ibmmq.model.PendingMessage;
 import io.micronaut.context.annotation.Requires;
+import io.micronaut.data.connection.jdbc.advice.DelegatingDataSource;
 import jakarta.annotation.PostConstruct;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
@@ -133,7 +134,14 @@ public class JdbcCorrelationStore implements CorrelationStore {
     private final DataSource dataSource;
 
     public JdbcCorrelationStore(DataSource dataSource) {
-        this.dataSource = dataSource;
+        // Unwrap Micronaut Data's contextual DataSource proxy. Once micronaut-data-jdbc is on the
+        // classpath (added in issue #40), DataSource injections are wrapped by DelegatingDataSourceResolver,
+        // and a raw getConnection() OUTSIDE a @Connectable/@Transactional scope throws NoConnectionException.
+        // This store deliberately manages its own JDBC connections (plain PreparedStatements, no Micronaut
+        // Data advice), so it needs the RAW target DataSource. unwrapDataSource is a safe no-op on an
+        // already-unwrapped DataSource (so this is correct with or without micronaut-data-jdbc present).
+        // See research-output/micronaut-data-cqrs-readwrite-split.md (F6).
+        this.dataSource = DelegatingDataSource.unwrapDataSource(dataSource);
     }
 
     /**
