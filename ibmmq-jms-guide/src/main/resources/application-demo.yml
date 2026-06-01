@@ -1,0 +1,30 @@
+# =============================================================================
+# application-demo.yml — perfil (environment) "demo" para o runner gated COA/COD.
+#
+# Ative com -Dmicronaut.environments=demo. Este perfil:
+#   1) liga o flag EXPLICITO demo.coa-cod.enabled=true -> instancia o CoaCodDemoRunner
+#      (ApplicationEventListener<StartupEvent>), que roda o fluxo produce -> consume -> COA/COD
+#      UMA vez no startup e imprime o resumo PASS/FAIL;
+#   2) conecta como ADMIN via DEV.ADMIN.SVRCONN.
+#
+# Por que admin / DEV.ADMIN.SVRCONN (gotcha 2035)? Para o Queue Manager GERAR e ENTREGAR um
+# relatorio COA/COD ele faz um PUT-com-contexto na ReplyToQ, exigindo autoridade de contexto
+# (+setall). O usuario 'app' de baixo privilegio do dev image NAO possui isso -> o PUT do relatorio
+# falha com MQRC_NOT_AUTHORIZED (2035), o relatorio vai para a DLQ e a fila de relatorios fica vazia
+# (a demo nunca veria COA/COD). O usuario 'admin' tem autoridade plena. Em PRODUCAO, conceda a
+# autoridade minima ao principal da app (SET AUTHREC ... AUTHADD(PUT, SETALL)) em vez de usar admin.
+#
+# A senha vem de MQ_ADMIN_PASSWORD (alinhada ao docker-compose.yml: MQ_ADMIN_PASSWORD=passw0rd) com
+# fallback para passw0rd.
+# =============================================================================
+
+# Flag EXPLICITO que ativa o runner gated. Ausente fora deste perfil -> startup normal nao afetado.
+demo:
+  coa-cod:
+    enabled: true
+
+ibm-mq:
+  # Canal/usuario de ADMIN para ter a autoridade de contexto que gera os relatorios COA/COD.
+  channel: DEV.ADMIN.SVRCONN
+  user: admin
+  password: ${MQ_ADMIN_PASSWORD:passw0rd}

@@ -22,6 +22,11 @@ services:
       # Protege DEV.APP.SVRCONN com senha. ATENCAO: MQ_APP_PASSWORD esta DEPRECADA
       # a partir da v9.4.0.0 — em producao prefira os secrets mqAppPassword/mqAdminPassword.
       MQ_APP_PASSWORD: passw0rd
+      # Senha do usuario 'admin' (canal DEV.ADMIN.SVRCONN). Necessaria para o runner gated da demo
+      # COA/COD (perfil "demo"): so o admin tem autoridade de contexto (+setall) para o QMgr gerar e
+      # entregar os relatorios — o 'app' falharia com MQRC_NOT_AUTHORIZED (2035) e o relatorio iria
+      # para a DLQ. MESMA depreciacao do MQ_APP_PASSWORD: em producao use o secret mqAdminPassword.
+      MQ_ADMIN_PASSWORD: passw0rd
     ports:
       - "1414:1414"   # listener MQ (clientes JMS)
       - "9443:9443"   # console web (https://localhost:9443/ibmmq/console)
