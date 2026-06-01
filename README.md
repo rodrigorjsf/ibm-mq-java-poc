@@ -29,6 +29,7 @@ ibmmq-jms-guide/                       runnable Micronaut + IBM MQ Maven project
 docs/
   guide-ibmmq-jms-micronaut.md          canonical technical guide (English, ~9.4k words)
   i18n/guia-ibmmq-jms-micronaut.md      pt-BR source feeding the standalone HTML
+  runbook.md                            operations runbook: bring-up, demo, validation, web console
   handoffs/                             session handoff notes
 research-output/                        bytecode-verified fact sheet + raw research
 research-prompt-ibmmq-jms-micronaut.md  the original brief
