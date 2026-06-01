@@ -13,8 +13,8 @@
     <description>Micronaut 4 + IBM MQ (JMS 2.0 / javax.jms) — demonstracao de relatorios COA/COD</description>
 
     <properties>
-        <!-- Producao roda em Java 21; o bytecode gerado tem como alvo o release 21
-             (compilavel/executavel tambem no Corretto 25 instalado localmente). -->
+        <!-- Producao roda em Java 25 (LTS); o bytecode gerado tem como alvo o release 25 (Amazon Corretto 25).
+             Supersede a P1 do brief (Java 21) — ver docs/adr/0001-java-25-runtime.md. -->
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
@@ -33,6 +33,7 @@
         <!-- Versoes de teste. -->
         <junit.version>5.11.4</junit.version>
         <mockito.version>5.14.2</mockito.version>
+        <assertj.version>3.27.3</assertj.version>
         <!-- Testcontainers 2.x (major novo; docker-java moderno, compativel com Docker engine 29.x).
              Core 2.0.5 + modulo oficial IBM (MQContainer) 2.0.3. -->
         <testcontainers.version>2.0.5</testcontainers.version>
@@ -122,6 +123,14 @@
             <version>${mockito.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- AssertJ: assercoes fluentes (assertThat) — convencao de teste do projeto
+             (ver src/test/CLAUDE.md). Preferida sobre org.junit.jupiter.api.Assertions. -->
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>${assertj.version}</version>
+            <scope>test</scope>
+        </dependency>
         <!-- Testcontainers 2.x + modulo oficial IBM (classe com.ibm.mq.testcontainers.MQContainer).
              O modulo 2.0.3 traz o core 2.0.3 transitivamente; declaramos o core 2.0.5 diretamente para
              fixa-lo via "nearest wins" (override). O lifecycle do container e manual (@BeforeAll/@AfterAll),
@@ -158,7 +167,7 @@
                 <version>${micronaut.maven.plugin.version}</version>
             </plugin>
 
-            <!-- Compilador: release 21 + processadores de anotacao do Micronaut. -->
+            <!-- Compilador: release 25 + processadores de anotacao do Micronaut. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
