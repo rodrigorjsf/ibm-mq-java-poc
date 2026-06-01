@@ -1,0 +1,57 @@
+# =============================================================================
+# ConfigMap: MQSC autoconfig mounted at /etc/mqm in the MQ container.
+#
+# The IBM MQ dev image runs every *.mqsc under /etc/mqm ONCE, at queue-manager CREATION (not on every
+# start). It already pre-creates DEV.QUEUE.1/2/3, DEV.APP.SVRCONN and authorizes `app` to DEV.**. This
+# ConfigMap layers the one thing that is missing for COA/COD to work end-to-end:
+#
+#   THE REPORT-PUT AUTHORITY GRANT (advisor trap #4 / CLAUDE.md gotcha).
+#   To deliver a COA/COD the queue manager does a PUT-with-context onto the ReplyToQ, which needs
+#   context authority (+setall). The low-priv `app` user lacks it by default -> the report PUT fails
+#   MQRC_NOT_AUTHORIZED (2035) and the report silently dead-letters (report queue stays empty). We grant
+#   `app` +put +setall on DEV.QUEUE.2 (the report queue) so reports are actually delivered.
+#
+# Queue/channel names are kept CONSISTENT with the app's MqProperties defaults
+# (business-queue=DEV.QUEUE.1, report-queue=DEV.QUEUE.2, channel=DEV.APP.SVRCONN, queue-manager=QM1),
+# which the ConfigMap below (mq-connection) re-asserts via env.
+#
+# NOTE: because autoconfig runs only at QM creation, CHANGING this MQSC requires deleting the MQ PVC
+# (qm1-data) so the queue manager is recreated. See deploy/k3s/README.md.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mq-mqsc
+  namespace: ibmmq-harness
+data:
+  # Numeric prefix keeps a deterministic apply order if more files are added later.
+  90-report-authority.mqsc: |
+    * ---------------------------------------------------------------------------
+    * Grant the application principal the authority to receive COA/COD reports.
+    * Without +setall the QMgr's PUT-with-context onto the report queue fails 2035
+    * and the report dead-letters silently (report queue stays empty).
+    * ---------------------------------------------------------------------------
+
+    * Report queue must exist before we authorize it (DEV.QUEUE.2 is pre-created by the
+    * dev image; REPLACE makes this idempotent if the image changes).
+    DEFINE QLOCAL('DEV.QUEUE.2') DEFPSIST(YES) +
+           DESCR('COA/COD report queue (JMSReplyTo)') REPLACE
+
+    * +put: app may PUT onto the report queue. +setall: app may set ALL context
+    * fields (identity + origin) — required for the QMgr's PUT-with-context report.
+    SET AUTHREC PROFILE('DEV.QUEUE.2') OBJTYPE(QUEUE) +
+        PRINCIPAL('app') AUTHADD(PUT, SETALL)
+
+    * Belt-and-suspenders: also grant via the group, in case the image runs `app` under a group MCAUSER.
+    SET AUTHREC PROFILE('DEV.QUEUE.2') OBJTYPE(QUEUE) +
+        GROUP('mqclient') AUTHADD(PUT, SETALL)
+
+    * Ensure app can also browse/get the business + report queues (usually covered by DEV.** grant,
+    * re-asserted here so the harness does not depend on undocumented image defaults).
+    SET AUTHREC PROFILE('DEV.QUEUE.1') OBJTYPE(QUEUE) +
+        PRINCIPAL('app') AUTHADD(PUT, GET, BROWSE, INQ)
+    SET AUTHREC PROFILE('DEV.QUEUE.2') OBJTYPE(QUEUE) +
+        PRINCIPAL('app') AUTHADD(GET, BROWSE, INQ)
+
+    * Apply the authority changes immediately.
+    REFRESH SECURITY TYPE(AUTHSERV)

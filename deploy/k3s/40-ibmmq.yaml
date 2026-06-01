@@ -1,0 +1,109 @@
+# =============================================================================
+# IBM MQ — queue manager QM1 as a StatefulSet (stable identity + persistent storage).
+#
+# - StatefulSet (not Deployment): a queue manager is stateful (message store, logs); it needs stable
+#   network identity and a PVC that survives reschedules.
+# - Headless Service `ibmmq` gives stable DNS ibmmq.ibmmq-harness.svc.cluster.local, used by the app's
+#   IBM_MQ_CONNECTION_NAME_LIST as ibmmq.ibmmq-harness.svc.cluster.local(1414).
+# - PVC at /mnt/mqm persists the QMgr across restarts. securityContext.fsGroup makes it writable by the
+#   image's runtime UID/GID (1001) under k3s local-path (advisor note).
+# - MQSC ConfigMap mounted at /etc/mqm/* applies the report-PUT authority grant at QM creation
+#   (idempotent only at first creation — recreate the PVC to re-run; see README).
+# - Passwords come from the mq-credentials Secret mounted at /run/secrets (MQ_APP_PASSWORD is
+#   deprecated since 9.4.0; the dev image reads /run/secrets/mqAppPassword + mqAdminPassword).
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: ibmmq
+  namespace: ibmmq-harness
+  labels:
+    app.kubernetes.io/name: ibmmq
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: ibmmq
+  ports:
+    - name: listener
+      port: 1414
+      targetPort: 1414
+    - name: console
+      port: 9443
+      targetPort: 9443
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ibmmq
+  namespace: ibmmq-harness
+  labels:
+    app.kubernetes.io/name: ibmmq
+spec:
+  serviceName: ibmmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ibmmq
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibmmq
+    spec:
+      securityContext:
+        # The MQ image runs as UID/GID 1001; fsGroup makes the local-path PVC writable for it.
+        fsGroup: 1001
+      containers:
+        - name: ibmmq
+          image: icr.io/ibm-messaging/mq:9.4.5.0-r2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LICENSE
+              value: "accept"
+            - name: MQ_QMGR_NAME
+              value: "QM1"
+            # Point the image at the mounted secret files (preferred over the deprecated MQ_APP_PASSWORD).
+            - name: MQ_APP_PASSWORD_FILE
+              value: "/run/secrets/mqAppPassword"
+            - name: MQ_ADMIN_PASSWORD_FILE
+              value: "/run/secrets/mqAdminPassword"
+          ports:
+            - name: listener
+              containerPort: 1414
+            - name: console
+              containerPort: 9443
+          readinessProbe:
+            # No HTTP health endpoint we want to depend on -> TCP probe on the listener port.
+            tcpSocket:
+              port: 1414
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 1414
+            initialDelaySeconds: 90
+            periodSeconds: 20
+          volumeMounts:
+            - name: qm1-data
+              mountPath: /mnt/mqm
+            - name: mqsc
+              mountPath: /etc/mqm
+              readOnly: true
+            - name: mq-secrets
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        - name: mqsc
+          configMap:
+            name: mq-mqsc
+        - name: mq-secrets
+          secret:
+            secretName: mq-credentials
+  volumeClaimTemplates:
+    - metadata:
+        name: qm1-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
