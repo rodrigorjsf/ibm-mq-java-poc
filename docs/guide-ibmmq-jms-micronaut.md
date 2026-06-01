@@ -834,6 +834,7 @@ assertEquals(ReportType.COA, event.reportType());
 
 **Integration (with a real broker):** `CoaCodEndToEndIT` brings up an IBM MQ via Testcontainers, produces with COA+COD,
 consumes+commits, and requires that **both** reports arrive, each with `CorrelationId == MessageId` of the original.
+The full per-scenario catalogue (rich entry for IT-01, compact entries for UT-01 and UT-02) is in [`docs/testing-scenarios.md`](testing-scenarios.md).
 
 > ℹ️ **Note — Testcontainers via the official IBM module (there is no `org.testcontainers` module for MQ).** The real setup uses *
 *`org.testcontainers:testcontainers:2.0.5`** (core) + **`com.ibm.mq:mq-java-testcontainer:2.0.3`** (class
