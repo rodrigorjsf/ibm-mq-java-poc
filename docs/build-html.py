@@ -32,7 +32,7 @@ import markdown
 from markdown.extensions.toc import TocExtension
 
 DOCS = Path("/home/rodrigo/IBM-MQ/docs")
-SRC = DOCS / "guia-ibmmq-jms-micronaut.md"
+SRC = DOCS / "i18n" / "guia-ibmmq-jms-micronaut.md"  # pt-BR source feeds the HTML; EN canonical is docs/guide-*.md (bilingual build = issue #13)
 OUT = DOCS / "index.html"
 
 # Vendored Mermaid runtime (fetched ONCE at build time, then inlined into the
