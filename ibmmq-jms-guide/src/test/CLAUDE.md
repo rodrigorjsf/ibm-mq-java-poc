@@ -15,6 +15,9 @@ Test-drive every change with the `/tdd` skill: failing test first (red) → pass
 - Prefer **`@MicronautTest`** with **real implementations and real values**. Use **Mockito**
   only when a real collaborator adds no value, or to drive many scenarios of one unit.
 - Assert with **AssertJ** `assertThat(...)` (`org.assertj:assertj-core`, test scope) — not raw JUnit `Assertions`.
-- **`@DisplayName`** (pt-BR, matching existing tests) on every test and test class.
+- **`@DisplayName`** (pt-BR, matching existing tests) on every test and test class. This
+  pt-BR is a **sanctioned exception** to the English in-code rule (ADR-0004): it is
+  human-facing test-report prose, not durable API documentation. All other in-code text
+  in new tests (comments, JavaDoc, assertion descriptions) is English.
 - **`@ParameterizedTest`** for table/scenario coverage; **`@Nested`** to group scenarios by behavior.
 - Lean on JUnit 5 (parameterized sources, `@Nested`, lifecycle, `assertThatThrownBy`) for concise, non-duplicated tests.

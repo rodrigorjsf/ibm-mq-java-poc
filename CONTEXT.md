@@ -55,6 +55,10 @@ By default (`MQRO_COPY_MSG_ID_TO_CORREL_ID`) the original message's MessageId be
 The keyed record of in-flight business messages awaiting their COA/COD, used to reconcile delivery. Must be shared/persistent across replicas, not per-instance memory.
 _Avoid_: tracker, cache.
 
+**Log trace context (MDC)**:
+The pair of ids (MessageId + CorrelationId) bound into the logging framework's Mapped Diagnostic Context so every log line of one business message's lifecycle (PRODUCE → CONSUME → COA/COD → reconcile) carries them — making a single message greppable end-to-end. This is a **logging/observability** concern, distinct from the Correlation store: it reconciles nothing and holds no delivery state, it only decorates log output.
+_Avoid_: naming it with "Correlation" (e.g. `CorrelationContext`) — that overloads the Correlation store; "tracing" without naming MDC.
+
 **Competing consumers**:
 Multiple consumer instances (e.g. Kubernetes replicas) reading the same queue; MQ load-balances messages across them, so producer, consumer, and report-receiver are generally different pods.
 
