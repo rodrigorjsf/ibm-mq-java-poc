@@ -40,6 +40,13 @@ target/
 # Local Claude Code tooling / settings
 .claude/
 
+# Docs HTML build tooling (build-time only; output docs/index.html is standalone)
+.venv-docs/
+__pycache__/
+
+# Vendored Mermaid runtime (fetched once at build time; inlined into docs/index.html)
+docs/vendor/
+
 # OS
 .DS_Store
 Thumbs.db
