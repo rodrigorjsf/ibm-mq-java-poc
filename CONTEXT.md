@@ -71,8 +71,23 @@ The server-connection channel a CLIENT-mode JMS application connects through; go
 CLIENT mode reaches a remote QMgr over a TCP socket (the microservices case); BINDINGS mode uses shared memory on the same host.
 
 **Connection pool (pooled-jms)**:
-The pool that wraps the MQ ConnectionFactory and reuses physical connections instead of opening one per message.
-_Avoid_: generic "JMS pool" without naming pooled-jms.
+The pool that wraps the MQ ConnectionFactory and reuses **physical connections** instead of opening one per message, lending **sessions** from each. Its value is concentrated on the producer side (short-lived, bursty contexts); a long-lived consumer that holds one connection for the pod's life gains little from it.
+_Avoid_: generic "JMS pool" without naming pooled-jms; treating it as a source of idempotency (it is not — see Correlation store).
+
+**Physical connection**:
+One TCP socket to the QMgr through a SVRCONN channel — the heavyweight resource the pool reuses. Its creation pays the TCP + TLS + MQ handshake, so opening one per message is the canonical anti-pattern.
+_Avoid_: conflating it with a session or a JMSContext.
+
+**Session**:
+The JMS unit of work (one transacted scope, used by a single thread) carried over a physical connection as a shared conversation. `commit()`/`rollback()` act on a session, never on a connection. Many sessions multiplex over one physical connection.
+_Avoid_: equating "session" with "connection".
+
+**Shared conversation (SHARECNV)**:
+A logical conversation multiplexed over one physical connection/socket. The number of conversations that may share a socket is negotiated against the SVRCONN channel's `SHARECNV`; how many sessions a single pooled connection can usefully carry is bounded by it.
+
+**Role-based connection factories**:
+The practice of giving the producer and the consumer **distinct** ConnectionFactory beans tuned to their opposite lifecycles — a pooled factory for the bursty producer, a dedicated (often non-pooled) factory for the long-lived consumer — instead of one shared pool for both. The shared-pool topology is acceptable only when both sides churn short-lived contexts and use no async listener.
+_Avoid_: assuming "one pool for everything" is always correct.
 
 **MCA (Message Channel Agent)**:
 The agent that moves messages across a channel, running under the `MCAUSER` identity.

@@ -51,7 +51,7 @@ Detail lives in the linked ADRs/docs; these are the binding directives.
 Constant values below were extracted from the **authentic `com.ibm.mq.allclient:9.4.5.0` jar bytecode** (sha1 verified) and cross-checked against IBM docs.
 
 - **Client:** `com.ibm.mq:com.ibm.mq.allclient:9.4.5.0` — `javax.jms` / JMS 2.0 (depends on `javax.jms:javax.jms-api:2.0.1`). Jakarta sibling: `com.ibm.mq.jakarta.client`.
-- **Pool:** `org.messaginghub:pooled-jms:2.0.9` — javax line (1.x and 2.x are javax; **3.x is jakarta**). Class `org.messaginghub.pooled.jms.JmsPoolConnectionFactory`.
+- **Pool:** `org.messaginghub:pooled-jms:2.0.9` — javax line (1.x and 2.x are javax; **3.x is jakarta**). Class `org.messaginghub.pooled.jms.JmsPoolConnectionFactory`. **Tuning & topology:** `maxConnections`/`maxSessionsPerConnection` semantics, ~10k-rpm sizing (`maxConnections × replicas ≤ MAXINST`; `maxSessionsPerConnection ≤ SHARECNV`), the silent-hang default (`blockIfSessionPoolIsFull=true`/timeout `-1`), and the **role-based producer-vs-consumer factory** decision live in `research-output/pooled-jms-factory-tuning.md` + **`docs/adr/0006-role-based-connection-factories.md`** (guide §4.1; code rewrite tracked in #25).
 - **Micronaut:** platform BOM `io.micronaut.platform:micronaut-platform:4.9.4` — **`4.9.9` does NOT exist** (BOM line stops at 4.9.4). Plugin `io.micronaut.maven:micronaut-maven-plugin:4.11.6`.
 - **Report constants:** `MQRO_*` and `MQFB_*` live in `com.ibm.mq.constants.CMQC` / `MQConstants` (**NOT** `WMQConstants`). JMS report request props are `WMQConstants.JMS_IBM_REPORT_*` (field UPPER_SNAKE; String value mixed-case, e.g. `"JMS_IBM_Report_COA"`).
 - **Feedback codes:** `MQFB_COA=259`, `MQFB_COD=260`, `MQFB_EXPIRATION=258`, `MQFB_PAN=275`, `MQFB_NAN=276`. Exception reports carry an `MQRC_*` in the Feedback field (there is no `MQFB_EXCEPTION`). Read via `WMQConstants.JMS_IBM_FEEDBACK` (canonical, always-populated; `JMS_IBM_MQMD_FEEDBACK` only with `WMQ_MQMD_READ_ENABLED=true`).
@@ -69,6 +69,11 @@ Constant values below were extracted from the **authentic `com.ibm.mq.allclient:
 - **commons-codec pin:** `docker-java-transport-zerodep:3.7.1` (via TC 2.0.5) references `org.apache.commons.codec.Charsets`, removed in commons-codec 1.17+. Pin **`commons-codec:commons-codec:1.16.1`** (test scope) or the container fails to start with `NoClassDefFoundError`.
 - **Report-PUT authority gotcha (2035) — CORRECTED on live k3s:** for the QMgr to generate+deliver a COA/COD report it does a PUT-with-context onto the ReplyToQ. The authority it actually requires is **`+passid` (pass identity context)** — **not** `+setall` as previously assumed here. Verified live on a k3d cluster: with `app` granted only `+put +setall`, the report PUT still failed `AMQ8077W: ... requested permissions are unauthorized: passid` → `MQRC_NOT_AUTHORIZED (2035)` → every report silently dead-letters (report queue stays empty, COA/COD never recorded). The QMgr *passes* the original message's context into the report, so grant the full context set: `SET AUTHREC ... AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)` (see `deploy/k3s/30-mq-config.yaml`; `dspmqaut -m QM1 -n DEV.QUEUE.2 -t q -p app` confirms the effective authority). The Testcontainers IT never caught this because it connects as **`admin`/`mqm`** (`DEV.ADMIN.SVRCONN`), which already holds all context authorities. With the corrected grant the end-to-end COA(259)+COD(260) flow and cluster-wide exactly-once reconciliation were validated live (CorrelId == original MessageId).
 - **Sandbox:** when running the IT through a Claude Bash tool, disable the sandbox so the forked JVM can reach `/var/run/docker.sock`.
+
+## Applied Learning
+
+- Agents fail silently on wrong paths. Always verify hardcoded paths.
+- Before a new project artifact: check if the existing one can be extended or merged.
 
 ## Project layout
 
