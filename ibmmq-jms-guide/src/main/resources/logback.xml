@@ -2,8 +2,10 @@
 <!-- Logger simples de console para o guia. -->
 <configuration>
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <!-- %X{messageId} e %X{correlationId} expoem os ids vinculados via MDC no fluxo COA/COD,
+             tornando uma unica mensagem rastreavel de ponta a ponta no console (grep por id). -->
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} [messageId=%X{messageId} correlationId=%X{correlationId}] - %msg%n</pattern>
         </encoder>
     </appender>
 
