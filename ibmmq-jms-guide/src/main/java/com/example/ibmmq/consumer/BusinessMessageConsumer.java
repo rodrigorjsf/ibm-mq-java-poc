@@ -4,6 +4,7 @@ import com.example.ibmmq.config.MqProperties;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import javax.jms.JMSConsumer;
 import javax.jms.ConnectionFactory;
@@ -62,16 +63,32 @@ public class BusinessMessageConsumer {
                     ? textMessage.getText()
                     : "(payload nao-texto)";
 
-            LOG.info("Mensagem de negocio consumida: messageId={}, body={}",
-                    message.getJMSMessageID(), body);
+            String messageId = message.getJMSMessageID();
+            // MDC: messageId = id consumido; correlationId = MESMO valor. O default IBM MQ
+            // MQRO_COPY_MSG_ID_TO_CORREL_ID fara este id virar o CorrelationId do COD que este
+            // consumo (apos commit) dispara — assim o mesmo id rastreia consumo e relatorio.
+            MDC.put("messageId", messageId);
+            MDC.put("correlationId", messageId);
+            try {
+                LOG.info("[stage=CONSUME] Mensagem de negocio consumida (GET destrutivo): messageId={}, body={}",
+                        messageId, body);
 
-            // ... processamento de negocio aqui ...
+                // ... processamento de negocio aqui ...
 
-            // Commit: confirma o consumo e libera o COD para a fila de relatorios.
-            // Em caso de excecao acima, o catch faz rollback (a mensagem volta; COD nao e gerado).
-            context.commit();
+                // Commit: confirma o consumo e libera o COD para a fila de relatorios.
+                // Em caso de excecao acima, o catch faz rollback (a mensagem volta; COD nao e gerado).
+                context.commit();
 
-            return body;
+                LOG.info("[stage=COMMIT] Consumo confirmado (commit): COD liberado para a fila de relatorios, messageId={}",
+                        messageId);
+
+                return body;
+            } finally {
+                // Limpa o MDC antes de devolver a thread ao pool (ver nota do produtor; evita vazamento
+                // de ids entre mensagens sob alta concorrencia / ~10k rpm).
+                MDC.remove("messageId");
+                MDC.remove("correlationId");
+            }
         } catch (Exception e) {
             // getText()/getJMSMessageID() lancam JMSException (checada). Em SESSION_TRANSACTED, ao
             // fechar o contexto sem commit ocorre rollback automatico (a mensagem volta; COD nao e gerado).
