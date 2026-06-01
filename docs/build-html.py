@@ -1,25 +1,31 @@
 #!/usr/bin/env python3
 """
-Phase D build: deterministic single-file standalone HTML from the pt-BR Markdown guide.
+Bilingual build (issue #13): deterministic single-file standalone HTML embedding BOTH the
+canonical English guide and its pt-BR i18n source, with an in-page language toggle.
 
 Pipeline:
-  1. Read SOURCE markdown.
-  2. Convert the BODY with python-markdown (tables, fenced_code, attr_list, toc,
-     sane_lists, md_in_html) using a GitHub-replica slugify so the in-document
-     "Sumário" anchors (#seção-1--... with unicode + double-hyphen) resolve.
-  3. Post-process the rendered HTML:
-       - split every <blockquote> at each leading callout-emoji boundary into one
-         <div class="callout callout-TYPE"> per emoji-led segment (✅/❌/⚠️/ℹ️);
-         non-callout blockquotes stay plain <blockquote>.
-       - tag <pre><code> blocks with a copy button + run the in-house JS highlighter
-         client-side (highlighting is done in the browser; here we only mark blocks).
-  4. Wrap everything in a self-contained HTML shell (embedded CSS + JS, NO external
-     network dependency) with a fixed sidebar, search, responsive drawer, a11y chrome.
-  5. Emit a PARITY REPORT comparing SOURCE vs OUTPUT and sys.exit(1) on any mismatch
-     or any external reference found in the output.
+  1. render_lang() runs the SAME single-language pipeline on each source independently:
+       - Read SOURCE markdown; heal hard-wrap artifacts.
+       - Convert the BODY with python-markdown (tables, fenced_code, attr_list, toc,
+         sane_lists, md_in_html) using a GitHub-replica slugify so the in-document TOC
+         anchors (#section-1--... / #seção-1--... with unicode + double-hyphen) resolve.
+       - Split <blockquote> at each callout-emoji boundary (✅/❌/⚠️/ℹ️) into callouts;
+         tag <pre><code> with a per-language copy button; mark code for the JS highlighter.
+  2. build() assembles ONE shell: one <main> with two <section class="lang-pane"> (en/pt)
+     and two nav panes. Visibility follows <html data-lang> (set by an early no-FOUC head
+     script: stored > browser > pt-BR fallback); a JS toggle swaps panes ([hidden]) + the
+     UI chrome (I18N dict) and lazy-renders the revealed pane's Mermaid (hidden panes have
+     no layout box, so startOnLoad is off and setLang calls mermaid.run on reveal).
+     Self-contained: embedded CSS + JS + inlined Mermaid runtime, NO external network load.
+  3. The PARITY GATE (sys.exit(1) on any mismatch):
+       - parity_lang(): per-language source<->rendered-fragment parity (run for EN and pt).
+       - cross_lang_parity(): EN<->pt-BR STRUCTURAL sync (headings/code/mermaid/callouts/
+         tables identical; labels localized). This is the bilingual sync guarantee.
+       - standalone_scan(): the final page has ZERO real external resource loads.
 
 Run:
-  /home/rodrigo/IBM-MQ/.venv-docs/bin/python /home/rodrigo/IBM-MQ/docs/build-html.py
+  .venv-docs/bin/python docs/build-html.py              # build + full bilingual parity gate
+  .venv-docs/bin/python docs/build-html.py --self-test  # prove the gate fails on a mismatch
 """
 
 import html
@@ -32,8 +38,20 @@ import markdown
 from markdown.extensions.toc import TocExtension
 
 DOCS = Path("/home/rodrigo/IBM-MQ/docs")
-SRC = DOCS / "i18n" / "guia-ibmmq-jms-micronaut.md"  # pt-BR source feeds the HTML; EN canonical is docs/guide-*.md (bilingual build = issue #13)
+# Bilingual sources (issue #13): the EN doc is the canonical guide; the pt-BR doc is the
+# i18n source. Both are embedded in ONE standalone page with an in-page language toggle.
+GUIDE_EN = DOCS / "guide-ibmmq-jms-micronaut.md"
+GUIDE_PT = DOCS / "i18n" / "guia-ibmmq-jms-micronaut.md"
+LANGS = ("en", "pt")
 OUT = DOCS / "index.html"
+
+# Per-language chrome rendered INTO each pane's markup (the parts python emits): code-block
+# copy button label + its post-click feedback (carried on data-copied for the shared JS) +
+# its aria-label. Page-level chrome that the JS swaps on toggle lives in the JS I18N dict.
+CHROME = {
+    "en": {"copy": "Copy", "copied": "Copied!", "copy_aria": "Copy code to clipboard"},
+    "pt": {"copy": "Copiar", "copied": "Copiado!", "copy_aria": "Copiar código para a área de transferência"},
+}
 
 # Vendored Mermaid runtime (fetched ONCE at build time, then inlined into the
 # standalone HTML so edge animations play fully offline). docs/vendor/ is gitignored.
@@ -210,9 +228,23 @@ def measure_source(src: str):
     table_seps = 0
     callouts = {t: 0 for t in EMOJI.values()}
     anchors = set()
+    # ORDERED structure signature (issue #13 cross-language gate): a document-order token
+    # sequence capturing element TYPE, heading LEVEL, callout TYPE, and per-table ROW count.
+    # Scalar counts alone miss a reorder, an H2<->H3 re-level (the scalar `headings` lumps
+    # h1-h3), a dropped table ROW (table count unchanged), or a swapped block — all of which
+    # shift this signature, so EN<->pt divergence is caught structurally, not just by totals.
+    structure = []
+    table_rows = 0
+
+    def flush_table():
+        nonlocal table_rows
+        if table_rows:
+            structure.append(("table", table_rows))
+            table_rows = 0
 
     for ln in lines:
         if ln.startswith("```"):
+            flush_table()
             if not in_fence:
                 # opening fence: classify by info string. ```mermaid blocks are
                 # DIAGRAMS (diverted to <pre class="mermaid">), NOT code blocks, so
@@ -220,22 +252,35 @@ def measure_source(src: str):
                 fence_is_mermaid = ln.strip().startswith("```mermaid")
                 if fence_is_mermaid:
                     mermaid_blocks += 1
+                    structure.append(("mermaid",))
                 else:
                     fence_blocks += 1
+                    structure.append(("code",))
             else:
                 fence_is_mermaid = False
             in_fence = not in_fence
             continue
         if in_fence:
             continue
-        if re.match(r"^#{1,3} ", ln):
-            headings += 1
-        # GFM table separator row: |---|:--:|...| (must contain a dash)
-        if re.match(r"^\|[\s:|-]+\|\s*$", ln) and "-" in ln:
-            table_seps += 1
+        # table block: a contiguous run of pipe-led lines (header + separator + data rows).
+        if ln.startswith("|"):
+            table_rows += 1
+            # GFM table separator row: |---|:--:|...| (must contain a dash)
+            if re.match(r"^\|[\s:|-]+\|\s*$", ln) and "-" in ln:
+                table_seps += 1
+            continue
+        flush_table()
+        hm = re.match(r"^(#{1,6}) ", ln)
+        if hm:
+            level = len(hm.group(1))
+            if level <= 3:
+                headings += 1  # scalar count stays h1-h3 (matches count_output's <h[123]>)
+            structure.append(("h", level))
         m = re.match(r"^> (✅|❌|⚠️|ℹ️)", ln)
         if m:
             callouts[EMOJI[m.group(1)]] += 1
+            structure.append(("callout", EMOJI[m.group(1)]))
+    flush_table()
 
     # in-document anchors referenced by the Sumário: ](#...)
     for m in re.finditer(r"\]\(#([^)]+)\)", src):
@@ -249,6 +294,7 @@ def measure_source(src: str):
         "callouts": callouts,
         "callouts_total": sum(callouts.values()),
         "anchors": anchors,
+        "structure": structure,
     }
 
 
@@ -379,7 +425,11 @@ def divert_mermaid(body: str):
 # client-side (see JS). We keep the escaped code verbatim in a data attribute is
 # unnecessary — the JS reads textContent of the <code> element directly.
 # ---------------------------------------------------------------------------
-def decorate_code(body: str):
+def decorate_code(body: str, chrome):
+    copy = html.escape(chrome["copy"])
+    copied = html.escape(chrome["copied"], quote=True)
+    copy_aria = html.escape(chrome["copy_aria"], quote=True)
+
     def repl(m: re.Match):
         attrs = m.group(1)
         code = m.group(2)
@@ -389,8 +439,8 @@ def decorate_code(body: str):
         return (
             '<div class="code-wrap">'
             f'<div class="code-toolbar"><span class="code-lang">{html.escape(label)}</span>'
-            '<button type="button" class="copy-btn" '
-            'aria-label="Copiar código para a área de transferência">Copiar</button></div>'
+            f'<button type="button" class="copy-btn" data-copied="{copied}" '
+            f'aria-label="{copy_aria}">{copy}</button></div>'
             f'<pre class="code-block" data-lang="{html.escape(lang)}"><code{attrs}>{code}</code></pre>'
             "</div>"
         )
@@ -606,6 +656,9 @@ pre.code-block code{
 @media (prefers-reduced-motion:reduce){
   html{scroll-behavior:auto;}
   .sidebar{transition:none;}
+  /* WCAG 2.2.2: neutralize the looping animated Mermaid edge dashes. The runtime adds
+     `animation: ...` to edge <path>s inside the rendered SVG; pre.mermaid * catches them. */
+  pre.mermaid *{animation:none !important;}
 }
 
 /* ---- mermaid diagrams ---- */
@@ -619,6 +672,26 @@ pre.mermaid{
 }
 pre.mermaid[data-processed]{visibility:visible;}
 pre.mermaid svg{max-width:100%; height:auto;}
+
+/* ---- language toggle + bilingual panes ---- */
+/* Both languages are embedded; only the active language's panes show. The active language
+   is set on <html data-lang="..."> early (no FOUC) and each inactive <section.lang-pane> /
+   nav pane carries the [hidden] attribute (toggled by JS — valid single-<main> + a11y). The
+   explicit rule out-specifies any later display rule so [hidden] always wins. */
+.lang-pane[hidden]{display:none !important;}
+/* Visibility follows <html data-lang> so the early head-script switches panes BEFORE paint
+   (no FOUC) and a JS-disabled client still sees exactly one language (the static pt-BR
+   default). setLang() additionally sets [hidden] on the inactive panes for a11y semantics. */
+html[data-lang="pt"] .lang-pane[data-lang="en"]{display:none;}
+html[data-lang="en"] .lang-pane[data-lang="pt"]{display:none;}
+.lang-toggle{display:flex; gap:6px; padding:10px 14px 2px;}
+.lang-btn{
+  flex:1; font-family:inherit; font-size:.78rem; font-weight:600; cursor:pointer;
+  color:var(--muted); background:var(--bg); border:1px solid var(--border);
+  border-radius:7px; padding:6px 8px;
+}
+.lang-btn:hover{color:var(--text); border-color:var(--accent);}
+.lang-btn[aria-pressed="true"]{color:#fff; background:var(--accent); border-color:var(--accent);}
 """
 
 
@@ -628,16 +701,17 @@ JS = r"""
 
   // ---- copy buttons ----
   document.querySelectorAll('.copy-btn').forEach(function(btn){
+    var label = btn.textContent;  // original 'Copy'/'Copiar', snapshot once at wire time
     btn.addEventListener('click', function(){
+      if(btn.classList.contains('copied')) return;  // ignore re-clicks during the feedback window
       var wrap = btn.closest('.code-wrap');
       var code = wrap ? wrap.querySelector('pre code') : null;
       if(!code) return;
       var text = code.textContent;
       var done = function(){
-        var old = btn.textContent;
-        btn.textContent = 'Copiado!';
+        btn.textContent = btn.getAttribute('data-copied') || 'Copied!';
         btn.classList.add('copied');
-        setTimeout(function(){ btn.textContent = old; btn.classList.remove('copied'); }, 1600);
+        setTimeout(function(){ btn.textContent = label; btn.classList.remove('copied'); }, 1600);
       };
       if(navigator.clipboard && navigator.clipboard.writeText){
         navigator.clipboard.writeText(text).then(done, function(){ fallbackCopy(text, done); });
@@ -682,24 +756,30 @@ JS = r"""
   function setActive(id){
     navLinks.forEach(function(a){ a.classList.toggle('active', a.getAttribute('data-target') === id); });
   }
+  function recomputeActive(){
+    var ids = Object.keys(visible);
+    if(ids.length){
+      ids.sort(function(x,y){ return visible[x] - visible[y]; });
+      setActive(ids[0]);
+      return;
+    }
+    // none intersecting: pick the last RENDERED heading above the viewport top. The
+    // getClientRects() guard skips the hidden language pane's headings (display:none ->
+    // empty rect list), so a hidden-pane heading is never marked active.
+    var current = null;
+    for(var i=0;i<headings.length;i++){
+      if(!headings[i].getClientRects().length) continue;
+      if(headings[i].getBoundingClientRect().top < 120) current = headings[i].id;
+    }
+    if(current) setActive(current);
+  }
   if('IntersectionObserver' in window && headings.length){
     var obs = new IntersectionObserver(function(entries){
       entries.forEach(function(en){
         if(en.isIntersecting) visible[en.target.id] = en.boundingClientRect.top;
         else delete visible[en.target.id];
       });
-      var ids = Object.keys(visible);
-      if(ids.length){
-        ids.sort(function(x,y){ return visible[x] - visible[y]; });
-        setActive(ids[0]);
-      } else {
-        // none intersecting: pick the last heading above the viewport top
-        var current = null;
-        for(var i=0;i<headings.length;i++){
-          if(headings[i].getBoundingClientRect().top < 120) current = headings[i].id;
-        }
-        if(current) setActive(current);
-      }
+      recomputeActive();
     }, { rootMargin:'-80px 0px -70% 0px', threshold:[0,1] });
     headings.forEach(function(h){ obs.observe(h); });
   }
@@ -729,6 +809,8 @@ JS = r"""
       clearMarks();
       var shown = 0;
       items.forEach(function(li){
+        var pane = li.closest('.nav-lang');
+        if(pane && pane.hasAttribute('hidden')){ li.classList.remove('search-hide'); return; }
         if(!nq){ li.classList.remove('search-hide'); shown++; return; }
         var hit = li.dataset.norm.indexOf(nq) !== -1;
         li.classList.toggle('search-hide', !hit);
@@ -864,6 +946,105 @@ JS = r"""
     if(lang === 'text'){ return; } // no highlighting for plain text
     try { code.innerHTML = hlGeneric(raw, lang); } catch(e){ /* leave raw on error */ }
   });
+
+  // ---- bilingual language toggle (issue #13) ----
+  // Page-level chrome strings per language. Keys MUST match across languages.
+  var I18N = {
+    en: {
+      htmlLang: 'en',
+      title: 'Production Guide — Java 25 / Micronaut 4 + IBM MQ (JMS 2.0, COA/COD)',
+      skip: 'Skip to content',
+      topbarTitle: 'IBM MQ Guide · JMS 2.0 · Micronaut 4',
+      sidebarTitle: 'IBM MQ + JMS 2.0 Guide',
+      sidebarSub: 'Java 25 · Micronaut 4 · COA/COD',
+      searchPlaceholder: 'Search sections…',
+      searchAria: 'Search the guide sections',
+      navEmpty: 'No sections found.',
+      sidebarAria: 'Guide navigation',
+      hamburgerAria: 'Open navigation menu'
+    },
+    pt: {
+      htmlLang: 'pt-BR',
+      title: 'Guia de Produção — Java 25 / Micronaut 4 + IBM MQ (JMS 2.0, COA/COD)',
+      skip: 'Pular para o conteúdo',
+      topbarTitle: 'Guia IBM MQ · JMS 2.0 · Micronaut 4',
+      sidebarTitle: 'Guia IBM MQ + JMS 2.0',
+      sidebarSub: 'Java 25 · Micronaut 4 · COA/COD',
+      searchPlaceholder: 'Buscar seções…',
+      searchAria: 'Buscar seções do guia',
+      navEmpty: 'Nenhuma seção encontrada.',
+      sidebarAria: 'Navegação do guia',
+      hamburgerAria: 'Abrir menu de navegação'
+    }
+  };
+  (function assertKeyParity(){
+    var ek = Object.keys(I18N.en).sort().join(','), pk = Object.keys(I18N.pt).sort().join(',');
+    if(ek !== pk){ console.error('I18N key mismatch:', ek, '!=', pk); }
+  })();
+
+  var STORAGE_KEY = 'guide-lang';
+  var htmlEl = document.documentElement;
+  function setText(id, val){ var el = document.getElementById(id); if(el) el.textContent = val; }
+  function setAttr(id, attr, val){ var el = document.getElementById(id); if(el) el.setAttribute(attr, val); }
+
+  function renderMermaid(pane){
+    if(!pane || !window.mermaid) return;
+    var nodes = Array.prototype.slice.call(pane.querySelectorAll('pre.mermaid:not([data-processed])'));
+    if(!nodes.length) return;
+    try {
+      if(window.mermaid.run){ window.mermaid.run({ nodes: nodes }); }
+      else if(window.mermaid.init){ window.mermaid.init(undefined, nodes); }
+    } catch(e){ /* leave raw on error */ }
+  }
+
+  function setLang(lang){
+    if(lang !== 'en' && lang !== 'pt') lang = 'pt';
+    var t = I18N[lang];
+    htmlEl.setAttribute('lang', t.htmlLang);
+    htmlEl.setAttribute('data-lang', lang);
+    Array.prototype.slice.call(document.querySelectorAll('.lang-pane')).forEach(function(p){
+      if(p.getAttribute('data-lang') === lang) p.removeAttribute('hidden');
+      else p.setAttribute('hidden', '');
+    });
+    document.title = t.title;
+    setText('skip-link', t.skip);
+    setText('topbar-title', t.topbarTitle);
+    setText('sidebar-title', t.sidebarTitle);
+    setText('sidebar-sub', t.sidebarSub);
+    setText('nav-empty', t.navEmpty);
+    setAttr('sidebar', 'aria-label', t.sidebarAria);
+    setAttr('hamburger', 'aria-label', t.hamburgerAria);
+    var s = document.getElementById('nav-search');
+    if(s){ s.setAttribute('placeholder', t.searchPlaceholder); s.setAttribute('aria-label', t.searchAria); s.value = ''; }
+    if(typeof items !== 'undefined'){
+      items.forEach(function(li){ li.classList.remove('search-hide'); });
+      if(typeof clearMarks === 'function') clearMarks();
+    }
+    if(emptyMsg) emptyMsg.style.display = 'none';
+    Array.prototype.slice.call(document.querySelectorAll('.lang-btn')).forEach(function(b){
+      b.setAttribute('aria-pressed', b.getAttribute('data-lang') === lang ? 'true' : 'false');
+    });
+    try { localStorage.setItem(STORAGE_KEY, lang); } catch(e){}
+    renderMermaid(document.querySelector('main .lang-pane[data-lang="' + lang + '"]'));
+    // the revealed pane's headings haven't fired an intersection event yet and the old
+    // pane's observer entries are stale — reset and recompute the active nav for the new pane.
+    if(typeof visible !== 'undefined'){ for(var vk in visible){ delete visible[vk]; } }
+    if(typeof recomputeActive === 'function') recomputeActive();
+  }
+
+  Array.prototype.slice.call(document.querySelectorAll('.lang-btn')).forEach(function(b){
+    b.addEventListener('click', function(){ setLang(b.getAttribute('data-lang')); });
+  });
+
+  var initial = (window.__guideLang === 'en' || window.__guideLang === 'pt') ? window.__guideLang : null;
+  if(!initial){
+    try { initial = localStorage.getItem(STORAGE_KEY); } catch(e){ initial = null; }
+  }
+  if(initial !== 'en' && initial !== 'pt'){
+    var nl = (navigator.language || 'pt').toLowerCase();
+    initial = nl.indexOf('en') === 0 ? 'en' : 'pt';
+  }
+  setLang(initial);
 })();
 """
 
@@ -885,8 +1066,11 @@ JS = r"""
 MERMAID_INIT = r"""
 (function(){
   if(!window.mermaid){ return; }
+  // startOnLoad:false — the bilingual page embeds BOTH languages; diagrams inside a
+  // [hidden] pane have no layout box (getBBox -> 0) and would render collapsed and never
+  // re-render on reveal. setLang() lazy-calls mermaid.run() on the active pane instead.
   window.mermaid.initialize({
-    startOnLoad: true,
+    startOnLoad: false,
     theme: 'base',
     securityLevel: 'loose',
     themeVariables: {
@@ -899,15 +1083,18 @@ MERMAID_INIT = r"""
 """
 
 
-def build():
-    mermaid_runtime = ensure_mermaid_runtime()
-    raw = SRC.read_text(encoding="utf-8")
+def render_lang(src_path, chrome):
+    """Run the full single-language pipeline on one source file. Returns the rendered body
+    fragment (the <main> inner HTML), its nav, the source-side measurements, the callout
+    tally, and the healed source markdown — one dict per language."""
+    raw = src_path.read_text(encoding="utf-8")
     src, healed = heal_soft_wraps(raw)
     src, list_seps = heal_blockquote_lists(src)
     measured = measure_source(src)
     measured["healed"] = healed
     measured["list_seps"] = list_seps
 
+    # a FRESH Markdown instance per language (markdown.Markdown is stateful: toc/ids).
     md = markdown.Markdown(
         extensions=[
             "tables",
@@ -920,79 +1107,130 @@ def build():
     )
     body = md.convert(src)
 
-    # DIVERT ```mermaid (rendered by fenced_code as language-mermaid) to the diagram
-    # path BEFORE decorate_code, so mermaid blocks become <pre class="mermaid"> and do
-    # NOT get a "Copiar" button or the syntax highlighter.
+    # DIVERT ```mermaid to the diagram path BEFORE decorate_code (no copy button / no
+    # syntax highlighter on diagrams).
     body, mermaid_out = divert_mermaid(body)
     measured["mermaid_out"] = mermaid_out
 
-    # split callouts, decorate code, wrap tables for horizontal scroll
     body, callout_counts = split_callouts(body)
-    body = decorate_code(body)
+    body = decorate_code(body, chrome)
     body = re.sub(
         r"(<table>.*?</table>)",
         r'<div class="table-scroll">\1</div>',
         body,
         flags=re.DOTALL,
     )
-
     nav_html = build_nav(body)
+    return {
+        "body": body,
+        "nav": nav_html,
+        "measured": measured,
+        "callouts": callout_counts,
+        "src": src,
+    }
 
-    page_title = "Guia de Produção — Java 25 / Micronaut 4 + IBM MQ (JMS 2.0, COA/COD)"
 
-    out = f"""<!DOCTYPE html>
-<html lang="pt-BR">
+def build():
+    """Render BOTH languages and assemble one standalone bilingual page. Both languages are
+    embedded; the active one is chosen at load (stored > browser > pt-BR fallback) and
+    switched in-page. Returns (page_html, en_render, pt_render)."""
+    mermaid_runtime = ensure_mermaid_runtime()
+    en = render_lang(GUIDE_EN, CHROME["en"])
+    pt = render_lang(GUIDE_PT, CHROME["pt"])
+
+    # locals (avoid quote-nesting inside the f-string)
+    pt_nav, en_nav = pt["nav"], en["nav"]
+    pt_body, en_body = pt["body"], en["body"]
+
+    # The static shell renders pt-BR chrome (the documented fallback). The no-FOUC head
+    # script sets <html data-lang> before paint; setLang() then corrects panes ([hidden]) +
+    # chrome strings (JS I18N) to the detected/stored language.
+    page = f"""<!DOCTYPE html>
+<html lang="pt-BR" data-lang="pt">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<title>{html.escape(page_title)}</title>
+<title>Guia de Produção — Java 25 / Micronaut 4 + IBM MQ (JMS 2.0, COA/COD)</title>
+<script>
+/* No-FOUC language pick: stored choice, else browser language, else pt-BR fallback. Set on
+   <html> before <body> paints so html[data-lang] CSS shows the correct panes immediately. */
+(function(){{
+  try{{
+    var s = null;
+    try{{ s = localStorage.getItem('guide-lang'); }}catch(e){{}}
+    if(s !== 'en' && s !== 'pt'){{
+      var nl = (navigator.language || 'pt').toLowerCase();
+      s = nl.indexOf('en') === 0 ? 'en' : 'pt';
+    }}
+    window.__guideLang = s;
+    document.documentElement.setAttribute('data-lang', s);
+    document.documentElement.setAttribute('lang', s === 'en' ? 'en' : 'pt-BR');
+  }}catch(e){{}}
+}})();
+</script>
 <style>{CSS}</style>
 </head>
 <body>
-<a class="skip-link" href="#conteudo">Pular para o conteúdo</a>
+<a id="skip-link" class="skip-link" href="#conteudo">Pular para o conteúdo</a>
 
 <div class="topbar">
   <button id="hamburger" class="hamburger" type="button" aria-label="Abrir menu de navegação"
           aria-controls="sidebar" aria-expanded="false">&#9776;</button>
-  <span class="topbar-title">Guia IBM MQ · JMS 2.0 · Micronaut 4</span>
+  <span id="topbar-title" class="topbar-title">Guia IBM MQ · JMS 2.0 · Micronaut 4</span>
 </div>
 <div id="scrim" class="scrim" aria-hidden="true"></div>
 
 <div class="layout">
   <nav id="sidebar" class="sidebar" aria-label="Navegação do guia">
     <div class="sidebar-header">
-      <p class="sidebar-title">Guia IBM MQ + JMS 2.0</p>
-      <p class="sidebar-sub">Java 25 · Micronaut 4 · COA/COD</p>
+      <p id="sidebar-title" class="sidebar-title">Guia IBM MQ + JMS 2.0</p>
+      <p id="sidebar-sub" class="sidebar-sub">Java 25 · Micronaut 4 · COA/COD</p>
+    </div>
+    <div class="lang-toggle" role="group" aria-label="Language / Idioma">
+      <button type="button" class="lang-btn" data-lang="pt" aria-pressed="true">Português</button>
+      <button type="button" class="lang-btn" data-lang="en" aria-pressed="false">English</button>
     </div>
     <div class="search-box">
       <input id="nav-search" class="search-input" type="search"
              placeholder="Buscar seções…" aria-label="Buscar seções do guia" autocomplete="off">
     </div>
     <div class="nav-scroll">
-      {nav_html}
-      <p id="nav-empty" class="nav-empty">Nenhuma seção encontrada.</p>
+      <div class="nav-lang lang-pane" data-lang="pt">
+{pt_nav}
+      </div>
+      <div class="nav-lang lang-pane" data-lang="en">
+{en_nav}
+      </div>
+      <p id="nav-empty" class="nav-empty" role="status">Nenhuma seção encontrada.</p>
     </div>
   </nav>
 
   <div class="content">
     <main id="conteudo" class="main" tabindex="-1">
-      <div class="main-inner">
-{body}
-      </div>
+      <section class="lang-pane" data-lang="pt" aria-label="Conteúdo do guia (português)">
+        <div class="main-inner">
+{pt_body}
+        </div>
+      </section>
+      <section class="lang-pane" data-lang="en" aria-label="Guide content (English)">
+        <div class="main-inner">
+{en_body}
+        </div>
+      </section>
     </main>
   </div>
 </div>
 
-<script>{JS}</script>
 <script>{mermaid_runtime}</script>
 <script>{MERMAID_INIT}</script>
+<script>{JS}</script>
 </body>
 </html>
 """
 
-    OUT.write_text(out, encoding="utf-8")
-    return out, measured, callout_counts, src
+    OUT.write_text(page, encoding="utf-8")
+    return page, en, pt
 
 
 def count_output(out: str):
@@ -1018,7 +1256,12 @@ def count_output(out: str):
     }
 
 
-def parity_report(src, out, measured, out_counts, callout_counts):
+def parity_lang(lang, src, fragment, measured, callout_counts):
+    """Per-language source-markdown <-> rendered-fragment parity (the original single-language
+    gate, scoped to ONE language's body fragment). Page-level external-dep/standalone is
+    checked once in standalone_scan(); cross-language sync in cross_lang_parity()."""
+    out = fragment
+    out_counts = count_output(fragment)
     lines = []
     ok = True
 
@@ -1029,7 +1272,7 @@ def parity_report(src, out, measured, out_counts, callout_counts):
         lines.append(f"  {'OK ' if good else 'XX '} {label}: source={a} output={b}")
         return good
 
-    lines.append("PARITY REPORT (source markdown vs output html)")
+    lines.append(f"[{lang}] PER-LANGUAGE PARITY (source markdown vs rendered fragment)")
     lines.append(f"  --  soft-wrap-split bold markers healed: {measured.get('healed', 0)}")
     lines.append(f"  --  blockquote list separators inserted: {measured.get('list_seps', 0)}")
     check("headings (h1-h3)", measured["headings"], out_counts["headings"])
@@ -1138,52 +1381,72 @@ def parity_report(src, out, measured, out_counts, callout_counts):
         + ("" if stray_ok else "  -> soft-wrap-split emphasis not healed")
     )
 
-    # refined external-dependency scan on OUTPUT.
-    # The inlined ~3MB Mermaid runtime is full of http(s) LITERALS (SVG xmlns,
-    # license URLs) that are NOT resource loads — a crude "http(s) substring" scan
-    # would false-positive on every one. So we flag ONLY genuine external RESOURCE
-    # LOADS, and we scan with the inlined <script> BODY blanked out:
-    #   - <link rel=stylesheet href=https?://...>
-    #   - <script src=https?://...>
-    #   - @import ... https?://...      (CSS)
-    #   - url(https?://...)             (CSS)
-    #   - a CDN host (googleapis/jsdelivr/unpkg/cdnjs) appearing in any src=/href=
-    # EXCLUDED by construction: XML-namespace URIs (xmlns="http://www.w3.org/..."),
-    # bare http(s) literals INSIDE the inlined runtime <script> body (blanked first),
-    # and visible-text <a href="https://..."> citation links in the guide body (we only
-    # match href on <link>, never on <a>).
-    # CRITICAL #1: we blank only the BODY between <script ...> and </script> and KEEP the
-    # opening tag's attributes — so a genuine external <script src="https://..."> is still
-    # caught (a naive "<script ...>...</script>" -> "" strip would swallow its src= and MISS
-    # it).
-    # CRITICAL #2: we DO NOT blank <style> bodies — real CSS resource loads (@import,
-    # url(http)) live there and MUST be caught. Our own <style> carries no http literal
-    # (only the page CSS), so leaving it intact yields no false positive while keeping the
-    # CSS-load patterns live. (A CSS comment mentioning "<pre class=...>" is handled by
-    # count_output's separate <style> strip, not here, and is not a resource load anyway.)
-    # NOTE on the linkage to self-containment: blanking the <script> body means a
-    # hypothetical runtime `import("https://cdn...")` hidden in the bundle would be
-    # invisible to THIS scan. The real proof of offline self-containment is the
-    # build-time audit of the bundle (0 dynamic import(), no from"http, no fetch("http,
-    # no CDN host literals) — this scan only guards the PAGE-LEVEL markup we emit.
-    scan_src = re.sub(
-        r"(<script\b[^>]*>).*?(</script>)", r"\1\2", out, flags=re.DOTALL
-    )
+    lines.append(f"  [{lang}] language parity: {'PASS' if ok else 'FAIL'}")
+    return ok, "\n".join(lines)
 
+
+def cross_lang_parity(m_en, m_pt):
+    """EN <-> pt-BR STRUCTURAL sync gate (the bilingual heart of issue #13): both sources MUST
+    share identical section / callout / code / mermaid / table structure (labels localized,
+    structure identical). Anchors are language-specific slugs and are NOT cross-compared."""
+    lines = ["CROSS-LANGUAGE STRUCTURAL PARITY (EN source <-> pt-BR source)"]
+    ok = True
+
+    def check(label, a, b):
+        nonlocal ok
+        good = a == b
+        ok = ok and good
+        lines.append(f"  {'OK ' if good else 'XX '} {label}: en={a} pt={b}")
+
+    check("headings", m_en["headings"], m_pt["headings"])
+    check("tables", m_en["tables"], m_pt["tables"])
+    check("code blocks", m_en["code_blocks"], m_pt["code_blocks"])
+    check("mermaid blocks", m_en["mermaid_blocks"], m_pt["mermaid_blocks"])
+    for t in ("boa-pratica", "ma-pratica", "atencao", "nota"):
+        check(f"callout {t}", m_en["callouts"][t], m_pt["callouts"][t])
+    check("callout total", m_en["callouts_total"], m_pt["callouts_total"])
+
+    # ordered structure signature: the STRONG check — catches a reorder, an H2<->H3 re-level,
+    # a dropped table ROW, or a swapped block, all of which leave the scalar counts above
+    # unchanged but shift the document-order token sequence.
+    se, sp = m_en.get("structure", []), m_pt.get("structure", [])
+    struct_ok = se == sp
+    ok = ok and struct_ok
+    if struct_ok:
+        lines.append(f"  OK  ordered structure signature: {len(se)} tokens identical")
+    else:
+        n = min(len(se), len(sp))
+        diff_at = next((i for i in range(n) if se[i] != sp[i]), n)
+        ven = se[diff_at] if diff_at < len(se) else None
+        vpt = sp[diff_at] if diff_at < len(sp) else None
+        lines.append(
+            f"  XX  ordered structure signature: en={len(se)} pt={len(sp)} tokens; "
+            f"first divergence at #{diff_at}: en={ven} pt={vpt}"
+        )
+
+    lines.append(f"  cross-language sync: {'PASS' if ok else 'FAIL'}")
+    return ok, "\n".join(lines)
+
+
+def standalone_scan(page):
+    """Whole-page external-dependency scan: the combined bilingual page must remain standalone
+    (ZERO real external resource loads). Run ONCE on the final page (NOT per fragment).
+
+    The inlined ~3MB Mermaid runtime is full of http(s) LITERALS (SVG xmlns, license URLs) that
+    are NOT resource loads, so we flag only GENUINE external resource LOADS and scan with the
+    inlined <script> BODY blanked (opening tag KEPT, so a real <script src="https://..."> is
+    still caught). <style> bodies are NOT blanked — real CSS @import/url(http) loads live there.
+    XML-namespace URIs and <a href="https://..."> citation links are excluded by construction."""
+    lines = ["STANDALONE SCAN (final combined page — real external resource loads only)"]
+    scan_src = re.sub(r"(<script\b[^>]*>).*?(</script>)", r"\1\2", page, flags=re.DOTALL)
     real_load_res = [
-        # external stylesheet
         (r'<link\b[^>]*\brel=["\']?stylesheet["\']?[^>]*\bhref=["\']?https?://', "link[stylesheet] href=http"),
         (r'<link\b[^>]*\bhref=["\']?https?://[^>]*\brel=["\']?stylesheet', "link[stylesheet] href=http"),
-        # external script
         (r'<script\b[^>]*\bsrc=["\']?https?://', "script src=http"),
-        # any other element pulling a remote resource via src=
         (r'<(?:img|iframe|audio|video|source|track|embed)\b[^>]*\bsrc=["\']?https?://', "media src=http"),
-        # CSS @import of a remote stylesheet
         (r'@import\b[^;]*\bhttps?://', "@import http"),
-        # CSS url(http...) — remote font/image/bg
         (r'url\(\s*["\']?https?://', "css url(http)"),
-        # a CDN host inside any src=/href= attribute (defensive: catches odd casings)
-        (r'(?:src|href)=["\']?https?://(?:[^"\'>\s]*\.)?(?:googleapis\.com|gstatic\.com|jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare\.com)', "cdn host in src/href"),
+        (r'<(?:link|script|img|iframe|audio|video|source|track|embed)\b[^>]*\b(?:src|href)=["\']?https?://(?:[^"\'>\s]*\.)?(?:googleapis\.com|gstatic\.com|jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare\.com)', "cdn host in resource src/href"),
     ]
     found = {}
     for pat, label in real_load_res:
@@ -1191,15 +1454,11 @@ def parity_report(src, out, measured, out_counts, callout_counts):
         if c:
             found[label] = found.get(label, 0) + c
     ext_ok = not found
-    ok = ok and ext_ok
     lines.append(
         f"  {'OK ' if ext_ok else 'XX '} external-dependency scan (real resource loads only): "
         + ("ZERO external refs" if ext_ok else f"FOUND {found}")
     )
-
-    lines.append("")
-    lines.append("PARITY: PASS" if ok else "PARITY: FAIL")
-    return ok, "\n".join(lines)
+    return ext_ok, "\n".join(lines)
 
 
 def _fingerprint(s: str) -> str:
@@ -1294,11 +1553,118 @@ def _output_callout_chars(out: str) -> int:
     return total
 
 
+def assembled_page_check(page, en, pt):
+    """Close the loop between WHAT WAS MEASURED and WHAT WAS WRITTEN: extract each language's
+    <section class="lang-pane"> from the final page bytes and confirm it carries that language's
+    OWN rendered body (and not the other's). Catches an f-string pane swap / duplication / drop
+    in build() — a class of bug the per-fragment and count gates cannot see."""
+    lines = ["ASSEMBLED-PAGE INTEGRITY (each pane carries its own language's rendered body)"]
+    ok = True
+
+    def section_inner(lang):
+        m = re.search(
+            r'<section class="lang-pane" data-lang="' + lang + r'"[^>]*>(.*?)</section>',
+            page, flags=re.DOTALL,
+        )
+        return m.group(1) if m else ""
+
+    en_sec, pt_sec = section_inner("en"), section_inner("pt")
+    for label, good in (
+        ("en pane present", bool(en_sec)),
+        ("pt pane present", bool(pt_sec)),
+        ("en pane holds the EN body", en["body"] in en_sec),
+        ("en pane does NOT hold the PT body", pt["body"] not in en_sec),
+        ("pt pane holds the PT body", pt["body"] in pt_sec),
+        ("pt pane does NOT hold the EN body", en["body"] not in pt_sec),
+    ):
+        ok = ok and good
+        lines.append(f"  {'OK ' if good else 'XX '} {label}")
+    return ok, "\n".join(lines)
+
+
+def _measured_of(path):
+    """Healed-source structural measurement, identical to what render_lang() feeds the gate."""
+    raw = path.read_text(encoding="utf-8")
+    s, _ = heal_soft_wraps(raw)
+    s, _ = heal_blockquote_lists(s)
+    return measure_source(s), s
+
+
+def run_self_test():
+    """Prove the cross-language gate is NOT vacuous: it PASSES synced sources and FAILS a battery
+    of injected mismatches. Exercises the SAME cross_lang_parity() main() guards with — including
+    a count-invariant H2->H3 re-level that ONLY the ordered structure signature can catch."""
+    m_en, _ = _measured_of(GUIDE_EN)
+    m_pt, pt = _measured_of(GUIDE_PT)
+    src_lines = pt.split("\n")
+
+    def first_line(pred, transform):
+        """Return (mutated_src, applied) after transforming the first line matching pred."""
+        out, done = [], False
+        for ln in src_lines:
+            if not done and pred(ln):
+                done = True
+                new = transform(ln)
+                if new is not None:
+                    out.append(new)
+                continue
+            out.append(ln)
+        return "\n".join(out), done
+
+    mutations = [
+        ("heading-drop",
+         *first_line(lambda l: l.startswith("## "), lambda l: None)),
+        ("table-row-drop",
+         *first_line(lambda l: bool(re.match(r"^\|[\s:|-]+\|\s*$", l)) and "-" in l, lambda l: None)),
+        ("mermaid->code retype",
+         *first_line(lambda l: l.strip().startswith("```mermaid"),
+                     lambda l: l.replace("```mermaid", "```text", 1))),
+        ("H2->H3 re-level (count-invariant)",
+         *first_line(lambda l: l.startswith("## ") and not l.startswith("### "), lambda l: "#" + l)),
+        ("callout boa->ma flip",
+         *first_line(lambda l: l.startswith("> ✅"), lambda l: l.replace("✅", "❌", 1))),
+    ]
+
+    synced_ok, _ = cross_lang_parity(m_en, m_pt)
+    print("SELF-TEST: bilingual cross-language parity gate")
+    print(f"  synced EN/pt sources -> {'PASS' if synced_ok else 'FAIL'}  (expect PASS)")
+    all_caught = True
+    for name, mutated, applied in mutations:
+        if not applied:
+            all_caught = False
+            print(f"  inject {name:34s} -> SKIPPED (mutation not applicable!)")
+            continue
+        ok, _ = cross_lang_parity(m_en, measure_source(mutated))
+        if ok:  # a mutated (divergent) source that still PASSes = a gate blind spot
+            all_caught = False
+        print(f"  inject {name:34s} -> {'PASS' if ok else 'FAIL'}  (expect FAIL)")
+    passed = synced_ok and all_caught
+    print("SELF-TEST: " + ("OK — gate passes synced sources and fails on every injected mismatch"
+                           if passed else "BROKEN — gate did not behave as required"))
+    sys.exit(0 if passed else 1)
+
+
 def main():
-    out, measured, callout_counts, src = build()
-    out_counts = count_output(out)
-    ok, report = parity_report(src, out, measured, out_counts, callout_counts)
-    print(report)
+    if "--self-test" in sys.argv:
+        run_self_test()
+        return
+    page, en, pt = build()
+    reports, ok = [], True
+    for lang, data in (("en", en), ("pt", pt)):
+        o, rep = parity_lang(lang, data["src"], data["body"], data["measured"], data["callouts"])
+        reports.append(rep)
+        ok = ok and o
+    o2, rep2 = cross_lang_parity(en["measured"], pt["measured"])
+    reports.append(rep2)
+    ok = ok and o2
+    o3, rep3 = standalone_scan(page)
+    reports.append(rep3)
+    ok = ok and o3
+    o4, rep4 = assembled_page_check(page, en, pt)
+    reports.append(rep4)
+    ok = ok and o4
+    print("\n\n".join(reports))
+    print("\n" + ("PARITY: PASS" if ok else "PARITY: FAIL"))
     print(f"\nOutput: {OUT}  ({OUT.stat().st_size} bytes)")
     if not ok:
         sys.exit(1)
