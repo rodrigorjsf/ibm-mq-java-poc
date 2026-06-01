@@ -61,6 +61,12 @@ A producer sends a persistent `TextMessage` requesting **COA** (confirm on arriv
 - **Report persistence** is inherited from the original message — it is *not* non-persistent by default.
 - **Testcontainers + modern Docker:** use Testcontainers 2.x (older docker-java fails against Docker engine 29.x); pin `commons-codec:1.16.1` for the zerodep transport.
 
+## References
+
+Every source consulted to build and evolve this repository is catalogued in the canonical bibliography [`docs/references.md`](docs/references.md) — each entry names the source, the concept/term/discovery it grounded, and its link, grouped by topic (primary jar/POM artifacts, container & registry, COA/COD report semantics, connection & security, MQSC, and JDK support). It is the single source of truth: the standalone HTML doc's References section is **generated** from it by `docs/build-html.py`, so the two never diverge.
+
+Key primary sources: the bytecode-verified [`com.ibm.mq.allclient:9.4.5.0` jar](https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar) (report/feedback constants), the [IBM MQ report-options reference](https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm) (COA/COD semantics + persistence), and the [`micronaut-platform:4.9.4` POM](https://repo1.maven.org/maven2/io/micronaut/platform/micronaut-platform/4.9.4/micronaut-platform-4.9.4.pom) (the build-breaking 4.9.9 discovery).
+
 ## Documentation language
 
 The in-depth guide under `docs/` is written in **Brazilian Portuguese** by design. Code identifiers are English; code comments are pt-BR.
