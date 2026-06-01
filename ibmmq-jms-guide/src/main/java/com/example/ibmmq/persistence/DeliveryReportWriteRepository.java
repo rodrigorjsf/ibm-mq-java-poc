@@ -1,12 +1,14 @@
 package com.example.ibmmq.persistence;
 
 import io.micronaut.context.annotation.Requires;
+import io.micronaut.core.annotation.Nullable;
 import io.micronaut.data.annotation.Query;
 import io.micronaut.data.jdbc.annotation.JdbcRepository;
 import io.micronaut.data.model.query.builder.sql.Dialect;
 import io.micronaut.data.repository.GenericRepository;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 
 /**
  * Writer repository for the append-only {@code delivery_report} audit table — bound to the
@@ -47,17 +49,44 @@ import java.time.Instant;
 public interface DeliveryReportWriteRepository extends GenericRepository<DeliveryReportRecord, Long> {
 
     /**
-     * Idempotently inserts one audit row. Returns the number of rows actually inserted: {@code 1} for a
-     * new {@code (correlationId, feedback)} pair, {@code 0} when the row already exists (duplicate
-     * report / concurrent double-processing) — never throws on the conflict.
+     * Idempotently inserts one audit row carrying the issue-#40 columns PLUS the six issue-#19 recovered
+     * MQMD columns (all nullable). Returns the number of rows actually inserted: {@code 1} for a new
+     * {@code (correlationId, feedback)} pair, {@code 0} when the row already exists (duplicate report /
+     * concurrent double-processing) — never throws on the conflict. The {@code (correlation_id, feedback)}
+     * dedup key is unchanged; the six MQMD columns are purely additive.
      */
     @Query("""
-            INSERT INTO delivery_report (correlation_id, original_message_id, report_type, feedback, observed_at)
-            VALUES (:correlationId, :originalMessageId, :reportType, :feedback, :observedAt)
+            INSERT INTO delivery_report (
+                correlation_id, original_message_id, report_type, feedback, observed_at,
+                appl_identity_data, accounting_token_hex, correlation_id_bytes_hex,
+                message_id_bytes_hex, put_timestamp_utc, report_type_char)
+            VALUES (
+                :correlationId, :originalMessageId, :reportType, :feedback, :observedAt,
+                :applIdentityData, :accountingTokenHex, :correlationIdBytesHex,
+                :messageIdBytesHex, :putTimestampUtc, :reportTypeChar)
             ON CONFLICT (correlation_id, feedback) DO NOTHING""")
     int insertIfAbsent(String correlationId,
                        String originalMessageId,
                        String reportType,
                        int feedback,
-                       Instant observedAt);
+                       Instant observedAt,
+                       @Nullable String applIdentityData,
+                       @Nullable String accountingTokenHex,
+                       @Nullable String correlationIdBytesHex,
+                       @Nullable String messageIdBytesHex,
+                       @Nullable LocalDateTime putTimestampUtc,
+                       @Nullable String reportTypeChar);
+
+    /**
+     * Backward-compatible 5-arg overload (issue #40 callers / ITs): inserts with the six issue-#19 MQMD
+     * columns left {@code null}. Delegates to the 11-arg {@link #insertIfAbsent}.
+     */
+    default int insertIfAbsent(String correlationId,
+                               String originalMessageId,
+                               String reportType,
+                               int feedback,
+                               Instant observedAt) {
+        return insertIfAbsent(correlationId, originalMessageId, reportType, feedback, observedAt,
+                null, null, null, null, null, null);
+    }
 }

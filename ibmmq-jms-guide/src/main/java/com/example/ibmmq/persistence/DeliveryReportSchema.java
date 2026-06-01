@@ -39,6 +39,14 @@ import java.sql.SQLException;
  *       observed_at         TIMESTAMP    NOT NULL,
  *       CONSTRAINT uq_delivery_report_correl_feedback UNIQUE (correlation_id, feedback)
  *   );
+ *   -- Issue #19 additive, idempotent (ADD COLUMN IF NOT EXISTS), all NULLABLE:
+ *   ALTER TABLE delivery_report
+ *       ADD COLUMN IF NOT EXISTS appl_identity_data        VARCHAR(64),
+ *       ADD COLUMN IF NOT EXISTS accounting_token_hex      VARCHAR(64),
+ *       ADD COLUMN IF NOT EXISTS correlation_id_bytes_hex  VARCHAR(96),
+ *       ADD COLUMN IF NOT EXISTS message_id_bytes_hex      VARCHAR(96),
+ *       ADD COLUMN IF NOT EXISTS put_timestamp_utc         TIMESTAMP,
+ *       ADD COLUMN IF NOT EXISTS report_type_char          CHAR(1);
  * </pre>
  *
  * <p>The streaming-replicated standby receives this table (and every appended row) by physical
@@ -67,6 +75,20 @@ public class DeliveryReportSchema {
                 CONSTRAINT uq_delivery_report_correl_feedback UNIQUE (correlation_id, feedback)
             )""";
 
+    // Issue #19: ADDITIVELY adds the six recovered-MQMD audit columns. ADD COLUMN IF NOT EXISTS is
+    // idempotent and safe under N concurrent replicas (first pod adds, the rest are no-ops); all columns
+    // are NULLABLE so existing rows and the (correlation_id, feedback) dedup are unaffected. A single
+    // ALTER statement adds all six (Postgres supports multiple ADD COLUMN clauses in one ALTER). Run
+    // AFTER the CREATE so the table always exists first.
+    private static final String ALTER_ADD_MQMD_COLUMNS = """
+            ALTER TABLE delivery_report
+                ADD COLUMN IF NOT EXISTS appl_identity_data       VARCHAR(64),
+                ADD COLUMN IF NOT EXISTS accounting_token_hex     VARCHAR(64),
+                ADD COLUMN IF NOT EXISTS correlation_id_bytes_hex VARCHAR(96),
+                ADD COLUMN IF NOT EXISTS message_id_bytes_hex     VARCHAR(96),
+                ADD COLUMN IF NOT EXISTS put_timestamp_utc        TIMESTAMP,
+                ADD COLUMN IF NOT EXISTS report_type_char         CHAR(1)""";
+
     private final DataSource dataSource;
 
     public DeliveryReportSchema(DataSource dataSource) {
@@ -79,9 +101,11 @@ public class DeliveryReportSchema {
     }
 
     /**
-     * Creates the table if absent. Runs on each pod's startup; {@code CREATE TABLE IF NOT EXISTS} is
-     * safe under N concurrent replicas (first creates, rest are no-ops). Retries with backoff while
-     * Postgres is still coming up.
+     * Creates the table if absent and then ADDITIVELY ensures the issue-#19 MQMD columns. Runs on each
+     * pod's startup; both {@code CREATE TABLE IF NOT EXISTS} and {@code ALTER TABLE ... ADD COLUMN IF NOT
+     * EXISTS} are idempotent and safe under N concurrent replicas (first pod creates/adds, rest are
+     * no-ops). The ALTER runs AFTER the CREATE in the same connection so the table always exists first.
+     * Retries with backoff while Postgres is still coming up.
      */
     @PostConstruct
     void ensureSchema() {
@@ -89,9 +113,13 @@ public class DeliveryReportSchema {
         SQLException last = null;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try (Connection conn = dataSource.getConnection();
-                 PreparedStatement ps = conn.prepareStatement(DDL)) {
-                ps.execute();
-                LOG.info("[stage=AUDIT-INIT] Delivery-report audit schema ensured (delivery_report)");
+                 PreparedStatement createPs = conn.prepareStatement(DDL);
+                 PreparedStatement alterPs = conn.prepareStatement(ALTER_ADD_MQMD_COLUMNS)) {
+                createPs.execute();
+                // Additive (issue #19): add the six recovered-MQMD columns if not already present.
+                alterPs.execute();
+                LOG.info("[stage=AUDIT-INIT] Delivery-report audit schema ensured "
+                        + "(delivery_report + recovered-MQMD columns)");
                 return;
             } catch (SQLException e) {
                 last = e;

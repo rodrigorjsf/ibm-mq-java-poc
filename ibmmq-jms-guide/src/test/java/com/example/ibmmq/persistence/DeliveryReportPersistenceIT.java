@@ -27,6 +27,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -168,10 +169,31 @@ class DeliveryReportPersistenceIT {
         }
     }
 
+    // ---- Stubbed MQMD values (issue #19): the same on every report so the assertions are deterministic.
+    // CORREL_ID hex bytes are arbitrary-but-fixed; APPL_IDENTITY/ACCOUNTING_TOKEN/MSG_ID are fixed fixtures.
+    private static final String APPL_IDENTITY = "APP.IDENTITY.40";
+    private static final byte[] ACCOUNTING_TOKEN = new byte[]{
+            0x16, 0x01, 0x05, 0x15, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
+            0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11}; // 24 bytes
+    private static final byte[] CORREL_ID_BYTES = new byte[]{(byte) 0x41, (byte) 0x4d, 0x51, 0x20};
+    private static final byte[] MSG_ID_BYTES = new byte[]{(byte) 0xab, (byte) 0xcd, (byte) 0xef, 0x01};
+    private static final String PUT_DATE = "20260531";
+    private static final String PUT_TIME = "13300050"; // 13:30:00.500 UTC
+
+    private static final String ACCOUNTING_TOKEN_HEX = "160105150000000102030405060708090a0b0c0d0e0f1011";
+
     private static Message reportWithFeedback(int feedback) throws Exception {
         Message report = mock(Message.class);
         when(report.getJMSCorrelationID()).thenReturn(CORREL_ID);
         when(report.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).thenReturn(feedback);
+        // Issue #19: stub the six MQMD getters so extraction recovers non-null values (mdReadEnabled is
+        // not exercised here — this IT drives handleReport directly with a mocked Message).
+        when(report.getStringProperty(WMQConstants.JMS_IBM_MQMD_APPLIDENTITYDATA)).thenReturn(APPL_IDENTITY);
+        when(report.getObjectProperty(WMQConstants.JMS_IBM_MQMD_ACCOUNTINGTOKEN)).thenReturn(ACCOUNTING_TOKEN);
+        when(report.getJMSCorrelationIDAsBytes()).thenReturn(CORREL_ID_BYTES);
+        when(report.getObjectProperty(WMQConstants.JMS_IBM_MQMD_MSGID)).thenReturn(MSG_ID_BYTES);
+        when(report.getStringProperty(WMQConstants.JMS_IBM_MQMD_PUTDATE)).thenReturn(PUT_DATE);
+        when(report.getStringProperty(WMQConstants.JMS_IBM_MQMD_PUTTIME)).thenReturn(PUT_TIME);
         return report;
     }
 
@@ -195,6 +217,41 @@ class DeliveryReportPersistenceIT {
             assertThat(row.originalMessageId()).isEqualTo(CORREL_ID);
             assertThat(row.observedAt()).isNotNull();
         });
+    }
+
+    @Test
+    @DisplayName("COA e COD persistem ADITIVAMENTE os seis campos MQMD recuperados (issue #19) — AC5")
+    void coaAndCodPersistRecoveredMqmdFields() throws Exception {
+        reportConsumer.handleReport(reportWithFeedback(259)); // MQFB_COA
+        reportConsumer.handleReport(reportWithFeedback(260)); // MQFB_COD
+
+        List<DeliveryReportRecord> rows = readRepository.findByCorrelationId(CORREL_ID);
+        assertThat(rows).as("um COA e um COD = duas linhas").hasSize(2);
+
+        // Os seis campos sao comuns a ambas as linhas (mesmos stubs); o report_type_char difere por tipo.
+        for (DeliveryReportRecord row : rows) {
+            assertThat(row.applIdentityData())
+                    .as("appl_identity_data recuperado").isEqualTo(APPL_IDENTITY);
+            assertThat(row.accountingTokenHex())
+                    .as("accounting_token_hex recuperado (24 bytes => 48 hex chars)")
+                    .isEqualTo(ACCOUNTING_TOKEN_HEX)
+                    .hasSize(48);
+            assertThat(row.correlationIdBytesHex())
+                    .as("correlation_id_bytes_hex recuperado").isEqualTo("414d5120");
+            assertThat(row.messageIdBytesHex())
+                    .as("message_id_bytes_hex recuperado").isEqualTo("abcdef01");
+            assertThat(row.putTimestampUtc())
+                    .as("put_timestamp_utc recuperado como relogio-de-parede UTC (sem vazamento de zona)")
+                    .isEqualTo(LocalDateTime.parse("2026-05-31T13:30:00.500"));
+        }
+
+        // report_type_char: 'A' para o COA, 'D' para o COD.
+        DeliveryReportRecord coaRow = rows.stream()
+                .filter(r -> r.reportType() == ReportType.COA).findFirst().orElseThrow();
+        DeliveryReportRecord codRow = rows.stream()
+                .filter(r -> r.reportType() == ReportType.COD).findFirst().orElseThrow();
+        assertThat(coaRow.reportTypeChar()).as("report_type_char do COA").isEqualTo("A");
+        assertThat(codRow.reportTypeChar()).as("report_type_char do COD").isEqualTo("D");
     }
 
     @Test

@@ -99,6 +99,62 @@ Section 5.2(d) of the guide).
 - Section 5.1 — hybrid testing strategy and Testcontainers setup.
 - Section 5.2(d) — the `+SETALL` / admin authority gotcha (why this test uses `admin`).
 
+**Issue #19 extension — recovered MQMD fields:**
+The same test now also enables MQMD read on its own report-queue consumer
+(`queue:///DEV.QUEUE.2?mdReadEnabled=true`) and, for **each** arriving COA and COD, asserts the six
+recovered MQMD values via `ReportDescriptor.from(report, type)`:
+- **Strict** — `correlationIdBytes` non-empty (== original `MsgId` bytes under default propagation);
+  `reportTypeChar == 'A'` for the COA / `'D'` for the COD; `putTimestampUtc` non-null and plausibly
+  recent (within a ±10-minute window); `messageIdBytes` non-null (read-enabled).
+- **Tolerant** — `applIdentityData` non-null (may be blank, QMgr-set); `accountingToken` non-null and
+  exactly 24 bytes (`MQ_ACCOUNTING_TOKEN_LENGTH`, may be the QMgr default token).
+
+The original CorrelId == MsgId / both-reports-arrive assertions are unchanged (extended, not replaced).
+
+---
+
+### IT-02 — Recovered MQMD fields additively persisted to `delivery_report` (deterministic)
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/persistence/DeliveryReportPersistenceIT.java`
+
+**Test method:** `coaAndCodPersistRecoveredMqmdFields`
+
+**What it proves (issue #19, AC5):**
+`ReportMessageConsumer.handleReport()` for a COA and a COD additively persists the six recovered MQMD
+columns onto the issue-#40 `delivery_report` row — `appl_identity_data`, `accounting_token_hex`,
+`correlation_id_bytes_hex`, `message_id_bytes_hex`, `put_timestamp_utc`, `report_type_char`. The dedup
+key `(correlation_id, feedback)` is unchanged; the six columns are purely additive (idempotent
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` in `DeliveryReportSchema`, all NULLABLE).
+
+**Why deterministic (no broker, single Postgres):**
+Same harness as the issue-#40 persistence IT — one `GenericContainer` `postgres:16-alpine`, `default`
+(writer) and `reader` pointing at the same instance, the report driven by a Mockito-mocked `Message`.
+The six MQMD getters are stubbed with fixed fixtures so the persisted hex/timestamp/char values are
+exactly asserted (no QMgr non-determinism).
+
+**Pre-conditions:**
+- Docker available; `postgres:16-alpine` reachable.
+- `default` + `reader` datasources configured to the same container.
+
+**Step-by-step flow:**
+1. Stub a report `Message` (feedback 259, then 260) with `JMS_IBM_MQMD_ApplIdentityData`,
+   `JMS_IBM_MQMD_AccountingToken` (24 bytes), `getJMSCorrelationIDAsBytes()`, `JMS_IBM_MQMD_MsgId`,
+   `JMS_IBM_MQMD_PutDate = "20260531"`, `JMS_IBM_MQMD_PutTime = "13300050"`.
+2. `handleReport(coa)` then `handleReport(cod)`.
+3. Read both rows back via the `reader` repository (immediately consistent — single instance).
+
+**Key assertions:**
+- Both rows carry the same `appl_identity_data`, `accounting_token_hex` (48 hex chars), the two byte[]
+  hex columns, and `put_timestamp_utc == 2026-05-31T13:30:00.500` (UTC wall-clock — no zone leakage).
+- `report_type_char == "A"` on the COA row and `"D"` on the COD row.
+
+**Guide cross-references:**
+- Section 2.4 / 2.7 — id propagation and report descriptor.
+- `research-output/phase-f-mqmd-field-recovery.md` — the (R)-all verdict + property keys + GMT→UTC rule.
+
 ---
 
 ## Unit scenarios (no broker, surefire scope)
@@ -158,3 +214,72 @@ resolves them by `MessageId`, and applies COA/COD flag updates atomically and id
 | `handleCoaReport` | A mocked `Message` with `JMSCorrelationID == originalMessageId` and `JMS_IBM_FEEDBACK == 259` produces a `DeliveryEvent(COA, 259, …)`; `coaReceived` is set; `codReceived` remains false. |
 | `handleCodReportRemovesWhenFullyConfirmed` | A mocked COD report (feedback 260) arriving after COA produces `DeliveryEvent(COD, 260, …)` and causes the fully-confirmed entry to be removed from the store (`findByMessageId → empty`, `pendingCount == 0`). |
 | `handleOrphanReport` | A mocked report whose `CorrelationId` is not in the store (feedback 2053, `MQRC_Q_FULL`) produces `DeliveryEvent(EXCEPTION, 2053, …)` with `originalMessageId` falling back to the `correlationId` itself. |
+
+**Note (issue #19):** these mocks stub only `getJMSCorrelationID()` + `getIntProperty(JMS_IBM_FEEDBACK)`.
+The MQMD extraction added in #19 is fully null-safe, so `handleReport()` still does not throw and the new
+`DeliveryEvent` MQMD fields are simply `null` here (the derived `reportTypeChar` still resolves from the
+classified type). This is the invariant locked by UT-05.
+
+---
+
+### UT-03 — GMT `PutDate`/`PutTime` → UTC `LocalDateTime` (no JVM-default-zone leakage)
+
+**Tier:** Compact
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/report/MqmdTimestampsTest.java`
+
+**Class under test:** `com.example.ibmmq.report.MqmdTimestamps`
+
+**What it proves (issue #19, AC3):** the MQMD `PutDate` (`YYYYMMDD`) + `PutTime` (`HHMMSSTH`, last two
+digits = hundredths of a second), both GMT, parse to the exact UTC wall-clock `LocalDateTime` with NO
+dependency on the JVM default zone.
+
+| Method | Assertion |
+|---|---|
+| `parsesGmtPutDateTimeToUtcWallClock` (`@CsvSource`, 4 rows) | `20260531/13300050 → 2026-05-31T13:30:00.500`; `…/00000000 → …T00:00:00`; `…/23595909 → …T23:59:59.090`; leap-day `20240229/23595999 → …T23:59:59.990` (hundredths correctly mapped to the fraction-of-second). |
+| `noJvmDefaultZoneLeakageAtDayBoundary` | A midnight/day-boundary value parsed under `America/Sao_Paulo` (UTC−3) and `Asia/Tokyo` (UTC+9) yields the **same** `LocalDateTime` and the **same** `Instant` (via explicit `ZoneOffset.UTC`), proving no default-zone leakage on a non-UTC CI box. |
+| `nullBlankAndMalformedAreNullSafe` | `null`/blank/wrong-length/non-numeric inputs all return `null` (never throw) — safe on the already-acked report path; `toInstantUtc(null) == null`. |
+
+---
+
+### UT-04 — `ReportType.toDomainChar()` projection (field #6)
+
+**Tier:** Compact
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/model/ReportTypeTest.java`
+
+**Class under test:** `com.example.ibmmq.model.ReportType`
+
+**What it proves (issue #19, field #6):** the pure derivation `COA → 'A'`, `COD → 'D'`, all other types
+→ the sentinel `DOMAIN_CHAR_OTHER` (`'?'`). MQ exposes no single-char report-type field — this is a
+projection of the already-classified type.
+
+| Method | Assertion |
+|---|---|
+| `coaAndCodMapToDomainChars` | `COA.toDomainChar() == 'A'`, `COD.toDomainChar() == 'D'`. |
+| `nonCoaCodMapToSentinel` (`@EnumSource`, 5 types) | `EXPIRATION`/`PAN`/`NAN`/`EXCEPTION`/`UNKNOWN` → `DOMAIN_CHAR_OTHER`. |
+| `sentinelIsDistinctFromRealChars` | the sentinel never collides with `'A'`/`'D'`. |
+
+---
+
+### UT-05 — `ReportDescriptor` MQMD extraction: null-safety + recovery
+
+**Tier:** Compact
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/report/ReportDescriptorTest.java`
+
+**Class under test:** `com.example.ibmmq.report.ReportDescriptor` (+ `HexBytes`)
+
+**What it proves (issue #19, AC2):** the six-field extractor recovers all values from the report's OWN
+descriptor when present, and degrades gracefully (every MQMD field `null`, never throwing) when MQMD read
+is not enabled — the invariant that keeps the already-acked report path safe and the unit-test mocks green.
+
+| Method | Assertion |
+|---|---|
+| `bareMockIsNullSafeAndDoesNotThrow` | A mock stubbing only feedback + correlationId → `from()` does not throw; all MQMD fields and hex accessors are `null`; the derived `reportTypeChar` still resolves (`'A'`). |
+| `throwingGetterIsSwallowed` | A getter that throws `JMSException` is treated as absent (`null`), never propagated. |
+| `recoversAllSixWhenPresent` | With all six getters stubbed, `applIdentityData`, `accountingToken` (+`accountingTokenHex == "010203ff"`), `correlationIdBytes`, `messageIdBytes`, `putTimestampUtc == 2026-05-31T13:30:00.500`, `reportTypeChar == 'A'` are all recovered. |
+| `hexStringFallbackForBytesProperty` | A `byte[]` MQMD property arriving as a hex `String` (`"0a0b0c"`) is defensively decoded to bytes. |
