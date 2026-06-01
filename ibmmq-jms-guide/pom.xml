@@ -22,6 +22,12 @@
              a linha 4.9.x do BOM termina em 4.9.4. -->
         <micronaut.version>4.9.4</micronaut.version>
         <micronaut.maven.plugin.version>4.11.6</micronaut.maven.plugin.version>
+        <!-- Versao do Micronaut Data alinhada pelo BOM micronaut-platform 4.9.4 (importa micronaut-data-bom
+             4.13.5). Fixada explicitamente porque os annotationProcessorPaths do maven-compiler-plugin NAO
+             resolvem versoes geridas por <dependencyManagement> — o path do micronaut-data-processor precisa
+             da versao literal (espelha o micronaut-inject-java, que ja fixa ${micronaut.version}). A
+             dependencia de runtime micronaut-data-jdbc continua sem versao (o BOM a gere). -->
+        <micronaut.data.version>4.13.5</micronaut.data.version>
 
         <!-- Cliente IBM MQ javax.jms / JMS 2.0. -->
         <ibm.mq.version>9.4.5.0</ibm.mq.version>
@@ -125,6 +131,19 @@
             <artifactId>micronaut-jdbc-hikari</artifactId>
             <scope>compile</scope>
         </dependency>
+        <!-- Micronaut Data JDBC: runtime support for @MappedEntity / @JdbcRepository — the read/write
+             split persistence of the APPEND-ONLY delivery_report audit table (issue #40). Version is
+             aligned by the micronaut-platform BOM. Scope is COMPILE (not runtime) on purpose: the
+             maven-dependency-plugin copies includeScope=runtime into target/dependency for the thin-jar
+             Docker launch, and compile ⊃ runtime, so this jar lands there. (The annotation PROCESSOR
+             below is build-only and is NOT copied — it sits on annotationProcessorPaths.)
+             NOTE: this is the ONLY Micronaut Data surface in the project. JdbcCorrelationStore stays raw
+             JDBC on the writer/default datasource — only the new audit read-model uses Micronaut Data. -->
+        <dependency>
+            <groupId>io.micronaut.data</groupId>
+            <artifactId>micronaut-data-jdbc</artifactId>
+            <scope>compile</scope>
+        </dependency>
         <!-- Driver JDBC do Postgres (versao fixada acima). Em producao prefira um backend transacional
              para o outbox; aqui o Postgres atende ao harness e ao padrao pending_message. -->
         <dependency>
@@ -188,6 +207,13 @@
             <version>${ibm.mq.testcontainer.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- NOTA: os ITs de persistencia do delivery_report (issue #40) usam o GenericContainer do CORE
+             (org.testcontainers.containers.GenericContainer) com a imagem postgres:16-alpine / bitnami,
+             construindo a URL JDBC a partir da porta mapeada. O Testcontainers 2.x NAO publica mais um
+             modulo `org.testcontainers:postgresql` separado (o PostgreSQLContainer dedicado nao existe na
+             linha 2.0.5 que travamos pela compatibilidade com Docker engine 29.x — ver CLAUDE.md), entao
+             ficamos no GenericContainer do core (mesmo padrao do CoaCodEndToEndIT com o MQContainer). -->
+        <!-- (sem dependencia adicional: GenericContainer/Network/Wait vivem no core 2.0.5 ja declarado) -->
         <!-- docker-java-transport-zerodep 3.7.1 (trazido pelo Testcontainers 2.0.5) referencia
              org.apache.commons.codec.Charsets, classe removida no commons-codec 1.17+. Fixamos a
              ultima versao que ainda a possui (1.16.1) para o container subir no teste de integracao. -->
@@ -248,6 +274,16 @@
                             <artifactId>micronaut-inject-java</artifactId>
                             <version>${micronaut.version}</version>
                         </path>
+                        <!-- Micronaut Data: gera os metadados das repositories (@JdbcRepository) e
+                             entidades (@MappedEntity) em tempo de compilacao. Coexiste com o
+                             micronaut-inject-java acima — AMBOS sao necessarios (adicionar um nao remove
+                             o outro). Apenas build-time: NAO vira dependencia de runtime. A versao e
+                             alinhada pelo modulo micronaut-data (BOM micronaut-platform). -->
+                        <path>
+                            <groupId>io.micronaut.data</groupId>
+                            <artifactId>micronaut-data-processor</artifactId>
+                            <version>${micronaut.data.version}</version>
+                        </path>
                     </annotationProcessorPaths>
                 </configuration>
             </plugin>
@@ -278,6 +314,14 @@
                     <includes>
                         <include>**/*IT.java</include>
                     </includes>
+                    <!-- O failsafe roda TODOS os *IT.java por padrao. O IT de replicacao fisica
+                         (DeliveryReportReplicationIT, @Tag("replication")) sobe DOIS containers Postgres
+                         (primary + standby por streaming replication) e e inerentemente sensivel a lag —
+                         caro e potencialmente instavel para a gate `verify` do CI. Excluimo-lo do `verify`
+                         padrao por tag; rode-o sob demanda com `mvn verify -Preplication` (o perfil abaixo
+                         limpa este excludedGroups). O IT de persistencia DETERMINISTICO
+                         (DeliveryReportPersistenceIT) roda num UNICO container e PERMANECE no `verify`. -->
+                    <excludedGroups>replication</excludedGroups>
                     <environmentVariables>
                         <!-- Docker 25+ (engine 29.x neste ambiente) exige API >= 1.40 e dropou versoes
                              antigas. O docker-java embutido no Testcontainers 1.20.x negocia para uma
@@ -298,4 +342,34 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- Perfil opt-in para o IT de replicacao fisica Postgres (primary + standby).
+             Por que existe: o `verify` padrao EXCLUI o grupo "replication" (ver o failsafe acima) porque
+             o teste de dois containers com streaming replication e caro e sensivel a lag — impróprio para
+             a gate de CI. Este perfil INVERTE o filtro: roda APENAS os ITs com @Tag("replication")
+             (<groups>) e sobrescreve o <excludedGroups> herdado com um sentinel (veja a nota abaixo), de
+             modo que `mvn verify -Preplication` exercita o read-from-reader com poll-with-timeout sob
+             demanda. Espelha o padrao -Pload descrito em src/test/CLAUDE.md. -->
+        <profile>
+            <id>replication</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <!-- Run ONLY the replication group. An EMPTY <excludedGroups></excludedGroups>
+                                 does NOT override the base <excludedGroups>replication</excludedGroups>:
+                                 Maven merges plugin configuration rather than blanking an inherited value, so
+                                 both filters would apply and run ZERO tests. The sentinel "none" matches no
+                                 @Tag, overriding the inherited exclusion so only @Tag("replication") ITs run. -->
+                            <groups>replication</groups>
+                            <excludedGroups>none</excludedGroups>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

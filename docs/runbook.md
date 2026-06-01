@@ -102,6 +102,128 @@ image defaults (`DEV.*`), not these `APP.*` objects.
 |---|---|---|
 | `IBM_MQ_PASSWORD` | Password for the `app` user (normal startup) | `passw0rd` |
 | `MQ_ADMIN_PASSWORD` | Password for the `admin` user (demo profile) | `passw0rd` |
+| `DATASOURCES_DEFAULT_URL` | Writer/primary JDBC URL (delivery-report audit writes + correlation store) | unset (no datasource) |
+| `DATASOURCES_DEFAULT_USERNAME` / `DATASOURCES_DEFAULT_PASSWORD` | Writer credentials | unset |
+| `DATASOURCES_READER_URL` | Reader/replica JDBC URL (audit read-model queries only) | unset |
+| `DATASOURCES_READER_USERNAME` / `DATASOURCES_READER_PASSWORD` | Reader credentials | unset |
+
+> The committed `application.yml` defines **no** `datasources` block on purpose — a bare run (and the
+> unit-test `ApplicationContext`) stays inert with no HikariCP pool. The datasources are supplied by the
+> environment (the `docker-compose.yml` Postgres pair below, or the k3s harness ConfigMap/Secret).
+
+### 2.5 Read/write-split persistence of delivery reports (issue #40, ADR-0005)
+
+Every COA/COD report the consumer processes is appended to a durable, queryable **`delivery_report`**
+audit table (one row per received report, **never deleted** — unlike the transient `pending_message`
+reconciliation ledger that is deleted once a message's COA+COD pair is confirmed). The persistence runs
+against an **Aurora-like read/write connection split**: a `default` (writer/primary) datasource and a
+`reader` (replica) datasource backed by a streaming-replicated primary + hot-standby.
+
+```mermaid
+flowchart LR
+    classDef actor fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+    classDef writer fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+    classDef reader fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+    classDef store fill:#e3d7ef,stroke:#7a5a9f,color:#1f2430;
+
+    RC["ReportMessageConsumer<br/>handleReport (COA/COD)"]:::actor
+
+    subgraph WR["datasources.default — WRITER"]
+        PRIM["Postgres primary<br/>delivery_report (append-only)<br/>UNIQUE(correlation_id, feedback)"]:::writer
+    end
+    subgraph RD["datasources.reader — READER"]
+        REPL["Postgres replica (hot-standby)<br/>delivery_report (read-only copy)"]:::reader
+    end
+    %% Subgraph containers explicitly colored (repo Mermaid rule: every shape, incl. meaningful subgraphs).
+    style WR fill:#eef2f7,stroke:#4a6fa5,color:#1f2430;
+    style RD fill:#eef5ea,stroke:#5a8f63,color:#1f2430;
+
+    Q["audit queries / projections"]:::store
+
+    RC e1@-->|"INSERT ... ON CONFLICT DO NOTHING<br/>(idempotent, best-effort)"| PRIM
+    PRIM e2@-->|"physical streaming replication"| REPL
+    Q e3@-->|"findByCorrelationId (eventually consistent)"| REPL
+
+    e1@{ animate: true }
+    e2@{ animate: true }
+    e3@{ animate: true }
+```
+
+Key properties (all in `ReportMessageConsumer` + the `com.example.ibmmq.persistence` package):
+
+- **Writer = `default`.** Naming the writer datasource `default` is load-bearing: `JdbcCorrelationStore`
+  injects a bare `DataSource` (resolves to `default`) and exactly-once reconciliation stays on the
+  writer — never on the lagging replica. The audit `INSERT`s also go to the writer.
+- **Idempotent + best-effort.** Reports are at-least-once (the queue manager redelivers; competing
+  consumers may double-process). The writer table carries `UNIQUE (correlation_id, feedback)` and the
+  insert is `INSERT ... ON CONFLICT DO NOTHING` — a duplicate is a silent no-op (no duplicate row, no
+  thrown exception). Because the report is acked under `AUTO_ACKNOWLEDGE` before processing, a persist
+  failure is logged at `WARN` (`[stage=AUDIT]`) and never breaks reconciliation.
+- **Reader is query-only.** No read whose result gates a write/dedup decision uses the reader — replica
+  lag would make a just-written row invisible for tens of ms. Reads from the reader are eventually
+  consistent; callers poll-with-timeout, never assert immediately after a write.
+- **HikariCP pool sizing** (k3s harness, `deploy/k3s/31-app-config.yaml`): `default` (writer) 4
+  connections/pod, `reader` (replica) 2 connections/pod; at report-consumer `replicas: 2` the worst-case
+  is 8 writer + 4 reader connections, comfortably under Postgres' default `max_connections=100`. Recompute
+  `writer = 4 x R`, `reader = 2 x R` if you scale replicas.
+
+#### Bring up the writer + replica pair (docker-compose)
+
+`ibmmq-jms-guide/docker-compose.yml` runs the broker **plus** a `postgres-primary` (writer, port 5432)
+and a `postgres-replica` (hot-standby by streaming replication, port 5433):
+
+```bash
+cd ibmmq-jms-guide
+docker compose up -d
+
+# Wait for the broker:
+docker compose logs -f mq                  # "Started queue manager"
+# Wait for the standby to catch up to the primary:
+docker compose logs -f postgres-replica    # "started streaming WAL from primary" /
+                                            # "database system is ready to accept read-only connections"
+```
+
+Point the app at the split (override `application.yml` via env or `-D`):
+
+```bash
+-Ddatasources.default.url=jdbc:postgresql://localhost:5432/correlation   # writer
+-Ddatasources.reader.url=jdbc:postgresql://localhost:5433/correlation    # reader/replica
+# username/password: corr / corrpass
+```
+
+Inspect the audit rows on each endpoint (the replica is a read-only copy):
+
+```bash
+# Rows on the WRITER (primary):
+docker exec ibmmq-pg-primary psql -U corr -d correlation \
+  -c 'SELECT report_type, feedback, correlation_id, observed_at FROM delivery_report ORDER BY observed_at;'
+
+# Same rows visible on the REPLICA by physical replication (eventually consistent):
+docker exec ibmmq-pg-replica psql -U corr -d correlation \
+  -c 'SELECT count(*) FROM delivery_report;'
+```
+
+#### Tests (issue #40, AC5)
+
+| Test | Containers | In default `verify`? | How to run |
+|---|---|---|---|
+| `DeliveryReportPersistenceIT` | 1 × `postgres:16-alpine` (deterministic, no replication) | **Yes** | `mvn -pl ibmmq-jms-guide verify` |
+| `DeliveryReportReplicationIT` (`@Tag("replication")`) | 2 × `bitnami/postgresql:16.4.0` (primary + standby) | **No — excluded** | `mvn -pl ibmmq-jms-guide verify -Preplication` |
+| `CorrelationStoreNamedDatasourcesSmokeTest` | none (no DB) | Yes (surefire) | `mvn -pl ibmmq-jms-guide test` |
+
+The replication IT is `@Tag`-gated and excluded from `verify` (failsafe `<excludedGroups>replication</excludedGroups>`)
+because a two-container streaming-replication test is expensive and lag-sensitive — improper for the CI
+gate. It asserts read-from-reader via poll-with-timeout. The deterministic persistence IT (one container,
+no replication) proves the persist/idempotency logic and **stays** in `verify`.
+
+#### k3s harness (live validation is HITL, issue #21)
+
+The k3s ConfigMap (`deploy/k3s/31-app-config.yaml`) already wires both datasources
+(`DATASOURCES_DEFAULT_*` → primary, `DATASOURCES_READER_*` → replica) and the Secret
+(`deploy/k3s/10-secrets.yaml`) carries both passwords. The **primary+replica StatefulSet manifest** and
+its live cluster validation are tracked as a **HITL follow-up (issue #21)** — see
+`deploy/k3s/README.md` ("Read/write-split datasources"). The application code, compose pair, and the
+deterministic + opt-in replication ITs are complete and verified here.
 
 ---
 

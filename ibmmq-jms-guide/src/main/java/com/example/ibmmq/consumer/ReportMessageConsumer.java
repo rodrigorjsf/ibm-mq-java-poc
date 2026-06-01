@@ -5,8 +5,10 @@ import com.example.ibmmq.correlation.CorrelationStore;
 import com.example.ibmmq.model.DeliveryEvent;
 import com.example.ibmmq.model.PendingMessage;
 import com.example.ibmmq.model.ReportType;
+import com.example.ibmmq.persistence.DeliveryReportWriteRepository;
 import com.example.ibmmq.report.ReportFeedbackRouter;
 import com.ibm.msg.client.wmq.WMQConstants;
+import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,15 +44,22 @@ public class ReportMessageConsumer {
     private final MqProperties props;
     private final CorrelationStore correlationStore;
     private final ReportFeedbackRouter feedbackRouter;
+    // Append-only audit persistence of each COA/COD report (issue #40), on the WRITER datasource.
+    // Nullable on purpose: the repository bean is gated on datasources.default.url, so it is ABSENT in
+    // unit/context tests that run a bare ApplicationContext with no datasources — there persistence is
+    // simply skipped and the consumer keeps working. Present in the k3s harness and the persistence IT.
+    private final DeliveryReportWriteRepository auditRepository;
 
     public ReportMessageConsumer(ConnectionFactory connectionFactory,
                                  MqProperties props,
                                  CorrelationStore correlationStore,
-                                 ReportFeedbackRouter feedbackRouter) {
+                                 ReportFeedbackRouter feedbackRouter,
+                                 @Nullable DeliveryReportWriteRepository auditRepository) {
         this.connectionFactory = connectionFactory;
         this.props = props;
         this.correlationStore = correlationStore;
         this.feedbackRouter = feedbackRouter;
+        this.auditRepository = auditRepository;
     }
 
     /**
@@ -103,6 +112,10 @@ public class ReportMessageConsumer {
                 LOG.info("[stage=CORRELATE] Correlacionado a mensagem original: originalMsgId={}, conhecido={}",
                         originalMessageId, pending.isPresent());
 
+                // Observation instant: shared by both the durable audit row and the DeliveryEvent below,
+                // so the persisted timestamp matches the event the caller sees.
+                Instant observedAt = Instant.now();
+
                 // Atualiza o estado da pendencia conforme o tipo de relatorio.
                 switch (type) {
                     case COA -> {
@@ -110,6 +123,9 @@ public class ReportMessageConsumer {
                         correlationStore.markCoaReceived(correlationId);
                         LOG.info("[stage=COA] Confirmacao de chegada (arrival) registrada: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
+                        // Append-only audit row (writer datasource). Best-effort: a persist failure must NOT
+                        // break the reconciliation path that follows (the report is already acked).
+                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt);
                         // Reconcilia tambem aqui: sob competing consumers, o COD pode ter sido processado
                         // ANTES do COA em outro pod — entao e o COA que completa o par. Independente de ordem.
                         reconcileIfComplete(correlationId, originalMessageId);
@@ -119,6 +135,7 @@ public class ReportMessageConsumer {
                         correlationStore.markCodReceived(correlationId);
                         LOG.info("[stage=COD] Confirmacao de entrega (delivery) registrada: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
+                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt);
                         reconcileIfComplete(correlationId, originalMessageId);
                     }
                     case EXPIRATION, NAN, EXCEPTION ->
@@ -128,7 +145,7 @@ public class ReportMessageConsumer {
                 }
 
                 DeliveryEvent event = new DeliveryEvent(
-                        type, feedback, correlationId, originalMessageId, Instant.now());
+                        type, feedback, correlationId, originalMessageId, observedAt);
 
                 LOG.info("[stage=REPORT-DONE] Relatorio processado: tipo={}, feedback={}, correlId={}, originalMsgId={}, conhecido={}",
                         type, feedback, correlationId, originalMessageId, pending.isPresent());
@@ -157,6 +174,48 @@ public class ReportMessageConsumer {
             LOG.info("[stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, "
                             + "originalMsgId={}, pendentesRestantes={}",
                     originalMessageId, correlationStore.pendingCount());
+        }
+    }
+
+    /**
+     * Appends one durable COA/COD audit row to {@code delivery_report} on the WRITER datasource —
+     * <b>best-effort</b>.
+     *
+     * <p>Three properties matter here, all by design:</p>
+     * <ul>
+     *   <li><b>Optional.</b> When no datasource is configured (unit/context tests) the repository bean
+     *       is absent ({@code auditRepository == null}) and we skip silently — the audit is a harness/
+     *       production feature, not a unit-test concern.</li>
+     *   <li><b>Idempotent.</b> The repository's {@code INSERT ... ON CONFLICT (correlation_id, feedback)
+     *       DO NOTHING} returns {@code 0} on a duplicate (report redelivered at-least-once, or two
+     *       competing consumers processing the same report) instead of throwing — no duplicate row, no
+     *       exception on the acked path (AC4).</li>
+     *   <li><b>Non-fatal.</b> The report was already acked under {@code AUTO_ACKNOWLEDGE} before
+     *       processing, so a persist failure (transient DB outage) must NOT propagate and abort the
+     *       reconciliation that follows. We catch, log at WARN, and continue — same best-effort posture
+     *       as the rest of the report path (a transacted/CLIENT_ACKNOWLEDGE store path is a documented
+     *       follow-up in ADR-0005).</li>
+     * </ul>
+     */
+    private void persistAudit(ReportType type, int feedback, String correlationId,
+                              String originalMessageId, Instant observedAt) {
+        if (auditRepository == null) {
+            return; // No datasource configured (e.g. unit/context test) — audit persistence is inert.
+        }
+        try {
+            int inserted = auditRepository.insertIfAbsent(
+                    correlationId, originalMessageId, type.name(), feedback, observedAt);
+            if (inserted == 0) {
+                LOG.debug("[stage=AUDIT] Report already persisted (idempotent duplicate): type={}, correlId={}",
+                        type, correlationId);
+            } else {
+                LOG.info("[stage=AUDIT] Report persisted (delivery_report): type={}, feedback={}, correlId={}, originalMsgId={}",
+                        type, feedback, correlationId, originalMessageId);
+            }
+        } catch (RuntimeException e) {
+            // Best-effort: the report is already acked; never break reconciliation on a persist failure.
+            LOG.warn("[stage=AUDIT] Failed to persist report (best-effort, ignored): type={}, correlId={}, cause={}",
+                    type, correlationId, e.getMessage());
         }
     }
 }

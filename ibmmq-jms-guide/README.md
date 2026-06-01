@@ -62,17 +62,39 @@ JAVA_HOME=/home/rodrigo/.local/jdk25 /home/rodrigo/.local/maven-current/bin/mvn 
 
 ## Subir um broker local (docker-compose)
 
+O `docker-compose.yml` sobe o broker **e** um par Postgres primary/replica (read/write split do issue
+#40): `postgres-primary` (writer, 5432) + `postgres-replica` (hot-standby por streaming replication,
+5433).
+
 ```bash
 docker compose up -d
-docker compose logs -f mq        # aguarde "Started queue manager"
+docker compose logs -f mq                  # aguarde "Started queue manager"
+docker compose logs -f postgres-replica    # aguarde "started streaming WAL from primary"
 # Console web: https://localhost:9443/ibmmq/console
-docker compose down              # 'down -v' descarta o volume de dados
+docker compose down              # 'down -v' descarta os volumes de dados
 ```
 
 Os arquivos `mqsc/10-channel-auth.mqsc` e `mqsc/20-queues.mqsc` sao montados em `/etc/mqm` e
 aplicados na criacao do QMgr (setup de **producao** com objetos `APP.*`, CONNAUTH e CHLAUTH).
 O **IT**, por confiabilidade, usa os objetos `DEV.*` default da imagem (usuario `app`
 pre-autorizado a `DEV.**`).
+
+## Delivery-report persistence with a read/write split (issue #40, ADR-0005)
+
+Every COA/COD report is persisted into an append-only **`delivery_report`** audit table via Micronaut
+Data JDBC, against an Aurora-like writer/reader connection split: the `default` (writer/primary)
+datasource receives the idempotent `INSERT`s (`ON CONFLICT DO NOTHING`, `UNIQUE(correlation_id,
+feedback)`) and the `reader` (replica) datasource serves the read-model queries. Persistence is
+best-effort (it never breaks reconciliation on the already-acked path). Operational details, pool sizing,
+and the tests (`DeliveryReportPersistenceIT` in `verify`; `DeliveryReportReplicationIT` opt-in via
+`-Preplication`) are documented in **`docs/runbook.md` §2.5**.
+
+```bash
+# Point the app at the split (override application.yml):
+-Ddatasources.default.url=jdbc:postgresql://localhost:5432/correlation   # writer
+-Ddatasources.reader.url=jdbc:postgresql://localhost:5433/correlation    # reader/replica
+# username/password: corr / corrpass
+```
 
 ## Demo gated COA/COD (um comando, contra o broker local)
 
