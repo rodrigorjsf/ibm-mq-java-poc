@@ -32,6 +32,8 @@ docs/
   handoffs/                             session handoff notes
 research-output/                        bytecode-verified fact sheet + raw research
 research-prompt-ibmmq-jms-micronaut.md  the original brief
+ai/
+  skills/jms-mq-delivery-report-analyzer/  project-agnostic COA/COD review skill (matrix × dimensions)
 CLAUDE.md                               project guide: validated facts, env quirks, reference-doc rule
 ```
 
@@ -60,6 +62,15 @@ A producer sends a persistent `TextMessage` requesting **COA** (confirm on arriv
 - **Report-PUT authority (2035):** a low-privilege user lacks context authority (`+setall`), so the queue manager's COA/COD report PUT fails with `MQRC_NOT_AUTHORIZED (2035)` and the report silently lands on the DLQ. Grant `SET AUTHREC ... AUTHADD(PUT, SETALL)`.
 - **Report persistence** is inherited from the original message — it is *not* non-persistent by default.
 - **Testcontainers + modern Docker:** use Testcontainers 2.x (older docker-java fails against Docker engine 29.x); pin `commons-codec:1.16.1` for the zerodep transport.
+
+## AI assets
+
+[`ai/`](ai/README.md) holds reusable, project-agnostic AI assets. The first is the
+[`jms-mq-delivery-report-analyzer`](ai/skills/jms-mq-delivery-report-analyzer/SKILL.md)
+skill — it drives a rigorous LLM review of *any* IBM MQ + JMS 2.0 COA/COD application
+(four-cell reviewer matrix × nine check dimensions, a grill-me preamble, and the
+distributed ~10k-rpm lens), reporting each finding as WHERE / WHY / IMPACT / SOLUTIONS.
+It carries no repo-specific identifiers and drops cleanly into any messaging codebase.
 
 ## Documentation language
 
