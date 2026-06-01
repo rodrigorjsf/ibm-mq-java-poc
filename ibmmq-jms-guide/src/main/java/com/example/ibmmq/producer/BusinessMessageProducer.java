@@ -8,6 +8,7 @@ import com.ibm.mq.constants.MQConstants;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import javax.jms.ConnectionFactory;
 import javax.jms.DeliveryMode;
@@ -90,12 +91,25 @@ public class BusinessMessageProducer {
             // este id virar o CorrelationId dos relatorios.
             String messageId = message.getJMSMessageID();
 
-            correlationStore.register(PendingMessage.newlySent(messageId, businessKey, jsonPayload));
+            // MDC: vincula messageId e correlationId para que esta primeira etapa do ciclo de vida
+            // ja carregue os mesmos ids que aparecerao nas etapas COA/COD. Como o default IBM MQ e
+            // MQRO_COPY_MSG_ID_TO_CORREL_ID, o CorrelationId do relatorio futuro sera ESTE messageId —
+            // por isso vinculamos correlationId = messageId aqui (a chave que fecha o ciclo).
+            MDC.put("messageId", messageId);
+            MDC.put("correlationId", messageId);
+            try {
+                correlationStore.register(PendingMessage.newlySent(messageId, businessKey, jsonPayload));
 
-            LOG.info("Mensagem de negocio enviada: businessKey={}, messageId={}, replyTo={}",
-                    businessKey, messageId, props.getReportQueue());
+                LOG.info("[stage=PRODUCE] Mensagem de negocio enviada: businessKey={}, messageId={}, replyTo={}",
+                        businessKey, messageId, props.getReportQueue());
 
-            return messageId;
+                return messageId;
+            } finally {
+                // Limpa o MDC antes de devolver a thread (virtual/carrier) ao pool: sob ~10k rpm uma
+                // thread reutilizada nao pode vazar os ids desta mensagem para a proxima.
+                MDC.remove("messageId");
+                MDC.remove("correlationId");
+            }
         } catch (Exception e) {
             throw new IllegalStateException("Falha ao enviar mensagem de negocio: " + businessKey, e);
         }

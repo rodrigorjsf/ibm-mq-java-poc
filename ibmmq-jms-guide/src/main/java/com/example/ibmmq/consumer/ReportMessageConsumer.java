@@ -10,6 +10,7 @@ import com.ibm.msg.client.wmq.WMQConstants;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -90,29 +91,60 @@ public class ReportMessageConsumer {
             Optional<PendingMessage> pending = correlationStore.findByMessageId(correlationId);
             String originalMessageId = pending.map(PendingMessage::messageId).orElse(correlationId);
 
-            // Atualiza o estado da pendencia conforme o tipo de relatorio.
-            switch (type) {
-                case COA -> correlationStore.markCoaReceived(correlationId);
-                case COD -> {
-                    correlationStore.markCodReceived(correlationId);
-                    // Com COA+COD confirmados, a entrega esta completa: pode-se remover a pendencia.
-                    correlationStore.findByMessageId(correlationId)
-                            .filter(PendingMessage::isFullyConfirmed)
-                            .ifPresent(p -> correlationStore.remove(correlationId));
+            // MDC: correlationId = JMSCorrelationID do relatorio; messageId = MessageId original
+            // derivado pela correlacao. Vinculamos ANTES das etapas para que toda linha (classify,
+            // correlate, COA/COD, reconcile) carregue os mesmos ids — fechando a rastreabilidade
+            // ponta-a-ponta: o mesmo id do PRODUCE aparece aqui no relatorio.
+            MDC.put("messageId", originalMessageId);
+            MDC.put("correlationId", correlationId);
+            try {
+                LOG.info("[stage=CLASSIFY] Relatorio classificado: tipo={}, feedback={}, correlId={}",
+                        type, feedback, correlationId);
+                LOG.info("[stage=CORRELATE] Correlacionado a mensagem original: originalMsgId={}, conhecido={}",
+                        originalMessageId, pending.isPresent());
+
+                // Atualiza o estado da pendencia conforme o tipo de relatorio.
+                switch (type) {
+                    case COA -> {
+                        // COA = Confirmation On Arrival: a mensagem CHEGOU na fila de destino.
+                        correlationStore.markCoaReceived(correlationId);
+                        LOG.info("[stage=COA] Confirmacao de chegada (arrival) registrada: correlId={}, originalMsgId={}",
+                                correlationId, originalMessageId);
+                    }
+                    case COD -> {
+                        // COD = Confirmation On Delivery: a mensagem foi CONSUMIDA destrutivamente.
+                        correlationStore.markCodReceived(correlationId);
+                        LOG.info("[stage=COD] Confirmacao de entrega (delivery) registrada: correlId={}, originalMsgId={}",
+                                correlationId, originalMessageId);
+                        // Com COA+COD confirmados, a entrega esta completa: reconcilia e remove a pendencia.
+                        correlationStore.findByMessageId(correlationId)
+                                .filter(PendingMessage::isFullyConfirmed)
+                                .ifPresent(p -> {
+                                    correlationStore.remove(correlationId);
+                                    LOG.info("[stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, "
+                                                    + "originalMsgId={}, pendentesRestantes={}",
+                                            originalMessageId, correlationStore.pendingCount());
+                                });
+                    }
+                    case EXPIRATION, NAN, EXCEPTION ->
+                            LOG.warn("[stage=PROBLEM] Relatorio de problema: tipo={}, feedback={}, correlId={}",
+                                    type, feedback, correlationId);
+                    default -> { /* PAN/UNKNOWN: apenas registra no resumo abaixo. */ }
                 }
-                case EXPIRATION, NAN, EXCEPTION ->
-                        LOG.warn("Relatorio de problema: tipo={}, feedback={}, correlId={}",
-                                type, feedback, correlationId);
-                default -> { /* PAN/UNKNOWN: apenas registra abaixo. */ }
+
+                DeliveryEvent event = new DeliveryEvent(
+                        type, feedback, correlationId, originalMessageId, Instant.now());
+
+                LOG.info("[stage=REPORT-DONE] Relatorio processado: tipo={}, feedback={}, correlId={}, originalMsgId={}, conhecido={}",
+                        type, feedback, correlationId, originalMessageId, pending.isPresent());
+
+                return event;
+            } finally {
+                // Limpa o MDC antes de devolver a thread ao pool (ver nota do produtor): sob ~10k rpm
+                // uma thread reutilizada nao pode vazar os ids deste relatorio para o proximo.
+                MDC.remove("messageId");
+                MDC.remove("correlationId");
             }
-
-            DeliveryEvent event = new DeliveryEvent(
-                    type, feedback, correlationId, originalMessageId, Instant.now());
-
-            LOG.info("Relatorio processado: tipo={}, feedback={}, correlId={}, originalMsgId={}, conhecido={}",
-                    type, feedback, correlationId, originalMessageId, pending.isPresent());
-
-            return event;
         } catch (Exception e) {
             throw new IllegalStateException("Falha ao processar relatorio de entrega", e);
         }
