@@ -2,7 +2,7 @@
 
 Production-grade proof of concept for integrating **Java 25 / Micronaut 4** with **IBM MQ** over **JMS 2.0 (`javax.jms`)**, with deep focus on **COA / COD delivery reports** (Confirmation On Arrival / Confirmation On Delivery).
 
-The repository ships three things: a **runnable Maven project**, an **exhaustive technical guide** (in Brazilian Portuguese), and the **validated research** the implementation is built on.
+The repository ships three things: a **runnable Maven project**, an **exhaustive technical guide** (canonical English; the original Brazilian-Portuguese text is retained under `docs/i18n/` as the standalone HTML's pt-BR source), and the **validated research** the implementation is built on.
 
 ## Stack
 
@@ -27,7 +27,8 @@ ibmmq-jms-guide/                       runnable Micronaut + IBM MQ Maven project
   mqsc/                                 production-style MQSC (channel/auth, queues, DLQ, backout)
   docker-compose.yml
 docs/
-  guia-ibmmq-jms-micronaut.md           full technical guide (pt-BR, ~9.4k words)
+  guide-ibmmq-jms-micronaut.md          canonical technical guide (English, ~9.4k words)
+  i18n/guia-ibmmq-jms-micronaut.md      pt-BR source feeding the standalone HTML
   handoffs/                             session handoff notes
 research-output/                        bytecode-verified fact sheet + raw research
 research-prompt-ibmmq-jms-micronaut.md  the original brief

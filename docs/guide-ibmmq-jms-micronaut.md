@@ -1,0 +1,1182 @@
+# Production Guide — Java 25 / Micronaut 4 + IBM MQ over JMS 2.0, focused on COA/COD delivery reports
+
+> Technical guide, from basic to advanced, for a software engineer who **does not know IBM MQ** but must integrate and
+> operate it in a **real, critical, high-concurrency environment** (microservices). The guiding thread is the reliable delivery
+> of messages and their **proof of delivery** via **COA** (Confirmation On Arrival) and *
+*COD** (Confirmation On Delivery) reports.
+
+**Locked stack of this guide:**
+
+| Item                | Version / Coordinate                                                  | Note                                                                                                                                                |
+|---------------------|----------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Production runtime  | **Java 25** (LTS)                                                    | Amazon Corretto 25 (`maven.compiler.release=25`). Java 25 is LTS and documented for MQ 9.4.x; run with `--enable-native-access=ALL-UNNAMED` and avoid `TLS_RSA_*`. See ADR `docs/adr/0001-java-25-runtime.md`.                                       |
+| Framework           | **Micronaut 4.9.4** (BOM `io.micronaut.platform:micronaut-platform`) | The 4.9.x line of the BOM **ends at 4.9.4** — `4.9.9` **does not exist** in the platform BOM. Maven plugin `io.micronaut.maven:micronaut-maven-plugin:4.11.6`. |
+| MQ client           | **`com.ibm.mq:com.ibm.mq.allclient:9.4.5.0`**                        | Namespace **`javax.jms`** (JMS 2.0). **CD** line (see the CD×LTS note in Section 1).                                                                           |
+| JMS pool            | **`org.messaginghub:pooled-jms:2.0.9`**                              | The 2.x line is still `javax.jms` (3.x is already `jakarta.jms`).                                                                                                   |
+| Image (tests/dev)   | **`icr.io/ibm-messaging/mq:9.4.5.0-r2`**                             | IBM MQ Advanced for Developers. The "pure" `9.4.5.0` tag **does not exist** (format `9.4.<fixpack>-r<N>`).                                                     |
+
+> ℹ️ **Note — language convention.** All prose, headings, callouts, and captions are in English. *
+*Code identifiers stay in English** (convention); code **comments** are also in English.
+> Well-known terms (Queue Manager, channel, syncpoint, etc.) are kept as-is, with an explanation at first
+> occurrence.
+
+> ℹ️ **Note — reference project.** All code excerpts in this guide are extracted from a **real, compilable** *
+*Micronaut project** in `ibmmq-jms-guide/`. File references are relative to that folder. Where a topic (XA,
+> full mTLS, Virtual Threads) does **not** have compilable code in the project, the excerpt is presented as **illustrative** and
+> flagged as such.
+
+---
+
+## Table of Contents
+
+1. [Section 1 — Fundamentals and Concepts](#section-1--fundamentals-and-concepts)
+2. [Section 2 — Delivery Reports: COA / COD (exhaustive reference)](#section-2--delivery-reports-coa--cod-exhaustive-reference)
+3. [Section 3 — Environment Configuration (properties deep dive)](#section-3--environment-configuration-properties-deep-dive)
+4. [Section 4 — Practical Implementation (real, compilable code)](#section-4--practical-implementation-real-compilable-code)
+5. [Section 5 — Testing and Resilience (real environment)](#section-5--testing-and-resilience-real-environment)
+6. [Appendices](#appendices)
+
+## Section 1 — Fundamentals and Concepts
+
+This section answers the "what is it" and the "why". If you have never operated IBM MQ, read everything: the concepts here are
+a prerequisite to understanding why COA/COD exist and how they flow.
+
+### 1.1 IBM MQ Architecture
+
+IBM MQ is a **message broker** (message intermediary) oriented around **queues** and based on the
+*store-and-forward* paradigm: the producer hands the message to the broker, which **persists** it and holds it until the consumer
+retrieves it. Producer and consumer are **decoupled in time** — they do not need to be online at the same time.
+
+**Queue Manager (QMgr) — "queue manager".** It is the central component, the MQ server. Each QMgr has a name (e.g.:
+`QM1`), owns the queues, the channels, the recovery log, and the security definitions. An application always connects
+*to a QMgr*, not "to a queue" directly.
+
+**Queues — four types you need to distinguish:**
+
+| Queue type             | What it is                                                                                                                       | When it appears in this guide                                                                          |
+|------------------------|----------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
+| **Local** (`QLOCAL`)   | Physical queue that **resides on this QMgr**; messages are effectively stored here.                                              | Business queue, report queue, DLQ, backout queue.                                                     |
+| **Remote** (`QREMOTE`) | A **pointer** to a local queue that lives on **another** QMgr; MQ forwards (transmission queue + channel) to the real target.     | Out of practical scope (we do not use multi-QMgr routing here), but you will see the concept when doing HA. |
+| **Alias** (`QALIAS`)   | An **alias** for another queue (local or remote); useful for indirection/security without changing the application.             | Cited as a good decoupling practice.                                                                  |
+| **Model** (`QMODEL`)   | A **template**: on opening, a **dynamic queue** is generated on demand (e.g.: temporary reply queues).                          | The concept behind `JMSContext.createTemporaryQueue()`.                                               |
+
+**Channels — "channels".** They are the communication conduits. The type relevant to a client application is the **SVRCONN** (
+server-connection): it is the channel through which a JMS client in **CLIENT mode** connects to the QMgr over TCP/IP. The channel carries
+security rules (CHLAUTH, TLS) and identity (MCAUSER).
+
+**Listener and port.** The QMgr runs a TCP **listener** (default port **1414**) that accepts inbound connections on the
+channels. Without an active listener on the port, no client connects (reason code `2538 HOST_NOT_AVAILABLE`).
+
+**MCA (Message Channel Agent).** It is the agent that moves messages across a channel. On an SVRCONN, the server-side MCA
+represents the client application inside the QMgr and runs under an **identity** (the `MCAUSER`), which is what the
+authorization checks evaluate.
+
+**MQMD (Message Descriptor).** It is the low-level header of every MQ message (MessageId, CorrelationId, Persistence,
+**Report**, **Feedback**, ReplyToQ, Expiry, etc.). You do not manipulate it directly in JMS — the JMS client fills it
+from the `JMS_IBM_*` properties. **COA/COD live here:** the MQMD's `Report` field says "I want COA/COD", and the report's
+`Feedback` field says "this is a COA/COD".
+
+#### Textual diagram — path of a message in CLIENT mode
+
+```mermaid
+flowchart LR
+    APP["Java application (JMS)<br/>com.ibm.mq.allclient<br/>(CLIENT mode)"]
+    subgraph QM1["Queue Manager (QM1)"]
+        direction TB
+        LIS["Listener:1414 → MCA<br/>(MCAUSER='app')"]
+        BQ["APP.BUSINESS.QUEUE<br/>(QLOCAL, persistent)"]
+        CONS["business consumer"]
+        RQ["APP.REPORT.QUEUE<br/>(COA/COD)"]
+        COA["COA generated here<br/>(on ARRIVAL)"]
+        COD["COD generated here<br/>(on CONSUMPTION)"]
+        LIS e4@--> BQ
+        BQ e2@-->|"destructive GET"| CONS
+        CONS e3@-->|"reports → ReplyToQ"| RQ
+        BQ -.-> COA
+        CONS -.-> COD
+    end
+    APP e1@-->|"SVRCONN channel (e.g. APP.SVRCONN) · TCP/IP 1414"| LIS
+
+    e1@{ animate: true }
+    e2@{ animate: true }
+    e3@{ animate: true }
+    e4@{ animate: true }
+
+    classDef queue fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+    classDef proc fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+    classDef report fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+
+    class APP,CONS,LIS proc;
+    class BQ,RQ queue;
+    class COA,COD report;
+    style QM1 fill:#dfe5ea,stroke:#2f5d6e,color:#1f2430;
+```
+
+The key point: in **CLIENT mode** the application does not have the QMgr embedded; everything passes through the SVRCONN channel's TCP socket. (The
+alternative mode, **BINDINGS**, requires the application on the same machine as the QMgr and uses shared memory — it is not the microservices
+scenario we deal with here.)
+
+### 1.2 JMS 2.0 vs. native IBM MQ (MQI)
+
+IBM MQ has its own native API, the **MQI** (Message Queue Interface), low-level, with verbs such as `MQCONN`,
+`MQOPEN`, `MQPUT`, `MQGET`. It is powerful and exposes **everything** (including the raw MQMD), but it is verbose, procedural, and couples the
+code to MQ.
+
+**JMS (Java Message Service) 2.0** (namespace `javax.jms`, brought in by `com.ibm.mq.allclient`) is the standard Java
+abstraction for messaging. Why use it on Java 25?
+
+- **Portability and familiarity:** the same conceptual API as other JMS brokers; the team does not need to learn MQI.
+- **JMS 2.0 simplifications:** the `JMSContext` unifies `Connection` + `Session` into a single, **`AutoCloseable`
+  ** object (it closes connection and session at once in a *try-with-resources*); `JMSProducer` and `JMSConsumer` are lightweight and
+  fluent objects; messages can be created directly from the context.
+- **Less *boilerplate*, fewer resource leaks:** the *auto-close* eliminates the entire class of "I forgot to
+  close the Session" bugs.
+
+```java
+// JMS 2.0: a single AutoCloseable object covers connection + session.
+try(JMSContext context = connectionFactory.createContext(JMSContext.AUTO_ACKNOWLEDGE)){
+JMSProducer producer = context.createProducer();
+    producer.
+
+send(queue, context.createTextMessage("payload"));
+        } // connection and session closed automatically here
+```
+
+**Where the JMS abstraction "leaks" (and why this matters for COA/COD).** Standard JMS **does not know** the concept of
+MQ delivery report. COA/COD are a **proprietary** IBM MQ feature, exposed through **IBM extensions**: the
+`JMS_IBM_Report_*` properties (to request the report) and `JMS_IBM_Feedback` (to read it), plus the integer constants
+`MQRO_*`/`MQFB_*`. In other words: to do COA/COD you **step outside generic JMS** and use `com.ibm.msg.client.wmq.WMQConstants`
+and `com.ibm.mq.constants.MQConstants`. This is the main abstraction "leak" that this guide explores.
+
+> ⚠️ **Attention — architecture decision: manual JMS, not `micronaut-jms`.** This guide does **not** use the declarative module
+`io.micronaut.jms` (with `@JMSListener`). Technical reason: the 4.x line of that module is **jakarta-only** (`jakarta.jms`) and *
+*abstracts away the `JMSContext`** — exactly the object we need to control by hand to manipulate the report properties.
+> Micronaut comes in here **only** for DI, `@ConfigurationProperties`/`@Factory`, lifecycle, and injection of the
+`ConnectionFactory`/pool. *Trade-off:* you lose the declarative `@JMSListener` (you write the consumption loops), but
+> you gain the full control required by COA/COD.
+
+### 1.3 CD vs. LTS note (V.R.M.F release model)
+
+IBM MQ uses the `V.R.M.F` (Version.Release.Modification.Fixpack) version scheme. This guide's version, **`9.4.5.0`**,
+has the **third digit ≠ 0**, so it belongs to the **CD (Continuous Delivery)** line: it delivers new *features* with each
+release, with a **shorter support window**. The **LTS (Long Term Support)** line corresponds to the third digit `0` (
+e.g.: `9.4.0.x`) and prioritizes long-term stability/patches.
+
+> ℹ️ **Note.** The trade-off is: **CD** = the latest features, short patch/support cycle; **LTS** = stability and
+> extended support, older features. The project pins **`9.4.5.0` (CD)** because it is the real dependency in use. The production
+> runtime is **Java 25** (Amazon Corretto): MQ 9.4.x **documents Java 25** (with operational guidance —
+> `TLS_RSA_*` disabled, native-access warning), and the client runs on it with `--enable-native-access=ALL-UNNAMED`. The 9.3
+> was discarded because Java 21+ requires MQ 9.4.x (the bundled Semeru is 21; the client, however, executes on Java 25).
+
+### 1.4 Inventory of required MQ objects
+
+For this guide's COA/COD flow you need, in the QMgr, the following objects (real MQSC definitions in
+`mqsc/20-queues.mqsc` and `mqsc/10-channel-auth.mqsc`):
+
+| Object               | Type                   | Role                                                                                   |
+|----------------------|------------------------|----------------------------------------------------------------------------------------|
+| `QM1`                | Queue Manager          | The MQ server the application connects to.                                             |
+| `APP.SVRCONN`        | Channel `SVRCONN`      | Client connection channel for the applications.                                        |
+| `APP.BUSINESS.QUEUE` | `QLOCAL` (persistent)  | Business queue — destination of the messages. Defines `BOTHRESH`/`BOQNAME` (poison message). |
+| `APP.REPORT.QUEUE`   | `QLOCAL` (persistent)  | **Dedicated** report queue — receives COA/COD via `JMSReplyTo`.                        |
+| `APP.BACKOUT.QUEUE`  | `QLOCAL`               | Backout queue — receives the message after exceeding `BOTHRESH` rollbacks.            |
+| `APP.DLQ`            | `QLOCAL`               | The QMgr's Dead Letter Queue (`ALTER QMGR DEADQ('APP.DLQ')`).                          |
+| Listener (1414)      | —                      | Accepts TCP connections on the channels (created by the dev image).                   |
+
+```mqsc
+* Real excerpt from mqsc/20-queues.mqsc — business queue with backout (poison message).
+* BOTHRESH(5): after 5 backouts (rollbacks), the "poisoned" message is moved...
+* BOQNAME(APP.BACKOUT.QUEUE): ...to the backout queue, instead of stalling the queue.
+DEFINE QLOCAL('APP.BUSINESS.QUEUE') +
+       DESCR('Fila de negocio do guia COA/COD') +
+       DEFPSIST(YES) +
+       BOTHRESH(5) BOQNAME('APP.BACKOUT.QUEUE') +
+       REPLACE
+```
+
+> ℹ️ **Note — `APP.*` (production) × `DEV.*` (test) split.** The `mqsc/` files define the **`APP.*`** objects (production
+> setup, with CONNAUTH/CHLAUTH). The `application.yml` and the integration test, however, use the dev image's defaults *
+*`DEV.QUEUE.1`/`DEV.QUEUE.2`** (with the `app` user pre-authorized to `DEV.**`). This
+> choice is deliberate: the IT uses `DEV.*` for reliability (objects guaranteed to exist in the image), while the guide
+> documents the `APP.*` setup you would take to production. Keep this distinction in mind when reading the examples.
+
+> ✅ **Good practice — dedicated report queue.** Use an **exclusive** queue for reports (`APP.REPORT.QUEUE`), separate
+> from the business queue. That way the report consumer does not compete with the business one, *sizing* and retention are
+> independent, and you do not pollute the business queue with control messages.
+>
+> ❌ **Bad practice — pointing `JMSReplyTo` at the business queue itself.** The COA/COD would come back to the business queue
+> and the business consumer would try to process them as requests. **Observable symptom:** "strange" messages (empty body
+> or with a report header) being processed as business, parsing breaking, and correlation impossible. Under high
+> concurrency, this becomes an error *loop* and fills up the backout queue/DLQ.
+
+## Section 2 — Delivery Reports: COA / COD (exhaustive reference)
+
+This is the central section of the guide. *Delivery reports* are messages **generated automatically by
+IBM MQ** (or by the consuming application, in the case of PAN/NAN) that report the **state of an original message** throughout
+its life cycle. They are the foundation for building **proof of delivery** and reconciliation in critical systems.
+
+### 2.1 The five report types
+
+| Report                       | Acronym | What it confirms                                                                                                                            | Who generates it                          | When                                                |
+|------------------------------|---------|--------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------|------------------------------------------------------|
+| **Confirmation On Arrival**  | **COA** | The message **arrived** (was put) on the destination queue.                                                                                | Queue Manager owning the destination queue. | At the `PUT` to the destination queue (see timing × transaction). |
+| **Confirmation On Delivery** | **COD** | The message was **destructively retrieved** (consumed) by the application.                                                                 | Queue Manager.                            | At the destructive `GET` (see timing × transaction).        |
+| **Exception**                | —       | The message **could not** be delivered/processed (e.g.: queue full, PUT inhibited, no authority).                                          | Queue Manager.                            | When the exception condition occurs.                 |
+| **Expiration**               | —       | The message **expired** (its `Expiry` elapsed) before being consumed.                                                                      | Queue Manager.                            | When the expired message is discarded.                    |
+| **PAN / NAN**                | PAN/NAN | **Positive/Negative Action Notification**: the consuming application processed the business logic with **success** (PAN) or **failure** (NAN). | **The consuming application** (not the QMgr). | When the app decides to issue the notification.            |
+
+> ℹ️ **Note — PAN/NAN belong to the application, not the broker.** COA/COD/Exception/Expiration are the QMgr's responsibility. *
+*PAN/NAN** are *application* semantics: the broker does not know whether your business rule "succeeded"; it is your consuming app
+> that must explicitly emit the PAN or NAN report (generating a report message). That is why `MQRO_PAN`/
+`MQRO_NAN` request the report, but its generation depends on the consumer code.
+
+### 2.2 When to use — and when NOT to use
+
+Each report is an **extra message** that travels, is persisted, and must be consumed. Under high concurrency, this *
+*doubles** (COA+COD = 2 control messages per business message) or triples the I/O volume.
+
+> ✅ **Good practice — use COA/COD where proof of delivery has business value.** Payments, orders, regulatory
+> events, any flow where "the message was silently lost" is an incident. There, the extra cost pays for itself.
+>
+> ❌ **Bad practice — enabling COA+COD+Exception+Expiration "just in case" on all high-volume traffic.** You triple
+> the I/O and latency, fill up the report queue, and the report consumer becomes a bottleneck. **Observable symptom:**
+*throughput* plummeting, `APP.REPORT.QUEUE` with growing depth (backlog), QMgr disk saturating. Enable
+> reports **selectively**, by flow type.
+
+### 2.3 Generation mechanics — it is the MESSAGE that requests, not the QMgr
+
+This is the concept most misunderstood by those coming from other brokers: **there is no "turn COA/COD on at the Queue
+Manager" button.** What requests the report is the **original message itself**, through two things:
+
+1. **The report options in the MQMD** (`Report` field), which in JMS you set via the `JMS_IBM_Report_*` properties
+   passing the corresponding `MQRO_*` integer.
+2. **The `JMSReplyTo`** — defines the `ReplyToQ`/`ReplyToQMgr`, that is, **where** the report should be sent. Without
+   `JMSReplyTo`, the QMgr has no destination and the report is not generated (or goes to the DLQ).
+
+```java
+// Real excerpt from ibmmq-jms-guide/src/main/java/com/example/ibmmq/producer/BusinessMessageProducer.java
+message.setJMSReplyTo(reportQueue); // WHERE the reports go (ReplyToQ)
+
+// The Java field is UPPER_SNAKE (JMS_IBM_REPORT_COA) and the value passed is the MQRO_* integer.
+message.
+
+setIntProperty(WMQConstants.JMS_IBM_REPORT_COA, MQConstants.MQRO_COA); // requests COA
+message.
+
+setIntProperty(WMQConstants.JMS_IBM_REPORT_COD, MQConstants.MQRO_COD); // requests COD
+```
+
+**What is actually configured on the QMgr** (not the reports themselves): the **existence** of the report queue, its persistence,
+the DLQ, the **authorities** (crucial — see the `+SETALL` *gotcha* in Section 5), and `Expiry` policies. The QMgr is the
+infrastructure; the *intent* to receive a report lives in the message.
+
+> ⚠️ **Caution — `WMQConstants` vs. `MQConstants` (common mistake).** The JMS **request** properties (
+`JMS_IBM_REPORT_COA`, `JMS_IBM_FEEDBACK`...) live in **`com.ibm.msg.client.wmq.WMQConstants`** — the **field name** is
+> UPPER_SNAKE (`JMS_IBM_REPORT_COA`) and the **String value** is mixed-case (`"JMS_IBM_Report_COA"`). The **integer values
+** `MQRO_*` and `MQFB_*`, however, live in **`com.ibm.mq.constants.CMQC`** (aggregated by **`MQConstants`**), **not** in
+`WMQConstants`. Always reference them as `MQConstants.MQRO_COA`, `MQConstants.MQFB_COD`. (`WMQConstants` declares only 1
+> field of its own, `sccsid`.)
+
+### 2.4 Identifier propagation and traceability
+
+How do you correlate a report back to the message that originated it? Through **id propagation**, controlled by `MQRO_*`
+options:
+
+| Option (`MQRO_*`)                   | Value           | Effect on the report's `CorrelationId`                                                                                          |
+|-------------------------------------|-----------------|---------------------------------------------------------------------------------------------------------------------------------|
+| **`MQRO_COPY_MSG_ID_TO_CORREL_ID`** | **0 (default)** | The **original message's `MessageId`** becomes the report's **`CorrelationId`**. This is what makes correlation possible "for free". |
+| `MQRO_PASS_MSG_ID`                  | 128             | The report **keeps the same `MessageId`** as the original (instead of generating a new one).                                    |
+| `MQRO_PASS_CORREL_ID`               | 64              | The report **copies the original's `CorrelationId`** (instead of copying the MessageId into the CorrelId).                      |
+| `MQRO_NEW_MSG_ID`                   | 0 (default)     | The report receives its own **new `MessageId`** (default — it does not conflict with the original).                            |
+
+In practice, **with the defaults** (`MQRO_COPY_MSG_ID_TO_CORREL_ID` + `MQRO_NEW_MSG_ID`):
+
+```mermaid
+flowchart TB
+    ORIG["Original message:<br/>MessageId = ID:Mxxxx..."]
+    REP["COA/COD report:<br/>MessageId = ID:Ryyyy... (new)<br/>CorrelationId = ID:Mxxxx... (correlation key)"]
+
+    ORIG e1@-->|"copy msg id → correl id"| REP
+    e1@{ animate: true }
+
+    classDef queue fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+    classDef report fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+
+    class ORIG queue;
+    class REP report;
+```
+
+That is why the report consumer does `findByMessageId(report.getJMSCorrelationID())` — the report's `CorrelationId`
+is the original `MessageId`. This is exactly the model used in `CorrelationStore`/`InMemoryCorrelationStore`.
+
+**Data flags — `*_WITH_DATA` and `*_WITH_FULL_DATA`.** You can request that the report include part (`_WITH_DATA`) or
+all (`_WITH_FULL_DATA`) of the original payload:
+
+| Constant                                                      | Value               |
+|---------------------------------------------------------------|---------------------|
+| `MQRO_COA` / `MQRO_COA_WITH_DATA` / `MQRO_COA_WITH_FULL_DATA` | 256 / 768 / 1792    |
+| `MQRO_COD` / `MQRO_COD_WITH_DATA` / `MQRO_COD_WITH_FULL_DATA` | 2048 / 6144 / 14336 |
+
+> ⚠️ **Caution — `*_WITH_DATA`/`_WITH_FULL_DATA` duplicate the payload and expose PII.** Requesting the data in the report
+> means **copying the message body** to the report queue. Consequences: (a) *sizing* — the report queue
+> now holds twice the data; (b) **PII exposure** — sensitive data that was only on the business queue now
+> is also on the report queue, possibly with different access control. Use `_WITH_DATA`/`_WITH_FULL_DATA`
+> only when the reconciler **really** needs the body, and never for PII without masking.
+
+### 2.5 Feedback code table (how the consumer classifies)
+
+When a report arrives, its **type** is in the MQMD `Feedback` field, read in JMS via
+`WMQConstants.JMS_IBM_FEEDBACK`:
+
+| Constant (`MQFB_*`, in `CMQC`/`MQConstants`) | Value       | Meaning                                                                                                                                                                                       |
+|-----------------------------------------------|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `MQFB_COA`                                    | **259**     | Arrival report (COA).                                                                                                                                                                        |
+| `MQFB_COD`                                    | **260**     | Delivery/consumption report (COD).                                                                                                                                                          |
+| `MQFB_EXPIRATION`                             | **258**     | Expiration report.                                                                                                                                                                          |
+| `MQFB_PAN`                                    | **275**     | Positive Action Notification.                                                                                                                                                                |
+| `MQFB_NAN`                                    | **276**     | Negative Action Notification.                                                                                                                                                                |
+| *(Exception)*                                 | an `MQRC_*` | **There is no `MQFB_EXCEPTION`.** An exception report carries in `Feedback` an `MQRC_*` **reason code** (e.g.: `2051 MQRC_PUT_INHIBITED`, `2053 MQRC_Q_FULL`, `2035 MQRC_NOT_AUTHORIZED`). |
+
+> ⚠️ **Caution — an exception report has no fixed `MQFB_`.** When branching in the consumer, explicitly handle the
+`MQFB_*` known ones (259/260/258/275/276); any other feedback in the system range (`MQFB_SYSTEM_FIRST`=1 ..
+`MQFB_SYSTEM_LAST`=65535) that is none of them is an **exception report** carrying an `MQRC_*`. **Watch out** for
+> collisions: `271` is `MQFB_XMIT_Q_MSG_ERROR`, **not** COA — that is why the comparison must be by exact equality, not by
+> range.
+
+This is exactly the logic of `ReportFeedbackRouter.classify(int)` (Section 4), which maps the feedback integer to a
+`ReportType`.
+
+### 2.6 Timing vs. transaction (the critical detail that changes what the reconciler observes)
+
+The nominal *timing* is:
+
+- **COA** is generated when the message **arrives** (is put) on the destination queue.
+- **COD** is generated when the message is **destructively retrieved** (destructive GET) by the application.
+
+But, **under syncpoint/transaction**, visibility changes — and this directly affects your tests and your reconciler:
+
+| Scenario                                               | When the report actually flows                                                                                                                                                                       |
+|--------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Producer in **local transaction** (`SESSION_TRANSACTED`) | The message only "arrives" on the queue — and the **COA only becomes retrievable** — **after the producer's `commit()`**. Before the commit, the message is invisible to the rest of the world.       |
+| Producer in **AUTO_ACKNOWLEDGE**                       | Each `send` is acknowledged immediately (the producer "commits" each send), so the COA flows right after the PUT.                                                                                     |
+| Consumer in **local transaction** (`SESSION_TRANSACTED`) | The **COD is generated within the consumer's UoW (unit of work)** and is only **sent at the `commit()`**. If the UoW undergoes **rollback** (backout), **the COD is not sent** and the message goes back to the queue. |
+
+> ℹ️ **Note — why this is "correct".** The rollback-aware COD is exactly the desired behavior: you only
+> receive "delivery confirmation" when the message was **actually** consumed and the transaction **committed**. If
+> processing failed and went back to the queue, it was not "really delivered" — and the COD does not lie. See in
+`BusinessMessageConsumer`: the `context.commit()` after processing is what **releases the COD**.
+
+> ⚠️ **Caution — implication for integration tests.** Because the COD only appears after the consumer's `commit()`, an end-to-end
+> test needs to: (1) produce, (2) **consume and commit**, and only then (3) wait for the COD on the report queue —
+> with a generous *timeout*, since the report is asynchronous. This is precisely what `CoaCodEndToEndIT` does (15s to consume,
+> a 30s window to see COA **and** COD).
+
+### 2.7 Report persistence (important CORRECTION)
+
+> ⚠️ **Caution — reports INHERIT the persistence of the original message.** A common (and wrong) belief is that "COA/COD
+> reports are non-persistent by default". **False.** The IBM documentation is explicit: the report's persistence is *"
+Copied from the original message descriptor"* — that is, **a persistent original message generates, by default, a
+persistent COA/COD**. This holds for COA, COD, exception, expiration, PAN, and NAN.
+
+Practical consequence for a critical environment: if you use **persistent business messages** (the case of this guide), your
+reports **will also be persistent** and **will survive a QMgr restart** — exactly what you want for a reliable
+proof of delivery. To reinforce it, define the report queue with `DEFPSIST(YES)` (as in
+`mqsc/20-queues.mqsc`), ensuring persistence even for messages that do not specify it explicitly.
+
+> ✅ **Good practice — align the persistence of the message, the report, and the correlation store.** Persistent message →
+> persistent report → **persistent correlation store** (DB/Redis). All three survive a restart, and reconciliation
+> closes even after a deploy/restart.
+>
+> ❌ **Bad practice — persistent message + correlation store only in memory (`ConcurrentHashMap`).** The report
+> persists and arrives after the restart, but the registered `messageId` **vanished** with the JVM. **Observable symptom:**
+> "orphan" reports — the consumer receives a COD whose `CorrelationId` matches no known pending entry; the
+> reconciliation reports "unknown" deliveries and you cannot close the cycle. (That is why the project includes
+`PersistentCorrelationStoreExample` — see Section 4.)
+
+### 2.8 Full-flow diagram
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'actorBkg':'#dfe5ea','actorBorder':'#5b6472','actorTextColor':'#1f2430','noteTextColor':'#1f2430','noteBkgColor':'#f4e6c4','noteBorderColor':'#b08a3e'}}}%%
+sequenceDiagram
+    box rgb(215,233,210) Applications
+        participant P as Producer
+        participant BC as Business consumer
+    end
+    box rgb(207,224,239) Broker
+        participant QM as Queue Manager QM1
+    end
+    box rgb(244,230,196) Reports
+        participant RC as Report Consumer
+    end
+
+    P->>QM: send(msg) — PUT to APP.BUSINESS.QUEUE
+    Note over P,QM: JMSReplyTo=REPORT.QUEUE · Report=COA+COD · Persistent<br/>records MessageId in the CorrelationStore
+    QM-->>RC: COA (on arrival)
+    BC->>QM: receive() — destructive GET + commit()
+    QM-->>RC: COD (on consumption + commit)
+    Note over RC: reads Feedback (259/260)<br/>correlates CorrelId → original MessageId<br/>marks COA/COD received · RECONCILES the delivery
+```
+
+## Section 3 — Environment Configuration (properties deep dive)
+
+This section is the reference for connection properties. The **field names** are those of
+`com.ibm.msg.client.wmq.WMQConstants` (verified in the bytecode of `com.ibm.mq.allclient:9.4.5.0`). You apply them on an
+`MQConnectionFactory` via `setIntProperty`/`setStringProperty`/`setBooleanProperty`.
+
+### 3.1 Exhaustive table (beginner → advanced)
+
+| `WMQConstants` field               | Internal String value                   | What it does                                                              | Real default    | When to use / impact                                                                                                                            |
+|------------------------------------|-----------------------------------------|---------------------------------------------------------------------------|-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
+| `WMQ_CONNECTION_MODE`              | `XMSC_WMQ_CONNECTION_MODE`              | Connection mode (CLIENT vs BINDINGS).                                     | —               | Always `WMQ_CM_CLIENT` (**=1**) in microservices (TCP/IP via SVRCONN). `WMQ_CM_BINDINGS`=0 requires the app on the same machine as the QMgr.    |
+| `WMQ_HOST_NAME`                    | `XMSC_WMQ_HOST_NAME`                    | MQ listener host.                                                         | `localhost`     | Used if there is **no** `CONNECTION_NAME_LIST`. A single point of failure on its own.                                                           |
+| `WMQ_PORT`                         | `XMSC_WMQ_PORT`                         | Listener port (`setIntProperty`).                                         | `1414`          | Defaults to 1414. Align it with the listener's published port.                                                                                  |
+| `WMQ_CHANNEL`                      | `XMSC_WMQ_CHANNEL`                      | SVRCONN channel.                                                          | —               | E.g. `DEV.APP.SVRCONN`. Determines the applicable CHLAUTH/TLS/identity.                                                                         |
+| `WMQ_QUEUE_MANAGER`                | `XMSC_WMQ_QUEUE_MANAGER`                | Target QMgr name.                                                         | —               | May be empty for "any QMgr" via CCDT, but normally fixed (e.g. `QM1`).                                                                          |
+| `WMQ_CONNECTION_NAME_LIST`         | `XMSC_WMQ_CONNECTION_NAME_LIST`         | Multi-host CONNAME list `host(port),host(port)`.                          | empty           | **Resilience:** required to reconnect to **another** QMgr (multi-instance). Takes precedence over host/port.                                     |
+| `WMQ_CCDTURL`                      | `XMSC_WMQ_CCDTURL`                      | URL of a CCDT (Client Channel Definition Table).                         | empty           | A centralized alternative to in-code config; supports CCDT over **HTTPS**. Casing: `CCDTURL` (no underscore before `URL`).                      |
+| `WMQ_CLIENT_RECONNECT_OPTIONS`     | `XMSC_WMQ_CLIENT_RECONNECT_OPTIONS`     | Auto-reconnect policy.                                                    | —               | Values below. Requires `TRANSPORT=CLIENT` + CONNAMELIST/CCDT. **High resilience**, but be careful with the pool (Section 5).                    |
+| `WMQ_CLIENT_RECONNECT`             | (int) **16777216**                      | Reconnects to **any** QMgr in the list (admin `ANY` / `MQCNO_RECONNECT`). | —               | Use with multi-instance `CONNECTION_NAME_LIST`.                                                                                                 |
+| `WMQ_CLIENT_RECONNECT_Q_MGR`       | (int) **67108864**                      | Reconnects **to the same** QMgr (admin `QMGR` / `MQCNO_RECONNECT_Q_MGR`). | —               | For a multi-instance QMgr (same identity on standby).                                                                                           |
+| `WMQ_CLIENT_RECONNECT_AS_DEF`      | (int) **0**                             | Uses the channel default (`ASDEF`).                                       | (default)       | Defers the decision to the channel/CCDT.                                                                                                        |
+| `WMQ_CLIENT_RECONNECT_DISABLED`    | (int) **33554432**                      | Turns auto-reconnect off.                                                 | —               | When you want to fail fast and leave reconnection to the layer above.                                                                           |
+| `WMQ_CLIENT_RECONNECT_TIMEOUT`     | `XMSC_WMQ_CLIENT_RECONNECT_TIMEOUT`     | Time (s) before giving up on reconnection (String key that takes an int). | **1800s**       | 30 min is the documented default. Reduce it to fail earlier in low-tolerance scenarios.                                                         |
+| `WMQ_SHARE_CONV_ALLOWED`           | `XMSC_WMQ_SHARE_CONV_ALLOWED`           | Shared conversations per socket (**SHARECNV**).                          | —               | **Performance:** multiplexes N conversations over one TCP socket, reducing sockets under high concurrency. Must match the channel's `SHARECNV`. |
+| `WMQ_APPLICATIONNAME`              | `XMSC_WMQ_APPNAME`                      | App name (visible in `DIS CONN`).                                         | —               | **Observability:** identifies your app in QMgr monitoring. ⚠️ field `APPLICATIONNAME`, but key `APPNAME`.                                       |
+| `USER_AUTHENTICATION_MQCSP`        | `XMSC_USER_AUTHENTICATION_MQCSP`        | Turns on the MQCSP flow (modern user/password). **Boolean.**             | —               | ⚠️ **No `WMQ_` prefix**; inherited from `JmsConstants`. `setBooleanProperty(..., true)`.                                                        |
+| `USERID`                           | `XMSC_USERID`                           | MQCSP user.                                                              | —               | Pairs with `PASSWORD`.                                                                                                                          |
+| `PASSWORD`                         | (`XMSC_PASSWORD`)                       | MQCSP password.                                                          | —               | **Never** hardcode it; inject it via secret/env.                                                                                                |
+| `WMQ_SSL_CIPHER_SUITE`             | `XMSC_WMQ_SSL_CIPHER_SUITE`             | TLS CipherSuite (Java side). **Setting this ENABLES TLS** on the CF.     | empty (TLS off) | E.g. `TLS_AES_256_GCM_SHA384`. **Avoid `TLS_RSA_*`** (disabled in Java 25).                                                                     |
+| `WMQ_SSL_PEER_NAME`                | `XMSC_WMQ_SSL_PEER_NAME`                | Expected DN of the peer certificate (SSLPEER).                           | —               | Hardens the handshake (validates the QMgr's identity). Ignored if CipherSuite is not set.                                                       |
+| `WMQ_SSL_CERT_STORES_COL` / `_STR` | `XMSC_WMQ_SSL_CERT_STORES_COL` / `_STR` | Certificate stores for CRL/OCSP.                                         | —               | ⚠️ **There is no plain `WMQ_SSL_CERT_STORES`**: `_STR`=single LDAP URL, `_COL`=Collection.                                                      |
+
+> ⚠️ **Caution — `useIBMCipherMappings` was REMOVED.** In older guides you will see `com.ibm.mq.cfg.useIBMCipherMappings`
+> to toggle IBM vs Oracle names. **Do not set it** — the property was **removed from the product as of IBM MQ
+9.4.0**. From 9.4.0 onward the Cipher may be provided as a CipherSpec **or** a CipherSuite and is handled automatically.
+
+### 3.2 Programmatic configuration (real snippet)
+
+This is the translation of the properties above into code, extracted from `MqConnectionFactoryFactory.buildMqConnectionFactory`:
+
+```java
+// ibmmq-jms-guide/src/main/java/com/example/ibmmq/config/MqConnectionFactoryFactory.java
+MQConnectionFactory cf = new MQConnectionFactory();
+
+// CLIENT mode (TCP/IP via SVRCONN). WMQ_CM_CLIENT = 1.
+cf.
+
+setIntProperty(WMQConstants.WMQ_CONNECTION_MODE, WMQConstants.WMQ_CM_CLIENT);
+
+// SVRCONN channel and Queue Manager.
+cf.
+
+setStringProperty(WMQConstants.WMQ_CHANNEL, props.getChannel());
+        cf.
+
+setStringProperty(WMQConstants.WMQ_QUEUE_MANAGER, props.getQueueManager());
+
+// Address: prefer the CONNAME list (required to reconnect to another QMgr); otherwise host+port.
+        if(props.
+
+hasConnectionNameList()){
+        cf.
+
+setStringProperty(WMQConstants.WMQ_CONNECTION_NAME_LIST, props.getConnectionNameList());
+        }else{
+        cf.
+
+setStringProperty(WMQConstants.WMQ_HOST_NAME, props.getHost());
+        cf.
+
+setIntProperty(WMQConstants.WMQ_PORT, props.getPort());
+        }
+
+// Application name (visible in DIS CONN). Field APPLICATIONNAME -> key APPNAME.
+        cf.
+
+setStringProperty(WMQConstants.WMQ_APPLICATIONNAME, props.getApplicationName());
+
+// SHARECNV: shared conversations per socket — reduces sockets under high concurrency.
+        cf.
+
+setIntProperty(WMQConstants.WMQ_SHARE_CONV_ALLOWED, props.getSharingConversations());
+
+// MQCSP authentication (user/password) — note: USER_AUTHENTICATION_MQCSP is boolean and has NO WMQ_ prefix.
+        if(props.
+
+hasCredentials()){
+        cf.
+
+setBooleanProperty(WMQConstants.USER_AUTHENTICATION_MQCSP, true);
+    cf.
+
+setStringProperty(WMQConstants.USERID, props.getUser());
+        cf.
+
+setStringProperty(WMQConstants.PASSWORD, props.getPassword());
+        }
+
+// Automatic reconnection (requires TRANSPORT=CLIENT + CONNAMELIST/CCDT).
+int reconnectOption = props.isReconnectEnabled()
+        ? WMQConstants.WMQ_CLIENT_RECONNECT             // = MQCNO_RECONNECT (any QMgr)
+        : WMQConstants.WMQ_CLIENT_RECONNECT_DISABLED;
+cf.
+
+setIntProperty(WMQConstants.WMQ_CLIENT_RECONNECT_OPTIONS, reconnectOption);
+```
+
+### 3.3 Configuration via `application.yml` (Micronaut)
+
+The project externalizes everything in a `@ConfigurationProperties("ibm-mq")` bean (`MqProperties`) fed by the
+`ibm-mq:` block of `application.yml`:
+
+```yaml
+# ibmmq-jms-guide/src/main/resources/application.yml
+ibm-mq:
+  host: localhost
+  port: 1414
+  channel: DEV.APP.SVRCONN
+  queue-manager: QM1
+  # CONNAME list for multi-instance reconnection (host(port),host(port)). Empty = uses host/port.
+  connection-name-list: ""
+  user: app
+  # In dev the image requires a password (MQ_APP_PASSWORD). Override via IBM_MQ_PASSWORD / -Dibm-mq.password.
+  password: ${IBM_MQ_PASSWORD:passw0rd}
+  application-name: ibmmq-jms-guide
+  business-queue: DEV.QUEUE.1
+  report-queue: DEV.QUEUE.2
+  reconnect-enabled: true
+  reconnect-timeout-seconds: 1800
+  sharing-conversations: 10
+  # TLS off in dev. To enable: tls-enabled=true + ssl-cipher-suite (avoid TLS_RSA_* ciphers).
+  tls-enabled: false
+  ssl-cipher-suite: ""
+```
+
+Each kebab-case key (`queue-manager`) binds to the camelCase setter of `MqProperties` (`setQueueManager`). The password comes
+from an environment variable (`${IBM_MQ_PASSWORD:passw0rd}`), never hardcoded in the source.
+
+> ✅ **Good practice — secrets out of the code and out of the versioned YAML.** Inject `password` via a secret/environment variable (
+`${IBM_MQ_PASSWORD}`), as the project does. **Symptom avoided:** a credential leaked into Git/history, and the
+`2035 NOT_AUTHORIZED` when someone rotates the password and forgets to update the secret (rather than a fresh build).
+
+### 3.4 Note on CCDT
+
+The **CCDT (Client Channel Definition Table)** is a binary file (or JSON, as of MQ 9.x) that describes client
+channels — host, port, TLS, CONNAME list — **outside** the code. You point `WMQ_CCDTURL` at it (it supports `file://` and *
+*HTTPS**). The advantage: the connection topology (including multi-host failover) is managed by **operations**, not by the
+application's *deploy*. It is the recommended alternative to `CONNECTION_NAME_LIST` when the infrastructure changes
+independently of the app.
+
+> ✅ **Good practice — CCDT/CONNAME list for HA, operationally managed.** Centralize the connection topology (
+> multi-host, TLS) in a CCDT distributed via configuration. **Impact:** failover without a rebuild; the app only knows the
+> CCDT URL.
+>
+> ❌ **Bad practice — fixed, hardcoded host/port and a single address.** In an *outage* of the primary QMgr, the app has nowhere
+> to reconnect. **Observable symptom:** `2059 Q_MGR_NOT_AVAILABLE` / `2538 HOST_NOT_AVAILABLE` cascading, with no
+> auto-recovery, until someone redeploys with the new host.
+
+## Section 4 — Practical Implementation (real, compilable code)
+
+All the code in this section comes from the `ibmmq-jms-guide/` project (compiles with `maven.compiler.release=25`).
+
+### 4.1 Micronaut bootstrap — dependencies and the pool `@Factory`
+
+The exact coordinates (from the real `pom.xml`):
+
+```xml
+<!-- ibmmq-jms-guide/pom.xml (excerpts) -->
+<properties>
+    <micronaut.version>4.9.4</micronaut.version>              <!-- BOM 4.9.x stops at 4.9.4 -->
+    <micronaut.maven.plugin.version>4.11.6</micronaut.maven.plugin.version>
+    <ibm.mq.version>9.4.5.0</ibm.mq.version>                  <!-- javax.jms / JMS 2.0 client -->
+    <pooled.jms.version>2.0.9</pooled.jms.version>            <!-- 2.x is still javax; 3.x = jakarta -->
+</properties>
+
+        <!-- allclient = javax.jms (JMS 2.0). Brings com.ibm.mq.*, com.ibm.msg.client.*,
+             com.ibm.mq.constants.* (CMQC/MQConstants) and the transitive javax.jms-api 2.0.1. -->
+<dependency>
+<groupId>com.ibm.mq</groupId>
+<artifactId>com.ibm.mq.allclient</artifactId>
+<version>${ibm.mq.version}</version>
+<scope>compile</scope>
+</dependency>
+        <!-- JMS connection pool (javax). Class: org.messaginghub.pooled.jms.JmsPoolConnectionFactory. -->
+<dependency>
+<groupId>org.messaginghub</groupId>
+<artifactId>pooled-jms</artifactId>
+<version>${pooled.jms.version}</version>
+<scope>compile</scope>
+</dependency>
+```
+
+The `@Factory` produces the `ConnectionFactory` that the whole application injects: an `MQConnectionFactory` (IBM MQ client) *
+*wrapped** by a `JmsPoolConnectionFactory` (pool). The pool reuses connections/sessions — essential where you do
+many `createContext` calls:
+
+```java
+// ibmmq-jms-guide/src/main/java/com/example/ibmmq/config/MqConnectionFactoryFactory.java
+@Singleton
+@Bean(preDestroy = "stop") // when the context is destroyed, the pool is closed (stop()).
+public JmsPoolConnectionFactory connectionFactory(MqProperties props) throws JMSException {
+    MQConnectionFactory mqCf = buildMqConnectionFactory(props);
+
+    JmsPoolConnectionFactory pool = new JmsPoolConnectionFactory();
+    pool.setConnectionFactory(mqCf);     // accepts the javax.jms.ConnectionFactory interface
+    pool.setMaxConnections(8);           // limits physical connections; sessions are multiplexed
+    return pool;
+}
+```
+
+> ✅ **Good practice — always wrap the MQ CF in a pool.** The `JmsPoolConnectionFactory` reuses physical connections and limits
+> their number (`maxConnections`). **Impact:** under high concurrency you do not open/close a TCP socket per message.
+>
+> ❌ **Bad practice — a raw `new MQConnectionFactory()` and opening a connection per message.** Each `createContext` opens a new
+> TCP connection to the QMgr. **Observable symptom:** high *latency* due to the repeated handshake, socket/thread
+> exhaustion, and the QMgr hitting `MAXCHANNELS`/`MAXINST` (refusing connections). At peak, the service "hangs" with no
+> obvious error.
+
+### 4.2 Producer — enables COA/COD, persists, and records the correlation
+
+```java
+// ibmmq-jms-guide/src/main/java/com/example/ibmmq/producer/BusinessMessageProducer.java
+public String send(String businessKey, String jsonPayload) {
+    // try-with-resources: the JMSContext (connection+session) is closed at the end.
+    // AUTO_ACKNOWLEDGE: each send is confirmed immediately (the COA flows right after the PUT).
+    try (JMSContext context = connectionFactory.createContext(JMSContext.AUTO_ACKNOWLEDGE)) {
+
+        Queue businessQueue = context.createQueue("queue:///" + props.getBusinessQueue());
+        Queue reportQueue = context.createQueue("queue:///" + props.getReportQueue());
+
+        TextMessage message = context.createTextMessage(jsonPayload);
+
+        // JMSReplyTo: WHERE the QMgr will send COA/COD.
+        message.setJMSReplyTo(reportQueue);
+
+        // Enables the reports: UPPER_SNAKE field (WMQConstants), integer value MQRO_* (MQConstants).
+        message.setIntProperty(WMQConstants.JMS_IBM_REPORT_COA, MQConstants.MQRO_COA);
+        message.setIntProperty(WMQConstants.JMS_IBM_REPORT_COD, MQConstants.MQRO_COD);
+
+        JMSProducer producer = context.createProducer();
+        // PERSISTENT: the message (and, by inheritance, the reports) survives a QMgr restart.
+        producer.setDeliveryMode(DeliveryMode.PERSISTENT);
+        producer.send(businessQueue, message);
+
+        // The JMSMessageID only exists after the send. Default MQRO_COPY_MSG_ID_TO_CORREL_ID:
+        // this id becomes the CorrelationId of the reports.
+        String messageId = message.getJMSMessageID();
+        correlationStore.register(PendingMessage.newlySent(messageId, businessKey, jsonPayload));
+        return messageId;
+    } catch (Exception e) {
+        throw new IllegalStateException("Falha ao enviar mensagem de negocio: " + businessKey, e);
+    }
+}
+```
+
+Points to note: (1) the `JMSReplyTo` and the two report properties; (2) `DeliveryMode.PERSISTENT`; (3) recording the
+`messageId` in the `CorrelationStore` **immediately after** the `send` (before the report can arrive).
+
+### 4.3 Business consumer — the destructive GET triggers the COD
+
+```java
+// ibmmq-jms-guide/src/main/java/com/example/ibmmq/consumer/BusinessMessageConsumer.java
+public String receiveOne(long timeoutMillis) {
+    // Transacted context: the COD only becomes visible on the report queue after the commit.
+    try (JMSContext context = connectionFactory.createContext(JMSContext.SESSION_TRANSACTED)) {
+
+        Queue businessQueue = context.createQueue("queue:///" + props.getBusinessQueue());
+        JMSConsumer consumer = context.createConsumer(businessQueue);
+
+        // Destructive GET — removes the message and (given MQRO_COD at the origin) schedules the COD.
+        Message message = consumer.receive(timeoutMillis);
+        if (message == null) {
+            return null; // timeout with no message
+        }
+        String body = (message instanceof TextMessage tm) ? tm.getText() : "(payload nao-texto)";
+
+        // ... business processing here ...
+
+        // Commit: confirms the consumption and RELEASES the COD. On an exception, the rollback returns the message
+        // (and the COD is NOT generated).
+        context.commit();
+        return body;
+    } catch (Exception e) {
+        throw new IllegalStateException("Falha ao consumir mensagem de negocio", e);
+    }
+}
+```
+
+> ⚠️ **Caution — there is no JMS API to "request the COD at consumption time."** The COD follows **automatically** from the report options
+> already written into the MQMD by the original message. The consumer only needs to do the destructive GET and **commit** — the QMgr takes care
+> of generating the COD.
+
+### 4.4 Report consumer — reads the Feedback, classifies, and correlates
+
+The heart of reconciliation: read `JMS_IBM_FEEDBACK`, classify with `ReportFeedbackRouter`, and correlate
+`CorrelationId → MessageId` of the original.
+
+```java
+// ibmmq-jms-guide/src/main/java/com/example/ibmmq/consumer/ReportMessageConsumer.java
+public DeliveryEvent handleReport(Message report) {
+    try {
+        // Reads the MQMD feedback via the canonical property JMS_IBM_Feedback (always populated).
+        int feedback = report.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK);
+        String correlationId = report.getJMSCorrelationID();
+
+        ReportType type = feedbackRouter.classify(feedback);
+
+        // Correlates back (default MQRO_COPY_MSG_ID_TO_CORREL_ID: CorrelId == original MessageId).
+        Optional<PendingMessage> pending = correlationStore.findByMessageId(correlationId);
+        String originalMessageId = pending.map(PendingMessage::messageId).orElse(correlationId);
+
+        switch (type) {
+            case COA -> correlationStore.markCoaReceived(correlationId);
+            case COD -> {
+                correlationStore.markCodReceived(correlationId);
+                // COA+COD confirmed: delivery complete, remove the pending entry.
+                correlationStore.findByMessageId(correlationId)
+                        .filter(PendingMessage::isFullyConfirmed)
+                        .ifPresent(p -> correlationStore.remove(correlationId));
+            }
+            case EXPIRATION, NAN, EXCEPTION -> LOG.warn("Relatorio de problema: tipo={}, feedback={}, correlId={}",
+                    type, feedback, correlationId);
+            default -> { /* PAN/UNKNOWN: just records. */ }
+        }
+        return new DeliveryEvent(type, feedback, correlationId, originalMessageId, Instant.now());
+    } catch (Exception e) {
+        throw new IllegalStateException("Falha ao processar relatorio de entrega", e);
+    }
+}
+```
+
+> ⚠️ **Caution — `JMS_IBM_Feedback` vs. `JMS_IBM_MQMD_Feedback`.** Use `WMQConstants.JMS_IBM_FEEDBACK`: it is the
+**canonical and always-populated** property for reports. `JMS_IBM_MQMD_Feedback` is only filled in when
+`WMQ_MQMD_READ_ENABLED=true` on the destination. Using the wrong one makes the feedback arrive as `0` and **turns every report into `UNKNOWN`
+**.
+
+The pure routing (no broker dependency — unit-testable) lives in `ReportFeedbackRouter.classify`:
+
+```java
+// ibmmq-jms-guide/src/main/java/com/example/ibmmq/report/ReportFeedbackRouter.java
+public ReportType classify(int feedbackCode) {
+    if (feedbackCode == MQConstants.MQFB_COA) return ReportType.COA;        // 259
+    if (feedbackCode == MQConstants.MQFB_COD) return ReportType.COD;        // 260
+    if (feedbackCode == MQConstants.MQFB_EXPIRATION) return ReportType.EXPIRATION; // 258
+    if (feedbackCode == MQConstants.MQFB_PAN) return ReportType.PAN;        // 275
+    if (feedbackCode == MQConstants.MQFB_NAN) return ReportType.NAN;        // 276
+    if (feedbackCode == MQConstants.MQFB_NONE) return ReportType.UNKNOWN;    // 0
+
+    // System range (1..65535) that is not a known MQFB_* = exception report (MQRC_*).
+    if (feedbackCode >= MQConstants.MQFB_SYSTEM_FIRST
+            && feedbackCode <= MQConstants.MQFB_SYSTEM_LAST) {
+        return ReportType.EXCEPTION;
+    }
+    return ReportType.UNKNOWN;
+}
+```
+
+### 4.5 Correlation store — in-memory and the persistent path
+
+The `InMemoryCorrelationStore` (`@Primary`) uses a `ConcurrentHashMap`, with atomic updates via `computeIfPresent` (
+safe under report concurrency):
+
+```java
+// ibmmq-jms-guide/src/main/java/com/example/ibmmq/correlation/InMemoryCorrelationStore.java
+@Override
+public Optional<PendingMessage> markCoaReceived(String messageId) {
+    // compute guarantees atomicity even under report concurrency.
+    return updateAtomically(messageId, PendingMessage::withCoaReceived);
+}
+```
+
+To survive a restart, the project provides the `PersistentCorrelationStoreExample` skeleton (JDBC or Redis), with the
+key guidance: ideally do the `INSERT` of the pending entry within the **same transaction** as the send (*outbox*/XA pattern), and make
+the COA/COD markings **idempotent** (reports are delivered *at-least-once*).
+
+> ✅ **Good practice — persistent store + idempotent markings in critical production.** An
+`UPDATE ... SET coa_received=true WHERE message_id=?` is idempotent by nature. Marking twice causes no side
+> effect.
+>
+> ❌ **Bad practice — in-memory store in a multi-instance service.** Instance A sends (records in its own memory); the COD
+> arrives at instance **B** (which consumes from a shared report queue). B does not know about A's pending entry. *
+*Observable symptom:** fragmented reconciliation — each instance only "closes" the reports whose send went through it;
+> deliveries look orphaned/incomplete in aggregate. **Use a shared store** (DB/Redis) across the instances.
+
+## Section 5 — Testing and Resilience (real environment)
+
+### 5.1 Hybrid testing strategy
+
+| Layer          | Tool                                        | What it validates                                                                                                   | Needs Docker?      |
+|----------------|---------------------------------------------|---------------------------------------------------------------------------------------------------------------------|--------------------|
+| **Unit**       | JUnit 5 + **Mockito**                       | feedback→`ReportType` mapping, `CorrelationId→MessageId` correlation, idempotency of the markings. Deterministic.    | No                 |
+| **Integration**| **Testcontainers 2.x** + official IBM module| **End-to-end COA/COD** flow against a **real** IBM MQ.                                                               | Yes                |
+
+**Unit (no broker):** `ReportFeedbackRouterTest` exercises the exact integer values (259/260/258/275/276) and the edge
+cases (271 = `MQFB_XMIT_Q_MSG_ERROR` does **not** become COA). `InMemoryCorrelationStoreTest` uses Mockito to fabricate
+synthetic report `Message`s and validate the correlation:
+
+```java
+// ibmmq-jms-guide/src/test/java/com/example/ibmmq/correlation/InMemoryCorrelationStoreTest.java
+Message coaReport = mock(Message.class);
+
+// Default MQRO_COPY_MSG_ID_TO_CORREL_ID: the report arrives with CorrelationId == original MessageId.
+when(coaReport.getJMSCorrelationID()).
+
+thenReturn(ORIGINAL_MSG_ID);
+
+when(coaReport.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).
+
+thenReturn(259); // MQFB_COA
+
+DeliveryEvent event = reportConsumer.handleReport(coaReport);
+
+assertEquals(ReportType.COA, event.reportType());
+```
+
+**Integration (with a real broker):** `CoaCodEndToEndIT` brings up an IBM MQ via Testcontainers, produces with COA+COD,
+consumes+commits, and requires that **both** reports arrive, each with `CorrelationId == MessageId` of the original.
+
+> ℹ️ **Note — Testcontainers via the official IBM module (there is no `org.testcontainers` module for MQ).** The real setup uses *
+*`org.testcontainers:testcontainers:2.0.5`** (core) + **`com.ibm.mq:mq-java-testcontainer:2.0.3`** (class
+`com.ibm.mq.testcontainers.MQContainer`), with the image `icr.io/ibm-messaging/mq:9.4.5.0-r2`. Stand-in brokers like
+> ActiveMQ Artemis do **not** implement COA/COD — only a real MQ validates this flow.
+
+```java
+// ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/CoaCodEndToEndIT.java
+mq =new
+
+MQContainer("icr.io/ibm-messaging/mq:9.4.5.0-r2")
+        .
+
+acceptLicense()
+        .
+
+withQueueManager(QUEUE_MANAGER)
+        .
+
+withAppPassword(SECRET)     // enables the 'app' user
+        .
+
+withAdminPassword(SECRET);  // enables the 'admin' user (used by this test)
+mq.
+
+start();
+```
+
+### 5.2 Real *gotchas* we hit (and how to fix them) — gold for the reader
+
+These are concrete problems faced while setting up the environment. Documenting them saves hours for anyone repeating the setup.
+
+**(a) `commons-codec` — `Charsets` removed.** `docker-java-transport-zerodep:3.7.1` (pulled in by Testcontainers
+2.0.5) references `org.apache.commons.codec.Charsets`, a class **removed in commons-codec 1.17+**. Symptom:
+`NoClassDefFoundError`/`ClassNotFoundException` when bringing up the container. **Fix:** pin `commons-codec:1.16.1` (scope
+`test`), the last version that still has the class:
+
+```xml
+
+<dependency>
+    <groupId>commons-codec</groupId>
+    <artifactId>commons-codec</artifactId>
+    <version>1.16.1</version>
+    <scope>test</scope>
+</dependency>
+```
+
+**(b) Docker engine 29.x — API range `[1.40, 1.54]` → HTTP 400.** The `docker-java` bundled in Testcontainers **1.20.x
+** negotiates an API version outside that range, and the daemon responds **HTTP 400** → "Could not find a valid Docker
+environment". **Fix:** migrate to **Testcontainers 2.x** (modern, compatible docker-java). If you are still on
+1.20.x, pin `DOCKER_API_VERSION=1.44` (any value in `[1.40, 1.54]`).
+
+**(c) Corretto 25 — native-access and ciphers.** The MQ client loads native libraries via `System.loadLibrary`; on
+Java 25 this emits a *native-access* warning. **Fix:** pass `--enable-native-access=ALL-UNNAMED` to the JVM (already in
+surefire/failsafe's `argLine`). Additionally, **avoid `TLS_RSA_*` ciphers** (disabled from Java 25 on).
+
+**(d) — The *gotcha* that surprises the most: context authority for the report PUT.**
+
+> ⚠️ **Attention — report going to the DLQ with `2035 MQRC_NOT_AUTHORIZED`.** For the Queue Manager to **generate and deliver**
+> a COA/COD, it does a **PUT-with-context** on the `ReplyToQ`. This requires **context authority (`+setall`)**, which the
+> low-privilege `app` user of the dev image **does not have**. Result: the report PUT fails with `2035` and the
+> report **goes to the DLQ** — the report queue stays **empty** and you (wrongly) conclude that "COA/COD does not
+> work".
+
+This behavior is documented in the integration test itself — which is why it connects as **`admin`** (full
+authority), not as `app`:
+
+```java
+// CoaCodEndToEndIT — real comment explaining why it connects as admin:
+// For the Queue Manager to GENERATE and DELIVER a report (COA/COD), it does a PUT-with-context on the
+// ReplyToQ. This requires CONTEXT authority (+setall), which the low-privilege app user
+// of the dev image does NOT have — the report would fail with MQRC_NOT_AUTHORIZED (2035) and go to the DLQ.
+private static final String ADMIN_CHANNEL = "DEV.ADMIN.SVRCONN";
+private static final String ADMIN_USER = "admin";
+```
+
+**Fix in production** — grant the minimum authority needed to the application principal (instead of using `admin`):
+
+```mqsc
+* Grants PUT + SETALL (context authority) to the application group on the report queue,
+* allowing the QMgr to deliver COA/COD on behalf of connections of that principal.
+SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) +
+    GROUP('appgrp') AUTHADD(PUT, SETALL)
+REFRESH SECURITY TYPE(AUTHSERV)
+```
+
+> ✅ **Good practice — diagnose a "vanished report" by looking at the DLQ first.** Before suspecting the code, inspect the
+> DLQ: if there are reports there with reason `2035`, the problem is context authorization, not the application.
+>
+> ❌ **Bad practice — running the production app as `admin` "to fix the 2035".** You open a giant security hole
+> (remote admin via the client channel) just to deliver reports. **Future symptom:** audit failing, CHLAUTH
+> blocking admins (`BLOCKUSER *MQADMIN`), and the service breaking when the security rule is hardened. Grant
+`PUT+SETALL` to the specific principal.
+
+### 5.3 Poison messages — backout, DLQ, and idempotency
+
+A message that **always fails** when processed (corrupted, an impossible rule) is a *poison message*. Without protection,
+it is consumed, rolls back, returns to the queue, is consumed again... an infinite *loop* that stalls the queue.
+
+The defense is the `BOTHRESH`/`BOQNAME` pair (in `mqsc/20-queues.mqsc`): after `BOTHRESH(5)` rollbacks, MQ moves the message
+to `BOQNAME('APP.BACKOUT.QUEUE')`. The QMgr's DLQ (`ALTER QMGR DEADQ('APP.DLQ')`) receives messages that the broker itself
+cannot deliver.
+
+> ✅ **Good practice — `BOTHRESH`/`BOQNAME` + idempotent processing.** Limit retries and isolate the poison message in a
+> backout queue for inspection. Make the processing **idempotent** (the same message processed 2× = 1 effect), because under
+> redelivery/reconnection you may reprocess.
+>
+> ❌ **Bad practice — infinite retry without `BOTHRESH` and without idempotency.** A single bad message consumes 100% of a
+> thread in a loop, and if there is a side effect (writing to a database, calling an API), each retry **duplicates** the effect. **Observable
+symptom:** a "stalled" queue (the poison message at the head blocks the rest under ordering), one consumer's CPU at
+> 100%, and data duplication downstream.
+
+### 5.4 Auto-reconnect and connection resilience
+
+Auto-reconnect (`WMQ_CLIENT_RECONNECT_OPTIONS` = `WMQ_CLIENT_RECONNECT`) makes the client **re-establish** the connection
+transparently after a drop, using the `CONNECTION_NAME_LIST` (or CCDT) to pick an available QMgr, within the
+`WMQ_CLIENT_RECONNECT_TIMEOUT` (default 1800s).
+
+> ⚠️ **Attention — *sharp edge*: pool (`pooled-jms`) × auto-reconnect.** A connection **inside the pool** that underwent
+> automatic reconnection can have subtle behavior: the pool keeps the connection object "alive", but the underlying
+> session/consumer may have been invalidated/repositioned by the reconnection. Validate that the pool **invalidates/renews** failed
+> connections (instead of handing them back "dead"). Under reconnection, a consumer may need to be recreated; chaos tests (dropping
+> the QMgr and observing recovery) are the only reliable way to validate this interaction in your setup.
+
+### 5.5 Transactions: local vs. XA (decision tree)
+
+**Local transaction** = the transacted JMS session (`SESSION_TRANSACTED` + `commit()`/`rollback()`), covering **only
+MQ operations**. It is the default of this guide (see `BusinessMessageConsumer`).
+
+**XA transaction (2PC)** = a **distributed** transaction, coordinated by a *transaction manager* (Atomikos/Narayana in
+Micronaut), spanning **MQ + another resource** (e.g., a database) atomically.
+
+```mermaid
+flowchart TD
+    Q1{"Do I need atomicity between MQ<br/>and ANOTHER resource (database)?"}
+    LOCAL["LOCAL transaction<br/>(SESSION_TRANSACTED + commit)<br/>• simpler and faster<br/>• default of this guide"]
+    Q2{"Can I use the OUTBOX pattern?<br/>(write the event to the database in the same<br/>transaction, publish later)"}
+    OUTBOX["OUTBOX (recommended)<br/>• avoids 2PC overhead<br/>• idempotency on publication"]
+    XA["XA / JTA (2PC)<br/>• Atomikos/Narayana<br/>• slower and more complex"]
+
+    Q1 -->|NO| LOCAL
+    Q1 -->|YES| Q2
+    Q2 -->|YES| OUTBOX
+    Q2 -->|NO| XA
+
+    classDef decision fill:#dfe5ea,stroke:#5b6472,color:#1f2430;
+    classDef good fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+    classDef caution fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+
+    class Q1,Q2 decision;
+    class LOCAL,OUTBOX good;
+    class XA caution;
+```
+
+> ✅ **Good practice — prefer local transaction + outbox over XA, unless there is a real need.** XA (2PC) has coordination
+> *overhead* and extra failure points. The outbox pattern (writing the event in the **same transaction** as the database and publishing
+> idempotently) covers most cases.
+>
+> ❌ **Bad practice — XA "to guarantee everything" without need, or incorrect commit/ack under concurrency.** Poorly
+> configured XA leads to *in-doubt* transactions (stuck) and manual *recovery*. And sharing a transacted `Session`/`JMSContext`
+> between threads corrupts the unit of work: a `commit()` from one thread commits another's work. *
+*Observable symptom:** unexpectedly committed/lost messages, in-doubt transactions in the QMgr, and *deadlocks* in the
+> transaction manager.
+
+> ℹ️ **Note — XA code is illustrative.** The compilable project uses **local** transactions. A complete XA setup (
+> Atomikos/Narayana + XA datasource + the MQ `XAConnectionFactory`) is out of scope for the reference code; treat the
+> diagram above as a decision guide, not as a snippet extracted from the project.
+
+### 5.6 Applied security — a progressive spectrum
+
+Raise security in levels, validating each one:
+
+**(a) Dev without TLS** — only for the local machine; `tls-enabled: false`.
+
+**(b) User/password via CONNAUTH/MQCSP** — `USER_AUTHENTICATION_MQCSP=true` on the client; on the QMgr, an `AUTHINFO IDPWOS`
+wired via `CONNAUTH` (real, from `mqsc/10-channel-auth.mqsc`):
+
+```mqsc
+DEFINE AUTHINFO('APP.IDPWOS') AUTHTYPE(IDPWOS) +
+       CHCKCLNT(REQUIRED) ADOPTCTX(YES) +
+       DESCR('Autenticacao user/senha via SO') REPLACE
+ALTER QMGR CONNAUTH('APP.IDPWOS')
+REFRESH SECURITY TYPE(CONNAUTH)   -- required after changing CONNAUTH
+
+-- CHLAUTH (the verb is SET, not DEFINE): blocks admins on the channel and maps the 'app' user.
+SET CHLAUTH('APP.SVRCONN') TYPE(BLOCKUSER) USERLIST('*MQADMIN') ACTION(REPLACE)
+SET CHLAUTH('APP.SVRCONN') TYPE(USERMAP) CLNTUSER('app') USERSRC(MAP) MCAUSER('app') ACTION(REPLACE)
+```
+
+**(c) One-way TLS** — only the client validates the server's certificate. Set `WMQ_SSL_CIPHER_SUITE` (this **enables TLS
+** on the CF), point a **PKCS12 truststore** via `-Djavax.net.ssl.trustStore`, and configure the corresponding **CipherSpec**
+on the channel (`SSLCIPH`).
+
+**(d) mTLS (two-way)** — server **and** client present a certificate. Adds a **PKCS12 keystore** on the client (
+`-Djavax.net.ssl.keyStore`) and `SSLCAUTH(REQUIRED)` on the channel; optionally `WMQ_SSL_PEER_NAME` to pin the peer's DN.
+
+**CipherSpec ↔ CipherSuite pairing.** On the QMgr you define a **CipherSpec** (e.g., `ECDHE_RSA_AES_256_GCM_SHA384`); in
+Java you define the equivalent **CipherSuite**. In **TLS 1.3** the names match on both sides (
+`TLS_AES_256_GCM_SHA384`). In TLS 1.2 there is a mapping (CipherSpec `ECDHE_RSA_AES_128_GCM_SHA256` ↔ CipherSuite
+`TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256` on the Oracle JRE/`SSL_...` on the IBM JRE).
+
+> ✅ **Good practice — TLS 1.3 with matching names and PKCS12; no `useIBMCipherMappings`.** In 9.4 the cipher is handled
+> automatically as either CipherSpec or CipherSuite. Use `TLS_AES_256_GCM_SHA384`.
+>
+> ❌ **Bad practice — `TLS_RSA_*` and/or `useIBMCipherMappings`.** `TLS_RSA_*` is disabled on Java 25 (handshake fails,
+`2397 JSSE_ERROR`); `useIBMCipherMappings` no longer exists (9.4.0+). **Observable symptom:**
+`2393 SSL_INITIALIZATION_ERROR`/`2397` on connect, with no obvious cause if you do not know about these two pitfalls.
+
+### 5.7 Virtual Threads — an honest analysis (Java 25 / JEP 491)
+
+Virtual Threads shine in I/O-bound **orchestration**: fan-out of calls, aggregation of responses. With the MQ client, the
+picture **changed in Java 25**:
+
+> ℹ️ **Note — JEP 491 changes the *pinning* game.** Up to Java 21, a virtual thread that blocked **inside a
+> `synchronized` block** *pinned* the carrier thread (did not unmount), nullifying the scaling gain — and the MQ client has
+> internal `synchronized` on the I/O path. **JEP 491** (final in JDK 24, present in **Java 25**) **eliminated that
+> pinning**: blocking `synchronized` blocks no longer pin. In Java 25, the MQ client's main pinning vector
+> **disappeared**.
+
+> ⚠️ **Attention — what STILL requires care in Java 25.**
+> - **Residual pinning:** now occurs only in **native frames (JNI)** and FFM *downcalls*. The MQ client **loads
+>   native libraries** (`System.loadLibrary` — hence `--enable-native-access=ALL-UNNAMED`), so **measure** the residual
+>   pinning (`-Djdk.tracePinnedThreads=full` or JFR events `jdk.VirtualThreadPinned`) before assuming a full gain.
+> - **Thread-safety (unchanged):** `Session`/`JMSContext` **remain non-thread-safe**, in any version. A
+>   `JMSContext` belongs to **one** thread at a time (virtual or platform). Sharing it across VTs is incorrect.
+> - **Connection storm (the new pitfall under high concurrency):** with VTs it is tempting to open **one VT per message**,
+>   each creating its own `JMSContext`. Under **~10,000 rpm** this becomes a storm of sessions/connections that blows past
+>   the `JmsPoolConnectionFactory` and the QMgr's limits. The bottleneck stops being CPU and becomes the pool/QMgr.
+
+> ✅ **Good practice (Java 25) — VTs for orchestration; JMS I/O with a `JMSContext` per unit of work, from the pool, with
+> limited concurrency.** Use virtual threads in the logic fan-out; for JMS I/O, **one `JMSContext` per task** coming
+> from the `JmsPoolConnectionFactory`, with a **concurrency limit** (semaphore/bulkhead) sized to the pool and the channel's
+> `SHARECNV`. Measure the residual pinning on the native calls.
+>
+> ❌ **Bad practice — a `JMSContext` shared across VTs, or VT-per-message with no cap.** Sharing the context corrupts
+> state (**symptom:** `javax.jms.IllegalStateException`, messages "vanishing"/duplicating). VT-per-message without a limit, under
+> ~10k rpm, exhausts the pool and the QMgr's limits (**symptoms:** `2025 MQRC_MAX_CONNS_LIMIT_REACHED`,
+> `2537 MQRC_CHANNEL_NOT_AVAILABLE`, pool checkout timeouts). In both, *throughput* ends up **worse** than with a properly
+> sized pool of consumers.
+
+### 5.8 Other performance tweaks
+
+- **Async put** — the client can send asynchronously (does not wait for the confirmation of each PUT), increasing the
+  send *throughput* at the cost of late failure detection. Use only with messages where eventual loss is tolerable,
+  or combine it with periodic checking.
+- **Read-ahead** — the client pre-fetches non-persistent messages into the local buffer, reducing *round-trips*. A read
+  gain, but pre-fetched messages may be lost if the client drops (do not use for persistent messages that require a guarantee).
+- **SHARECNV** — `WMQ_SHARE_CONV_ALLOWED` multiplexes conversations over one socket. Reduces the number of sockets/channels under high
+  concurrency; it must match the `SHARECNV` defined on the channel.
+
+## Appendices
+
+### Out-of-scope note (non-JMS interop)
+
+> ℹ️ **Note — non-JMS interoperability is out of scope.** This guide covers the **Java↔Java via JMS** flow (the
+> JMS client manages the **RFH2** header transparently). Integration with **non-JMS** applications — mainframe/COBOL,
+> native .NET, systems that read the raw **MQMD** or expect **EBCDIC**/CCSID conversion, or that do **not** understand the
+> RFH2 header — requires explicit format/encoding handling (including suppressing the RFH2 header when talking to peers that do not
+> understand it) and **is not covered here**. Also **out of scope**: Pub/Sub (topics), AMQP/MQTT, and Kafka bridges —
+> mentioned only to bound the scope.
+
+### Appendix 1 — Reason-code troubleshooting
+
+| Reason code | Name                            | Typical cause                                                                                                                                               | Fix                                                                                                                                                                              |
+|-------------|---------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **2035**    | `MQRC_NOT_AUTHORIZED`           | Not authorized for the operation. **In the report flow:** the QMgr lacks `+SETALL` to do the PUT-with-context of the COA/COD → the report goes to the DLQ. | Grant the authority to the principal: `SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) GROUP('appgrp') AUTHADD(PUT, SETALL)` + `REFRESH SECURITY`. Also check CHLAUTH/MCAUSER. |
+| **2059**    | `MQRC_Q_MGR_NOT_AVAILABLE`      | The target QMgr is stopped, in standby, or the name is wrong.                                                                                                | Verify the QMgr is `RUNNING`; check `WMQ_QUEUE_MANAGER`; in HA, use `CONNECTION_NAME_LIST`/CCDT for failover.                                                                                |
+| **2538**    | `MQRC_HOST_NOT_AVAILABLE`       | No listener on the port/host (listener stopped, wrong port, firewall).                                                                                   | Confirm an active listener on port 1414; check `WMQ_HOST_NAME`/`WMQ_PORT` and network connectivity.                                                                                     |
+| **2085**    | `MQRC_UNKNOWN_OBJECT_NAME`      | The referenced queue/object does not exist (wrong name, *case-sensitive*, not created).                                                         | Verify the exact (uppercase) queue name; confirm the MQSC was applied; `DIS QLOCAL(...)`.                                                                                     |
+| **2042**    | `MQRC_OBJECT_IN_USE`            | Attempt to open an object with an exclusive option that is already in use.                                                                                       | Do not open the queue with `MQOO_INPUT_EXCLUSIVE` if another consumer holds it; use *shared input* for concurrent consumption.                                                                    |
+| **2393**    | `MQRC_SSL_INITIALIZATION_ERROR` | TLS initialization failure (missing keystore/truststore, wrong password, unavailable cipher).                                                                | Check `-Djavax.net.ssl.*` paths/password; ensure the CipherSuite exists in the JRE; avoid `TLS_RSA_*` on Java 25.                                                               |
+| **2397**    | `MQRC_JSSE_ERROR`               | Generic JSSE error in the handshake (incompatible cipher, invalid cert, peer name mismatch).                                                               | Align CipherSpec↔CipherSuite; validate the certificate chain; check `WMQ_SSL_PEER_NAME` vs. the real DN.                                                                               |
+
+### Appendix 2 — Glossary
+
+| Term                            | Meaning                                                                                                      |
+|---------------------------------|------------------------------------------------------------------------------------------------------------------|
+| **QMgr** (Queue Manager)        | Queue Manager — the MQ server-side runtime that hosts queues, channels, and security.                                      |
+| **MCA** (Message Channel Agent) | Agent that moves messages over a channel; runs under the `MCAUSER` identity.                                         |
+| **MQMD** (Message Descriptor)   | Low-level header of every message (MessageId, CorrelationId, Report, Feedback, Persistence...).          |
+| **RFH2**                        | Rules/format header that the JMS client adds to carry JMS properties; transparent between JMS apps. |
+| **CCSID**                       | Coded Character Set Identifier — identifies the character encoding (e.g., 1208=UTF-8, 500/37=EBCDIC).        |
+| **CipherSpec**                  | Name of the TLS algorithm **on the QMgr side** (e.g., `ECDHE_RSA_AES_256_GCM_SHA384`).                                 |
+| **CipherSuite**                 | Name of the TLS algorithm **on the Java/JSSE side** (e.g., `TLS_AES_256_GCM_SHA384`); pairs with the CipherSpec.            |
+| **MQSC**                        | MQ administration command language (`DEFINE`, `ALTER`, `SET CHLAUTH`...).                              |
+| **DLQ** (Dead Letter Queue)     | Queue for messages the QMgr cannot deliver.                                                            |
+| **BOQ** (Backout Queue)         | Destination queue for poison messages after exceeding `BOTHRESH` rollbacks (`BOQNAME`).                                |
+| **CONNAME**                     | Connection address `host(port)`; the `CONNECTION_NAME_LIST` is a list of them for HA.                            |
+| **CCDT**                        | Client Channel Definition Table — describes client channels outside the code (file/HTTPS).                        |
+| **SHARECNV**                    | Sharing Conversations — number of conversations multiplexed over a single TCP socket.                                |
+| **MQCSP**                       | MQ Connection Security Parameters — structure of the modern user/password flow.                                     |
+| **CHLAUTH**                     | Channel Authentication Records — per-channel authorization/identity rules (`SET CHLAUTH`).                     |
+
+### Appendix 3 — Evolution to Jakarta Messaging
+
+Starting with MQ 9.3.0 there are **two** parallel clients. The choice defines the namespace of the entire stack:
+
+| Aspect          | `com.ibm.mq.allclient` (this guide)                                                       | `com.ibm.mq.jakarta.client`                                 |
+|-----------------|------------------------------------------------------------------------------------------|-------------------------------------------------------------|
+| JMS namespace   | **`javax.jms`** (JMS 2.0)                                                                | **`jakarta.jms`** (Jakarta Messaging 3.0)                   |
+| Transitive API  | `javax.jms:javax.jms-api:2.0.1`                                                          | `jakarta.jms:jakarta.jms-api` (3.x)                         |
+| Compatible pool | `pooled-jms` **1.x/2.x** (`2.0.9`)                                                       | `pooled-jms` **3.x** (`jakarta`)                            |
+| IBM constants   | `com.ibm.msg.client.wmq.WMQConstants`, `com.ibm.mq.constants.MQConstants` (same names) | same (same constant names)                           |
+| Ecosystem       | Spring Boot 2 / legacy javax frameworks                                                 | Spring Boot 3 / native Micronaut 4 / `io.micronaut.jms` 4.x |
+
+**Migration steps (`javax` → `jakarta`):**
+
+1. Swap the dependency `com.ibm.mq.allclient` → `com.ibm.mq.jakarta.client` (same version, e.g., `9.4.5.0`).
+2. Swap `pooled-jms` 2.x → **3.x**.
+3. Replace **all** `javax.jms.*` imports → `jakarta.jms.*` (the class names are identical; only the package changes).
+4. **The IBM constants (`WMQConstants`, `MQConstants`, `JMS_IBM_*`, `MQRO_*`, `MQFB_*`) stay the same** — the COA/COD logic
+   does not change.
+5. Re-run the tests (the semantics are identical; only the namespace differs).
+
+> ℹ️ **Note — what the Jakarta namespace adds.** Nothing to the COA/COD *semantics*. The gain is **ecosystem alignment
+**: modern frameworks (Spring Boot 3, Micronaut 4) are jakarta-only, and the declarative module `io.micronaut.jms` 4.x only
+> works with `jakarta.jms`. Migrating unlocks that tooling — at the cost of giving up manual control of the `JMSContext` if
+> you adopt the declarative module (which abstracts away precisely the object that COA/COD needs).
+
+### Appendix 4 — Consolidated catalogue: Good vs. bad practices in high-concurrency microservices
+
+Quick reference of the ✅/❌ pairs used throughout the guide.
+
+| Theme                          | ✅ Good practice                                                                     | ❌ Bad practice (and observable symptom)                                                                                                                  |
+|--------------------------------|-------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **Report queue**               | **Dedicated** queue (`APP.REPORT.QUEUE`) pointed at by `JMSReplyTo`.                | `JMSReplyTo` to the business queue → the consumer processes reports as requests; parsing breaks, an error loop fills backout/DLQ.                   |
+| **Connection**                 | Always `JmsPoolConnectionFactory` with a bounded `maxConnections`.                    | Raw CF + connection per message → repeated handshake, socket exhaustion, QMgr at `MAXCHANNELS`, the service hangs with no obvious error.                        |
+| **Connection (HA)**            | CCDT/`CONNECTION_NAME_LIST` managed by operations.                               | Single fixed host/port → cascading `2059`/`2538` with no auto-recovery.                                                                                |
+| **COA/COD (usage)**            | Enable selectively where proof of delivery has value.                          | COA+COD+Exception+Expiration across all high volume → throughput plummets, `REPORT.QUEUE` with backlog, QMgr disk saturates.                               |
+| **COA/COD (data)**             | `MQRO_COA`/`MQRO_COD` without `_WITH_DATA` by default.                                  | Indiscriminate `_WITH_FULL_DATA` → payload duplication and **PII exposure** on the report queue.                                                  |
+| **Persistence**                | Persistent message → persistent report → **persistent correlation store**. | Persistent message + in-memory store → orphaned reports after restart; reconciliation reports "unknown" deliveries.                               |
+| **Multi-instance correlation** | **Shared** store (DB/Redis) across instances.                                | In-memory store in a multi-instance service → fragmented reconciliation; the COD arrives at another instance that does not know about the pending item.                      |
+| **`JMS_IBM_FEEDBACK`**         | Read `JMS_IBM_FEEDBACK` (canonical, always populated).                                 | Read `JMS_IBM_MQMD_Feedback` without `WMQ_MQMD_READ_ENABLED` → feedback arrives as `0`, every report becomes `UNKNOWN`.                                            |
+| **Transactions**               | Local transaction + outbox; XA only when necessary.                                  | XA "to be safe" / transacted `JMSContext` shared across threads → in-doubt transactions, commit confirms another thread's work, deadlocks. |
+| **Poison message**             | `BOTHRESH`/`BOQNAME` + idempotent processing.                                   | Infinite retry without `BOTHRESH`/idempotency → a thread looping at 100% CPU, a stalled queue, duplicated data downstream.                                     |
+| **Reconnection**               | Auto-reconnect + **idempotency** + validate pool×reconnect.                         | Reconnection without idempotency → duplicate reprocessing; a "dead" connection handed back by the pool.                                                            |
+| **JMS concurrency**            | **One `JMSContext` per thread**; I/O on platform threads.                       | `Session`/`JMSContext` shared across threads → `IllegalStateException`, messages disappearing/duplicating.                                             |
+| **Virtual Threads**            | VTs in orchestration; JMS on pooled platform threads.                         | `JMSContext` shared across VTs → state corruption; VT-per-message with no ceiling → connection storm. (Java 25/JEP 491: pinning on `synchronized` resolved; only native frames remain.)        |
+| **Security (reports)**         | Grant `PUT+SETALL` to the specific principal.                                      | App running as `admin` to "fix the 2035" → security hole; breaks when CHLAUTH hardens.                                                  |
+| **Security (TLS)**             | TLS 1.3, matching names, PKCS12, no `useIBMCipherMappings`.                    | `TLS_RSA_*`/`useIBMCipherMappings` → `2393`/`2397` on connect (RSA disabled on Java 25; property removed in 9.4.0).                             |
+| **Secrets**                    | `password` via secret/env (`${IBM_MQ_PASSWORD}`).                                   | Hardcoded password in source/versioned YAML → leak into Git; `2035` when the password is rotated.                                                  |
+
+---
+
+> End of the guide. The complete reference code is in `ibmmq-jms-guide/` (compilable with `mvn test`; end-to-end
+> COA/COD integration test with `mvn verify`).
