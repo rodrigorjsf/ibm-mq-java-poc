@@ -20,8 +20,8 @@ via `JMSContext`).
 
 ## Pre-requisitos
 
-- **JDK 25 (Amazon Corretto)** para build/run local. O bytecode tem como alvo o **release 21**
-  (producao roda em Java 21).
+- **JDK 25 (Amazon Corretto)** para build, testes e producao. O bytecode tem como alvo o **release 25**
+  (Java 25 e a versao de producao — substitui a P1 do brief; ver `docs/adr/0001-java-25-runtime.md`).
 - Maven instalado no caminho indicado abaixo.
 - **Docker** apenas para o teste de integracao e o `docker-compose`.
 

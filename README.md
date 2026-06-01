@@ -1,6 +1,6 @@
 # ibm-mq-java-poc
 
-Production-grade proof of concept for integrating **Java 21 / Micronaut 4** with **IBM MQ** over **JMS 2.0 (`javax.jms`)**, with deep focus on **COA / COD delivery reports** (Confirmation On Arrival / Confirmation On Delivery).
+Production-grade proof of concept for integrating **Java 25 / Micronaut 4** with **IBM MQ** over **JMS 2.0 (`javax.jms`)**, with deep focus on **COA / COD delivery reports** (Confirmation On Arrival / Confirmation On Delivery).
 
 The repository ships three things: a **runnable Maven project**, an **exhaustive technical guide** (in Brazilian Portuguese), and the **validated research** the implementation is built on.
 
@@ -8,7 +8,7 @@ The repository ships three things: a **runnable Maven project**, an **exhaustive
 
 | Component | Version |
 | --- | --- |
-| Java (target) | 21 (`maven.compiler.release=21`) |
+| Java (target) | 25 (`maven.compiler.release=25`, LTS) |
 | Framework | Micronaut 4.9.4 (`io.micronaut.platform:micronaut-platform`) |
 | IBM MQ client | `com.ibm.mq:com.ibm.mq.allclient:9.4.5.0` (`javax.jms` / JMS 2.0) |
 | JMS connection pool | `org.messaginghub:pooled-jms:2.0.9` |
@@ -36,7 +36,7 @@ CLAUDE.md                               project guide: validated facts, env quir
 
 ## Quick start
 
-Requires JDK 21+ (built and verified on Amazon Corretto 25), Maven 3.9+, and Docker (for the integration test).
+Requires JDK 25+ (Amazon Corretto 25; `maven.compiler.release=25`), Maven 3.9+, and Docker (for the integration test).
 
 ```bash
 cd ibmmq-jms-guide
