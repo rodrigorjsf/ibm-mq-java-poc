@@ -28,8 +28,14 @@ data:
   90-report-authority.mqsc: |
     * ---------------------------------------------------------------------------
     * Grant the application principal the authority to receive COA/COD reports.
-    * Without +setall the QMgr's PUT-with-context onto the report queue fails 2035
-    * and the report dead-letters silently (report queue stays empty).
+    * Without the context authorities below the QMgr's PUT-with-context onto the
+    * report queue fails 2035 and the report dead-letters silently (report queue
+    * stays empty). VERIFIED LIVE on k3s: the missing permission the QMgr actually
+    * requested was *passid* (AMQ8077W "requested permissions are unauthorized:
+    * passid") — the report PUT PASSES the original message's identity context, so
+    * +passid/+passall are required, NOT just +setall (the earlier assumption). We
+    * grant the full context set (put + passid + passall + setid + setall) to be
+    * robust across COA, COD and exception reports.
     * ---------------------------------------------------------------------------
 
     * Report queue must exist before we authorize it (DEV.QUEUE.2 is pre-created by the
@@ -37,14 +43,14 @@ data:
     DEFINE QLOCAL('DEV.QUEUE.2') DEFPSIST(YES) +
            DESCR('COA/COD report queue (JMSReplyTo)') REPLACE
 
-    * +put: app may PUT onto the report queue. +setall: app may set ALL context
-    * fields (identity + origin) — required for the QMgr's PUT-with-context report.
+    * Full context authority for the QMgr's PUT-with-context report onto the reply queue.
+    * passid/passall (pass identity/all context) is the one the QMgr actually needs.
     SET AUTHREC PROFILE('DEV.QUEUE.2') OBJTYPE(QUEUE) +
-        PRINCIPAL('app') AUTHADD(PUT, SETALL)
+        PRINCIPAL('app') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)
 
     * Belt-and-suspenders: also grant via the group, in case the image runs `app` under a group MCAUSER.
     SET AUTHREC PROFILE('DEV.QUEUE.2') OBJTYPE(QUEUE) +
-        GROUP('mqclient') AUTHADD(PUT, SETALL)
+        GROUP('mqclient') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)
 
     * Ensure app can also browse/get the business + report queues (usually covered by DEV.** grant,
     * re-asserted here so the harness does not depend on undocumented image defaults).

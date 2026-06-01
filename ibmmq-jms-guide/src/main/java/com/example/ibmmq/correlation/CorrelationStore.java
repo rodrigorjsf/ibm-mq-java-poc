@@ -34,6 +34,18 @@ public interface CorrelationStore {
     /** Remove a pendencia (ex. apos COA+COD confirmados). */
     void remove(String messageId);
 
+    /**
+     * Remove a pendencia atomicamente SE (e somente se) COA e COD ja estiverem ambos confirmados.
+     * Retorna {@code true} apenas se ESTA chamada realizou a remocao.
+     *
+     * <p>Independente de ordem: qualquer um dos relatorios (COA ou COD) que complete o par dispara a
+     * remocao, e consumidores concorrentes (competing consumers em pods distintos) competem com
+     * seguranca — exatamente uma chamada remove, as demais sao no-op. E isto que permite o
+     * {@link #pendingCount()} drenar a zero cluster-wide SEM um sweep manual de operador, mesmo quando
+     * COA e COD sao processados fora de ordem em pods diferentes.</p>
+     */
+    boolean removeIfFullyConfirmed(String messageId);
+
     /** Numero de mensagens ainda pendentes (sem confirmacao completa). */
     int pendingCount();
 }

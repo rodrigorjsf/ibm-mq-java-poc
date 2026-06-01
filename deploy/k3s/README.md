@@ -100,27 +100,21 @@ sequenceDiagram
 `DELETE` (deleting an absent row is harmless). Duplicate report delivery and concurrent processing by
 competing consumers therefore never double-count and never error.
 
-**Documented ordering limitation.** The "reconcile + remove when fully confirmed" decision lives in
-`ReportMessageConsumer` (reused unchanged) and only removes the row in the COD branch when
-`isFullyConfirmed()`. Across competing report-consumers COA and COD can be processed out of order on
-different pods; if **COD lands before COA**, the row is correctly marked but not removed, and the later
-COA branch does not remove it either. The data is never lost or double-counted — each flag is set
-exactly once — but `pendingCount()` may not reach 0 under out-of-order delivery without an operator
-sweep:
+**Order-independent reconciliation (no operator sweep needed).** `ReportMessageConsumer` calls
+`removeIfFullyConfirmed(correlationId)` in **both** the COA and COD branches, and the store performs an
+atomic `DELETE ... WHERE coa_received AND cod_received`. So whichever report completes the pair removes
+the row — even when **COD lands before COA** on a different competing-consumer pod. Concurrent callers
+race safely (exactly one `DELETE` affects the row; the rest affect zero), each flag is still set exactly
+once (idempotent `UPDATE`), and `pendingCount()` drains to **0** cluster-wide on its own.
+
+To inspect genuinely still-pending rows (a message missing a report — e.g. dead-lettered):
 
 ```sql
--- Rows that are fully confirmed but were not removed (COD-before-COA ordering). Safe to delete.
-DELETE FROM pending_message WHERE coa_received AND cod_received;
-
--- Genuinely still-pending (missing a report): inspect, do NOT blind-delete.
 SELECT message_id, business_key, coa_received, cod_received, sent_at
 FROM pending_message
 WHERE NOT (coa_received AND cod_received)
 ORDER BY sent_at;
 ```
-
-Tightening this to consumer-side "remove whenever both flags are TRUE, regardless of which branch sees
-it last" is a deliberate follow-up — it would change `ReportMessageConsumer`, out of scope for #18.
 
 ## Build the image and load it into k3s (no registry)
 
@@ -137,6 +131,12 @@ docker save ibmmq-jms-harness:1.0.0 | sudo k3s ctr images import -
 sudo k3s ctr images ls | grep ibmmq-jms-harness
 ```
 
+> **Using k3d instead of native k3s?** This harness was validated end-to-end on a **k3d** cluster
+> (k3s-in-Docker). With k3d the import command differs — use
+> `k3d image import ibmmq-jms-harness:1.0.0 -c <cluster>` (and likewise import
+> `icr.io/ibm-messaging/mq:9.4.5.0-r2`, `postgres:16-alpine`, `busybox:1.36` so the cluster does not
+> re-pull them over the network). The `docker save | k3s ctr images import` form above is for native k3s.
+>
 > If you bump the tag (e.g. `1.0.1`), change the `images:` block in `kustomization.yaml` to match —
 > that single line retags all three role Deployments.
 >
@@ -234,7 +234,7 @@ kubectl -n ibmmq-harness exec "$MQ_POD" -- bash -c 'echo "DIS CONN(*) WHERE(CHAN
 ```bash
 PG_POD=$(kubectl -n ibmmq-harness get pod -l app.kubernetes.io/name=postgres -o jsonpath='{.items[0].metadata.name}')
 
-# Rows still pending (should trend toward 0; see the ordering-limitation sweep above):
+# Rows still pending (drains to 0 on its own — order-independent reconciliation, no sweep needed):
 kubectl -n ibmmq-harness exec "$PG_POD" -- psql -U corr -d correlation \
   -c 'SELECT count(*) FILTER (WHERE NOT (coa_received AND cod_received)) AS pending,
              count(*) FILTER (WHERE coa_received AND cod_received)       AS fully_confirmed
@@ -251,16 +251,24 @@ kubectl -n ibmmq-harness port-forward svc/ibmmq 9443:9443
 
 ## Operational notes and gotchas
 
-- **The MQSC ConfigMap mounts as a directory at `/etc/mqm` — this is intentional.** Unlike
-  `docker-compose.yml` (which bind-mounts individual `.mqsc` files), the k8s manifest mounts the whole
-  ConfigMap at `/etc/mqm`, MQ's documented drop-in autoconfig directory. The queue manager's own
-  state (`mqs.ini`, logs, message store) lives under `/mnt/mqm`, mounted separately from the PVC, so
-  masking `/etc/mqm` with the ConfigMap is the correct IBM-documented pattern — do **not** "fix" it
-  into per-file mounts.
+- **The MQSC grant mounts via `subPath` at `/etc/mqm/90-report-authority.mqsc` — NOT over the whole
+  directory.** The IBM MQ dev image bakes its own files into `/etc/mqm`: the `10-dev.mqsc` symlink that
+  creates `DEV.QUEUE.*`, the `DEV.APP.SVRCONN` channel + the `app`→MCAUSER CHLAUTH USERMAP, the web
+  console config, and TLS templates. A bare ConfigMap volume mounted at `/etc/mqm` (no `subPath`)
+  **masks** all of those — the autoconfig glob `/etc/mqm/*.mqsc` then finds only our grant, so the
+  channel and business queue are never created and every app pod fails `MQRC_NOT_AUTHORIZED (2035)`.
+  Mounting the single file via `subPath` overlays just that file and leaves the image's baked tree
+  intact (the same effect as `docker-compose.yml`'s per-file bind mounts). `subPath` disables ConfigMap
+  auto-update, which is fine — MQSC autoconfig only runs at QM creation anyway. Verify after bring-up:
+  `kubectl -n ibmmq-harness exec <mq-pod> -- ls /etc/mqm` shows `10-dev.mqsc` + the `.tpl` files +
+  `90-report-authority.mqsc`.
 - **MQSC autoconfig runs ONCE, at queue-manager creation.** The report-PUT authority grant in
-  `30-mq-config.yaml` (`SET AUTHREC ... AUTHADD(PUT, SETALL)` on `DEV.QUEUE.2`) is what stops COA/COD
-  reports from silently dead-lettering with `MQRC_NOT_AUTHORIZED (2035)`. Because it is applied only at
-  QM creation, **changing the MQSC requires deleting the MQ PVC** so the queue manager is recreated:
+  `30-mq-config.yaml` (`SET AUTHREC ... AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)` on `DEV.QUEUE.2`)
+  is what stops COA/COD reports from silently dead-lettering with `MQRC_NOT_AUTHORIZED (2035)`. The key
+  permission is **`passid`** (verified live: the QMgr *passes* the original message's identity context
+  into the report, so `+setall` alone is insufficient — `AMQ8077W: ... unauthorized: passid`). Because the
+  grant is applied only at QM creation, **changing the MQSC requires deleting the MQ PVC** so the queue
+  manager is recreated:
   ```bash
   kubectl -n ibmmq-harness delete statefulset ibmmq
   kubectl -n ibmmq-harness delete pvc qm1-data-ibmmq-0
@@ -275,11 +283,48 @@ kubectl -n ibmmq-harness port-forward svc/ibmmq 9443:9443
   image). Because each app runs the JVM as PID 1 with a non-daemon worker thread, a dead JVM already
   exits the container and the kubelet restarts it — the probe is a secondary check, not the primary
   crash-detection mechanism.
+- **Startup ordering + pod hardening.** Each app Deployment has an `initContainer` (`wait-deps`) that
+  blocks until `ibmmq:1414` and `postgres:5432` accept TCP, so first bring-up is clean regardless of
+  apply order (belt-and-suspenders with the app's reconnect loop and the store's schema-init retry).
+  App containers run a hardened `securityContext` (non-root UID 1000, `allowPrivilegeEscalation: false`,
+  all capabilities dropped, `RuntimeDefault` seccomp); `readOnlyRootFilesystem` is left off because the
+  MQ client may write FFST/trace under the workdir. Hardening the MQ and Postgres pods (official images
+  with their own UID/permission needs) is a documented follow-up.
 - **Competing-consumer parallelism = replicas, not threads.** Each pod's loop is single-threaded by
   design; scale `business-consumer`/`report-consumer` replicas (in `kustomization.yaml`) to add
   concurrency. At the standing ~10k rpm target you would scale business-consumers accordingly.
 - **Secrets are DEV placeholders.** Do not commit real credentials. For anything beyond a local
   laptop, replace with sealed-secrets / external-secrets and rotate.
+
+## Known limitations & follow-ups
+
+Surfaced during live k3s validation. None block the steady-state AC1/AC2 demonstration (a warm system
+drains `pending_message` to 0); they are documented so the reference is honest about its edges.
+
+- **Cold-start "resurrection" race (rare).** Reconciliation removes a `pending_message` row when both
+  COA and COD are confirmed. If — at cold start — both reports for a message are processed *and the row
+  removed* BEFORE the producer's `register()` commits (the producer can only `register` after `send`,
+  since the MsgId is assigned on send), `register`'s `INSERT ... ON CONFLICT` re-inserts a flagless
+  orphan (`coa=f, cod=f`) that never drains. Observed live as ~2 of the very first messages; the warm
+  steady state drains to 0. **Robust fix (follow-up):** pre-generate the MsgId client-side
+  (`WMQ_MQMD_WRITE_ENABLED` + set the MQMD MsgId) and `register` BEFORE `send` so the row always exists
+  before any report — or keep a short-lived tombstone instead of deleting. Until then, the still-pending
+  query above surfaces any orphans.
+- **Store resilience to DB unavailability.** `JdbcCorrelationStore` throws `IllegalStateException` on
+  `SQLException`; on the report path (AUTO_ACKNOWLEDGE) a transient DB outage can drop a report. A
+  production build should classify `SQLException` (transient vs permanent) with bounded retry/backoff,
+  and consume reports under `CLIENT_ACKNOWLEDGE`/transacted `JMSContext` so a store failure leaves the
+  report on the queue for redelivery. (`ensureSchema` already retries with backoff.)
+- **Schema bootstrap.** `CREATE TABLE IF NOT EXISTS` runs from every pod at startup. For production,
+  move DDL to a single-owner step (a Kubernetes `Job`/init-container, or Flyway/Liquibase with a lock
+  table) instead of in-app creation.
+- **IBM MQ availability.** A single-replica MQ StatefulSet is a SPOF and cannot meet the standing
+  ~10k-rpm availability bar. A production reference would use IBM MQ **NativeHA** (or multi-instance),
+  with `chkmqready`/`chkmqhealthy` probes rather than a bare TCP check. k3s single-node is the explicit
+  dev limitation here (per ADR-0003).
+- **Pod hardening scope.** The app pods run a hardened `securityContext`; the MQ and Postgres pods
+  (official images with their own UID/permission needs) are left at image defaults — hardening them is a
+  follow-up.
 
 ## File map
 
@@ -288,7 +333,7 @@ kubectl -n ibmmq-harness port-forward svc/ibmmq 9443:9443
 | `00-namespace.yaml` | `ibmmq-harness` namespace |
 | `10-secrets.yaml` | MQ app/admin, app client, and Postgres credentials |
 | `20-postgres.yaml` | Postgres StatefulSet + headless Service + PVC (shared store backend) |
-| `30-mq-config.yaml` | MQSC ConfigMap — report-PUT authority grant (`AUTHADD(PUT, SETALL)`) |
+| `30-mq-config.yaml` | MQSC ConfigMap — report-PUT authority grant (`AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)`) |
 | `31-app-config.yaml` | Non-secret app config (MQ connection, `correlation.store=jdbc`, datasource) |
 | `40-ibmmq.yaml` | IBM MQ StatefulSet + headless Service + PVC |
 | `50-publisher.yaml` | Publisher Deployment (`HARNESS_ROLE=publisher`) |

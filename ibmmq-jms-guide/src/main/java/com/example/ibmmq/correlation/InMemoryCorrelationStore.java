@@ -4,6 +4,7 @@ import com.example.ibmmq.model.PendingMessage;
 import io.micronaut.context.annotation.Requires;
 import jakarta.inject.Singleton;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -33,7 +34,14 @@ public class InMemoryCorrelationStore implements CorrelationStore {
 
     @Override
     public void register(PendingMessage pending) {
-        store.put(pending.messageId(), pending);
+        // merge preservando os flags: se um relatorio chegou ANTES do register e criou um stub (coa/cod
+        // ja marcado), o register preenche os campos descritivos SEM zerar os flags (espelha o
+        // ON CONFLICT DO UPDATE do JdbcCorrelationStore).
+        store.merge(pending.messageId(), pending, (existing, incoming) ->
+                new PendingMessage(incoming.messageId(), incoming.businessKey(), incoming.payload(),
+                        incoming.sentAt(),
+                        existing.coaReceived() || incoming.coaReceived(),
+                        existing.codReceived() || incoming.codReceived()));
     }
 
     @Override
@@ -46,23 +54,29 @@ public class InMemoryCorrelationStore implements CorrelationStore {
 
     @Override
     public Optional<PendingMessage> markCoaReceived(String messageId) {
-        // compute garante atomicidade da atualizacao mesmo sob concorrencia de relatorios.
-        return updateAtomically(messageId, PendingMessage::withCoaReceived);
+        return markFlag(messageId, true, false);
     }
 
     @Override
     public Optional<PendingMessage> markCodReceived(String messageId) {
-        return updateAtomically(messageId, PendingMessage::withCodReceived);
+        return markFlag(messageId, false, true);
     }
 
-    private Optional<PendingMessage> updateAtomically(
-            String messageId,
-            java.util.function.UnaryOperator<PendingMessage> mutation) {
+    /**
+     * Marca um flag criando a linha como stub se ela ainda nao existe (relatorio chegou ANTES do
+     * register) — espelha o UPSERT do {@link JdbcCorrelationStore}. {@code compute} torna a operacao
+     * atomica mesmo sob relatorios concorrentes; setar um flag ja TRUE de novo e no-op.
+     */
+    private Optional<PendingMessage> markFlag(String messageId, boolean coa, boolean cod) {
         if (messageId == null) {
             return Optional.empty();
         }
-        PendingMessage updated = store.computeIfPresent(messageId, (k, existing) -> mutation.apply(existing));
-        return Optional.ofNullable(updated);
+        return Optional.of(store.compute(messageId, (k, existing) -> existing == null
+                ? new PendingMessage(messageId, null, null, Instant.now(), coa, cod)
+                : new PendingMessage(existing.messageId(), existing.businessKey(), existing.payload(),
+                        existing.sentAt(),
+                        existing.coaReceived() || coa,
+                        existing.codReceived() || cod)));
     }
 
     @Override
@@ -70,6 +84,24 @@ public class InMemoryCorrelationStore implements CorrelationStore {
         if (messageId != null) {
             store.remove(messageId);
         }
+    }
+
+    @Override
+    public boolean removeIfFullyConfirmed(String messageId) {
+        if (messageId == null) {
+            return false;
+        }
+        // Check-and-remove atomico: computeIfPresent retornando null remove a entrada. O holder captura
+        // se FOI esta chamada que observou ambos os flags TRUE e removeu (exatamente uma vence a corrida).
+        boolean[] removed = {false};
+        store.computeIfPresent(messageId, (k, existing) -> {
+            if (existing.isFullyConfirmed()) {
+                removed[0] = true;
+                return null; // remove
+            }
+            return existing;
+        });
+        return removed[0];
     }
 
     @Override

@@ -38,16 +38,18 @@ FROM amazoncorretto:25 AS runtime
 
 WORKDIR /app
 
-# Run as a non-root user (defense in depth; k8s securityContext can pin this too).
-# procps-ng provides `pgrep`, used by the Deployments' exec liveness probe.
+# Run as a non-root user with a PINNED numeric UID/GID (1000). The numeric `USER 1000` (not a name)
+# lets the k8s securityContext assert runAsNonRoot:true — the kubelet cannot verify non-root from a
+# name-only USER and would refuse to start the pod. procps-ng provides `pgrep` (exec liveness probe).
 RUN yum install -y shadow-utils procps-ng \
-    && groupadd -r app && useradd -r -g app -d /app app \
+    && groupadd -g 1000 app && useradd -u 1000 -g app -d /app -s /sbin/nologin app \
+    && chown 1000:1000 /app \
     && yum clean all
-USER app
+USER 1000
 
 # Bring over the compiled classes, the runtime classpath jars, and the resources.
-COPY --from=build /workspace/target/classes        /app/classes
-COPY --from=build /workspace/target/dependency      /app/dependency
+COPY --from=build --chown=1000:1000 /workspace/target/classes        /app/classes
+COPY --from=build --chown=1000:1000 /workspace/target/dependency      /app/dependency
 
 # JVM flags:
 #   --enable-native-access=ALL-UNNAMED  silences the MQ client native-access warning on Corretto 25.

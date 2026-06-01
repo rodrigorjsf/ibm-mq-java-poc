@@ -44,25 +44,26 @@ import java.util.Optional;
  * report, and competing report-consumers may process the same report concurrently. Every mutation
  * here is naturally idempotent:</p>
  * <ul>
- *   <li>{@link #register} uses {@code INSERT ... ON CONFLICT (message_id) DO NOTHING} — a duplicate
- *       send/registration is a no-op, never a primary-key violation.</li>
- *   <li>{@link #markCoaReceived}/{@link #markCodReceived} are {@code UPDATE ... SET flag = TRUE}:
- *       setting an already-true flag to TRUE again is a no-op (no double-count, no side effect).</li>
- *   <li>{@link #remove} is {@code DELETE WHERE message_id = ?}: deleting an absent row affects zero
- *       rows — harmless if two pods both reconcile the same fully-confirmed message.</li>
+ *   <li>{@link #register} uses {@code INSERT ... ON CONFLICT (message_id) DO UPDATE} of the DESCRIPTIVE
+ *       fields only (never the flags) — a duplicate registration is harmless, and if a report already
+ *       created a stub (below) register backfills business_key/payload/sent_at without clearing it.</li>
+ *   <li>{@link #markCoaReceived}/{@link #markCodReceived} are {@code INSERT ... ON CONFLICT DO UPDATE SET
+ *       flag = TRUE} (UPSERT): they CREATE the row as a stub if a report arrives before {@code register}
+ *       (the QM emits the COA on arrival, processable before register — which only has the MsgId AFTER
+ *       send), else set the flag; setting an already-true flag again is a no-op (no double-count).</li>
+ *   <li>{@link #remove} / {@link #removeIfFullyConfirmed} are {@code DELETE}s: deleting an absent row
+ *       affects zero rows — harmless if two pods both reconcile the same fully-confirmed message.</li>
  * </ul>
  *
- * <p><b>AC2 ordering limitation (documented, not silently shipped):</b> {@link CorrelationStore}'s
- * "reconcile + remove on full confirmation" lives in {@code ReportMessageConsumer} and only removes
- * in the COD branch gated on {@code isFullyConfirmed()}. Across competing report-consumers, COA and
- * COD can be processed out of order on different pods; if COD lands before COA, the row is marked COD
- * but not removed (not yet fully confirmed), and the later COA branch does not remove it either. The
- * row is then a correctly-marked-but-not-removed pending row, eventually swept by an operator query
- * (see {@code deploy/k3s/README.md}). The data is never lost or double-counted — each message is
- * confirmed exactly once per flag — but {@code pendingCount()} may not reach 0 under out-of-order
- * delivery without the sweep. Tightening this to consumer-side "remove when both flags TRUE
- * regardless of which branch sees it last" is a deliberate follow-up (it would change
- * {@code ReportMessageConsumer}, out of scope for this slice).</p>
+ * <p><b>AC2 order-independent reconciliation:</b> {@link #removeIfFullyConfirmed} runs an atomic
+ * {@code DELETE ... WHERE coa_received AND cod_received}, and {@code ReportMessageConsumer} calls it in
+ * BOTH the COA and COD branches — so whichever report completes the pair removes the row, even when COA
+ * and COD are processed out of order on different competing-consumer pods. Concurrent callers race
+ * safely (exactly one DELETE affects the row; the rest affect zero rows). {@code pendingCount()}
+ * therefore drains to zero cluster-wide with NO operator sweep, while each flag is still set exactly
+ * once (idempotent upserts). One rare cold-start edge remains — if BOTH reports reconcile and remove the
+ * row before {@code register} commits, register re-inserts a flagless orphan; see
+ * {@code deploy/k3s/README.md} "Known limitations &amp; follow-ups".</p>
  *
  * <p><b>Bean gating:</b> active only when {@code correlation.store=jdbc} (set by the harness
  * ConfigMap). The complementary {@link InMemoryCorrelationStore} loads otherwise, so exactly one
@@ -87,22 +88,43 @@ public class JdbcCorrelationStore implements CorrelationStore {
                 cod_received BOOLEAN      NOT NULL DEFAULT FALSE
             )""";
 
-    // INSERT idempotente: uma re-registro (mesmo message_id) e no-op, nao um erro de PK.
+    // INSERT idempotente. ON CONFLICT DO UPDATE (nao DO NOTHING) preenche os campos DESCRITIVOS se a
+    // linha ja existe como um STUB criado por um relatorio que chegou ANTES do register (ver markFlag) —
+    // SEM tocar nos flags coa/cod (preserva o que o relatorio ja marcou). Re-registro do mesmo id apenas
+    // reafirma os campos descritivos.
     private static final String INSERT_SQL = """
             INSERT INTO pending_message (message_id, business_key, payload, sent_at, coa_received, cod_received)
             VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT (message_id) DO NOTHING""";
+            ON CONFLICT (message_id) DO UPDATE SET
+                business_key = EXCLUDED.business_key,
+                payload      = EXCLUDED.payload,
+                sent_at      = EXCLUDED.sent_at""";
 
     private static final String SELECT_SQL = """
             SELECT message_id, business_key, payload, sent_at, coa_received, cod_received
             FROM pending_message WHERE message_id = ?""";
 
-    private static final String UPDATE_COA_SQL =
-            "UPDATE pending_message SET coa_received = TRUE WHERE message_id = ?";
-    private static final String UPDATE_COD_SQL =
-            "UPDATE pending_message SET cod_received = TRUE WHERE message_id = ?";
+    // UPSERT ... RETURNING: marca o flag E devolve a linha em UMA unica statement atomica (sem read-back
+    // separado -> sem corrida). Critico: e um INSERT ... ON CONFLICT, NAO um UPDATE — um relatorio pode
+    // chegar ANTES do register() do producer (a QM gera o COA na CHEGADA, processavel por um competing
+    // report-consumer antes do register, que so tem o messageId APOS o send). Entao a marcacao CRIA a
+    // linha (um stub: flag setado, sent_at agora; campos descritivos preenchidos depois pelo register via
+    // ON CONFLICT DO UPDATE) se ela ainda nao existe — nenhum relatorio e perdido, e pendingCount drena.
+    private static final String UPDATE_COA_SQL = """
+            INSERT INTO pending_message (message_id, sent_at, coa_received) VALUES (?, ?, TRUE)
+            ON CONFLICT (message_id) DO UPDATE SET coa_received = TRUE
+            RETURNING message_id, business_key, payload, sent_at, coa_received, cod_received""";
+    private static final String UPDATE_COD_SQL = """
+            INSERT INTO pending_message (message_id, sent_at, cod_received) VALUES (?, ?, TRUE)
+            ON CONFLICT (message_id) DO UPDATE SET cod_received = TRUE
+            RETURNING message_id, business_key, payload, sent_at, coa_received, cod_received""";
     private static final String DELETE_SQL =
             "DELETE FROM pending_message WHERE message_id = ?";
+    // Remove SO se ambos os flags ja estao TRUE — reconciliacao independente de ordem e race-free:
+    // exatamente um competing consumer afeta a linha; chamadas concorrentes / COA-COD fora de ordem
+    // convergem aqui (ver removeIfFullyConfirmed).
+    private static final String DELETE_IF_CONFIRMED_SQL =
+            "DELETE FROM pending_message WHERE message_id = ? AND coa_received AND cod_received";
 
     // Conta apenas as pendencias ainda nao totalmente confirmadas (coerente com InMemory.pendingCount).
     private static final String COUNT_PENDING_SQL =
@@ -120,13 +142,32 @@ public class JdbcCorrelationStore implements CorrelationStore {
      */
     @PostConstruct
     void ensureSchema() {
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(DDL)) {
-            ps.execute();
-            LOG.info("[stage=STORE-INIT] Esquema do store de correlacao garantido (pending_message)");
-        } catch (SQLException e) {
-            throw new IllegalStateException("Falha ao garantir o esquema do store de correlacao JDBC", e);
+        // O Postgres pode ainda nao estar pronto quando o pod sobe. Em vez de crashar o bean no primeiro
+        // erro (CrashLoopBackOff ate o DB subir), tentamos algumas vezes com backoff — defesa em
+        // profundidade junto do initContainer que espera postgres:5432 (ver deploy/k3s). CREATE TABLE IF
+        // NOT EXISTS e idempotente e seguro sob N replicas concorrentes.
+        final int maxAttempts = 10;
+        SQLException last = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(DDL)) {
+                ps.execute();
+                LOG.info("[stage=STORE-INIT] Esquema do store de correlacao garantido (pending_message)");
+                return;
+            } catch (SQLException e) {
+                last = e;
+                LOG.warn("[stage=STORE-INIT] Postgres indisponivel ao garantir esquema (tentativa {}/{}): {}",
+                        attempt, maxAttempts, e.getMessage());
+                try {
+                    Thread.sleep(3_000L);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
         }
+        throw new IllegalStateException(
+                "Falha ao garantir o esquema do store de correlacao JDBC apos " + maxAttempts + " tentativas", last);
     }
 
     @Override
@@ -175,29 +216,24 @@ public class JdbcCorrelationStore implements CorrelationStore {
     }
 
     /**
-     * Aplica um UPDATE idempotente do flag e devolve a pendencia atualizada (lida de volta na mesma
-     * conexao). Setar um flag ja TRUE para TRUE de novo e no-op — seguro sob entrega at-least-once
-     * de relatorios e consumidores concorrentes.
+     * Marca um flag (COA/COD) via {@code INSERT ... ON CONFLICT DO UPDATE ... RETURNING}: cria a linha
+     * como stub se o relatorio chegou antes do register, ou seta o flag na linha existente — sempre em
+     * UMA statement atomica (sem read-back, logo sem corrida). Setar um flag ja TRUE de novo e no-op
+     * (idempotente sob entrega at-least-once e competing consumers).
      */
-    private Optional<PendingMessage> markFlag(String messageId, String updateSql) {
+    private Optional<PendingMessage> markFlag(String messageId, String upsertReturningSql) {
         if (messageId == null) {
             return Optional.empty();
         }
-        try (Connection conn = dataSource.getConnection()) {
-            int affected;
-            try (PreparedStatement ps = conn.prepareStatement(updateSql)) {
-                ps.setString(1, messageId);
-                affected = ps.executeUpdate();
-            }
-            if (affected == 0) {
-                // Pendencia desconhecida (ex. relatorio orfao): no-op, coerente com o InMemory.
-                return Optional.empty();
-            }
-            try (PreparedStatement ps = conn.prepareStatement(SELECT_SQL)) {
-                ps.setString(1, messageId);
-                try (ResultSet rs = ps.executeQuery()) {
-                    return rs.next() ? Optional.of(mapRow(rs)) : Optional.empty();
-                }
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(upsertReturningSql)) {
+            ps.setString(1, messageId);
+            // sent_at do stub, caso o relatorio tenha chegado antes do register (os campos descritivos
+            // sao preenchidos depois pelo register via ON CONFLICT DO UPDATE).
+            ps.setTimestamp(2, Timestamp.from(Instant.now()));
+            // UPSERT ... RETURNING sempre devolve a linha (criada ou atualizada) como ResultSet.
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(mapRow(rs)) : Optional.empty();
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Falha ao marcar flag de relatorio: " + messageId, e);
@@ -216,6 +252,22 @@ public class JdbcCorrelationStore implements CorrelationStore {
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("Falha ao remover pendencia: " + messageId, e);
+        }
+    }
+
+    @Override
+    public boolean removeIfFullyConfirmed(String messageId) {
+        if (messageId == null) {
+            return false;
+        }
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(DELETE_IF_CONFIRMED_SQL)) {
+            ps.setString(1, messageId);
+            // DELETE condicional atomico: exatamente um competing consumer afeta a linha quando ambos os
+            // flags estao TRUE; COA/COD fora de ordem e chamadas concorrentes convergem aqui sem corrida.
+            return ps.executeUpdate() == 1;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Falha ao remover pendencia confirmada: " + messageId, e);
         }
     }
 
