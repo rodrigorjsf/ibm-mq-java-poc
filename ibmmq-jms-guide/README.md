@@ -74,6 +74,35 @@ aplicados na criacao do QMgr (setup de **producao** com objetos `APP.*`, CONNAUT
 O **IT**, por confiabilidade, usa os objetos `DEV.*` default da imagem (usuario `app`
 pre-autorizado a `DEV.**`).
 
+## Demo gated COA/COD (um comando, contra o broker local)
+
+`CoaCodDemoRunner` e um runner **gated por um flag EXPLICITO** (`demo.coa-cod.enabled=true`,
+NUNCA ligado no startup normal). Ligado via o perfil Micronaut `demo`, ele sobe no startup,
+reutiliza os beans de producao (producer / consumer / report consumer + o logger narrado) e roda o
+fluxo completo **produzir -> consumir -> COA/COD** uma unica vez, imprimindo as etapas narradas
+(`[stage=PRODUCE/CONSUME/COMMIT/CLASSIFY/CORRELATE/COA/COD/RECONCILE]`) e um resumo final
+`[resultado=PASS|FAIL]` que valida **feedback 259 (COA) + 260 (COD)** e **`correlId == messageId`**.
+
+Pre-requisito: o broker local no ar (`docker compose up -d`, ja com `MQ_ADMIN_PASSWORD`). O perfil
+`demo` conecta como **admin / `DEV.ADMIN.SVRCONN`** porque so o admin tem a autoridade de contexto
+(`+setall`) que o QMgr precisa para **gerar e entregar** os relatorios — o usuario `app` falharia com
+`MQRC_NOT_AUTHORIZED (2035)` e o relatorio iria para a DLQ (a fila de relatorios ficaria vazia).
+
+```bash
+docker compose up -d                 # pre-requisito: broker no ar (aguarde "Started queue manager")
+
+# IMPORTANTE: micronaut.environments precisa chegar ao JVM FORKADO da app (mn:run forka um JVM
+# proprio). Um -D "pelado" na CLI do Maven configura o JVM do Maven, NAO o da app — por isso o
+# environment e o native-access vao DENTRO de -Dmn.jvmArgs. (Alternativa equivalente: exportar a
+# variavel de ambiente MICRONAUT_ENVIRONMENTS=demo antes do comando.)
+JAVA_HOME=/home/rodrigo/.local/jdk25 /home/rodrigo/.local/maven-current/bin/mvn mn:run \
+  -Dmn.jvmArgs="--enable-native-access=ALL-UNNAMED -Dmicronaut.environments=demo"
+```
+
+O perfil `demo` (`src/main/resources/application-demo.yml`) liga `demo.coa-cod.enabled=true` e aplica
+os overrides de admin. Sem o environment `demo` ativo, o flag esta ausente, o bean do runner
+**nao e instanciado** (`@Requires`) e o startup normal segue inalterado.
+
 ## Nota sobre Corretto 25: `--enable-native-access`
 
 O cliente IBM MQ carrega bibliotecas nativas via `System.loadLibrary`. No Java 25 isso emite um
