@@ -1,4 +1,4 @@
-# Guia de Produção — Java 21 / Micronaut 4 + IBM MQ via JMS 2.0, com foco em relatórios COA/COD
+# Guia de Produção — Java 25 / Micronaut 4 + IBM MQ via JMS 2.0, com foco em relatórios COA/COD
 
 > Guia técnico, do básico ao avançado, para um engenheiro de software que **não domina IBM MQ** mas precisa integrá-lo e
 > operá-lo em um ambiente **real, crítico e de alta concorrência** (microsserviços). O fio condutor é a entrega confiável
@@ -9,7 +9,7 @@
 
 | Item                | Versão / Coordenada                                                  | Observação                                                                                                                                                |
 |---------------------|----------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Runtime de produção | **Java 21** (LTS)                                                    | Compila/executa também no Corretto 25 local (`maven.compiler.release=21`).                                                                                |
+| Runtime de produção | **Java 25** (LTS)                                                    | Amazon Corretto 25 (`maven.compiler.release=25`). Java 25 é LTS e documentado para o MQ 9.4.x; rode com `--enable-native-access=ALL-UNNAMED` e evite `TLS_RSA_*`. Ver ADR `docs/adr/0001-java-25-runtime.md`.                                       |
 | Framework           | **Micronaut 4.9.4** (BOM `io.micronaut.platform:micronaut-platform`) | A linha 4.9.x do BOM **termina em 4.9.4** — `4.9.9` **não existe** no BOM de plataforma. Plugin Maven `io.micronaut.maven:micronaut-maven-plugin:4.11.6`. |
 | Cliente MQ          | **`com.ibm.mq:com.ibm.mq.allclient:9.4.5.0`**                        | Namespace **`javax.jms`** (JMS 2.0). Linha **CD** (ver nota CD×LTS na Seção 1).                                                                           |
 | Pool JMS            | **`org.messaginghub:pooled-jms:2.0.9`**                              | Linha 2.x ainda é `javax.jms` (3.x já é `jakarta.jms`).                                                                                                   |
@@ -78,28 +78,38 @@ partir das propriedades `JMS_IBM_*`. **COA/COD vivem aqui:** o campo `Report` do
 
 #### Diagrama textual — caminho de uma mensagem em CLIENT mode
 
-```text
-  ┌────────────────────────┐         TCP/IP (porta 1414)         ┌──────────────────────────────────────┐
-  │  Aplicação Java (JMS)   │  ── canal SVRCONN (ex. APP.SVRCONN) ─▶│           Queue Manager (QM1)         │
-  │  com.ibm.mq.allclient   │                                     │                                      │
-  │  (CLIENT mode)          │                                     │  Listener:1414 ─▶ MCA (MCAUSER='app')│
-  └───────────┬────────────┘                                     │         │                            │
-              │ producer.send(businessQueue, msg)                │         ▼                            │
-              │                                                   │   ┌──────────────────────────┐       │
-              └──────────────────────────────────────────────────▶│   │  APP.BUSINESS.QUEUE       │ ◀── COA gerado aqui (na CHEGADA)
-                                                                  │   │  (QLOCAL, persistente)    │       │
-                                                                  │   └─────────────┬────────────┘       │
-                                                                  │                 │ GET destrutivo     │
-                                                                  │                 ▼                    │
-                                                                  │   ┌──────────────────────────┐       │
-                                                                  │   │  consumidor de negócio    │ ◀── COD gerado aqui (no CONSUMO)
-                                                                  │   └─────────────┬────────────┘       │
-                                                                  │                 │ relatórios → ReplyToQ│
-                                                                  │                 ▼                    │
-                                                                  │   ┌──────────────────────────┐       │
-                                                                  │   │  APP.REPORT.QUEUE (COA/COD)│       │
-                                                                  │   └──────────────────────────┘       │
-                                                                  └──────────────────────────────────────┘
+```mermaid
+flowchart LR
+    APP["Aplicação Java (JMS)<br/>com.ibm.mq.allclient<br/>(CLIENT mode)"]
+    subgraph QM1["Queue Manager (QM1)"]
+        direction TB
+        LIS["Listener:1414 → MCA<br/>(MCAUSER='app')"]
+        BQ["APP.BUSINESS.QUEUE<br/>(QLOCAL, persistente)"]
+        CONS["consumidor de negócio"]
+        RQ["APP.REPORT.QUEUE<br/>(COA/COD)"]
+        COA["COA gerado aqui<br/>(na CHEGADA)"]
+        COD["COD gerado aqui<br/>(no CONSUMO)"]
+        LIS e4@--> BQ
+        BQ e2@-->|"GET destrutivo"| CONS
+        CONS e3@-->|"relatórios → ReplyToQ"| RQ
+        BQ -.-> COA
+        CONS -.-> COD
+    end
+    APP e1@-->|"canal SVRCONN (ex. APP.SVRCONN) · TCP/IP 1414"| LIS
+
+    e1@{ animate: true }
+    e2@{ animate: true }
+    e3@{ animate: true }
+    e4@{ animate: true }
+
+    classDef queue fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+    classDef proc fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+    classDef report fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+
+    class APP,CONS,LIS proc;
+    class BQ,RQ queue;
+    class COA,COD report;
+    style QM1 fill:#dfe5ea,stroke:#2f5d6e,color:#1f2430;
 ```
 
 O ponto-chave: em **CLIENT mode** a aplicação não tem o QMgr embutido; tudo passa pelo socket TCP do canal SVRCONN. (O
@@ -113,7 +123,7 @@ O IBM MQ tem uma API nativa própria, a **MQI** (Message Queue Interface), de ba
 código ao MQ.
 
 O **JMS (Java Message Service) 2.0** (namespace `javax.jms`, trazido pelo `com.ibm.mq.allclient`) é a abstração padrão
-Java para mensageria. Por que usá-la em Java 21?
+Java para mensageria. Por que usá-la em Java 25?
 
 - **Portabilidade e familiaridade:** a mesma API conceitual de outros brokers JMS; o time não precisa aprender MQI.
 - **Simplificações do JMS 2.0:** o `JMSContext` unifica `Connection` + `Session` em um objeto único e **`AutoCloseable`
@@ -153,9 +163,10 @@ release, com **janela de suporte mais curta**. A linha **LTS (Long Term Support)
 ex.: `9.4.0.x`) e prioriza estabilidade/patches de longo prazo.
 
 > ℹ️ **Nota.** O trade-off é: **CD** = recursos mais recentes, ciclo de patch/suporte curto; **LTS** = estabilidade e
-> suporte estendido, recursos mais antigos. O projeto fixa **`9.4.5.0` (CD)** por ser a dependência real em uso. Java 21
-> só é suportado a partir do MQ 9.4.x (o Semeru 21 empacotado para Multiplatforms chega em 9.4.4; em z/OS, desde 9.3.0) —
-> por isso 9.3 foi descartado.
+> suporte estendido, recursos mais antigos. O projeto fixa **`9.4.5.0` (CD)** por ser a dependência real em uso. O runtime
+> de produção é o **Java 25** (Amazon Corretto): o MQ 9.4.x **documenta o Java 25** (com orientações operacionais —
+> `TLS_RSA_*` desabilitado, aviso de native-access), e o cliente roda nele com `--enable-native-access=ALL-UNNAMED`. O 9.3
+> foi descartado porque Java 21+ exige MQ 9.4.x (o Semeru empacotado é o 21; o cliente, porém, executa sobre o Java 25).
 
 ### 1.4 Inventário dos objetos MQ necessários
 
@@ -280,11 +291,19 @@ Como você correlaciona um relatório de volta à mensagem que o originou? Pela 
 
 Na prática, **com os defaults** (`MQRO_COPY_MSG_ID_TO_CORREL_ID` + `MQRO_NEW_MSG_ID`):
 
-```text
-Mensagem original:  MessageId = ID:Mxxxx...
-                            │  (copy msg id → correl id)
-                            ▼
-Relatório COA/COD:  MessageId = ID:Ryyyy... (novo)   CorrelationId = ID:Mxxxx...  ◀── chave de correlação
+```mermaid
+flowchart TB
+    ORIG["Mensagem original:<br/>MessageId = ID:Mxxxx..."]
+    REP["Relatório COA/COD:<br/>MessageId = ID:Ryyyy... (novo)<br/>CorrelationId = ID:Mxxxx... (chave de correlação)"]
+
+    ORIG e1@-->|"copy msg id → correl id"| REP
+    e1@{ animate: true }
+
+    classDef queue fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+    classDef report fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+
+    class ORIG queue;
+    class REP report;
 ```
 
 Por isso o consumidor de relatórios faz `findByMessageId(report.getJMSCorrelationID())` — o `CorrelationId` do relatório
@@ -376,24 +395,26 @@ prova de entrega confiável. Para reforçar, defina a fila de relatórios com `D
 
 ### 2.8 Diagrama do fluxo completo
 
-```text
-   PRODUCER                         QUEUE MANAGER (QM1)                         REPORT CONSUMER
-   ────────                         ───────────────────                         ───────────────
-   send(msg) ───────────────▶  PUT em APP.BUSINESS.QUEUE
-   • JMSReplyTo=REPORT.QUEUE         │
-   • Report=COA+COD                  ├──(na chegada)──▶ gera COA ──┐
-   • Persistent                      │                              │
-   • registra MessageId              ▼                              │
-     no CorrelationStore       (mensagem aguarda na fila)           │
-                                     │                              ▼
-   BUSINESS CONSUMER                 │                        APP.REPORT.QUEUE  ──┐
-   ────────────────                  │                              ▲             │
-   receive() (GET destrutivo) ──▶ remove da fila                    │             │  receiveOneReport()
-   commit() ─────────────────────────┼──(no consumo+commit)─▶ gera COD ──────────┤  • lê Feedback (259/260)
-                                     │                              │             │  • correlaciona CorrelId
-                                     ▼                              │             │    → MessageId original
-                                (fila vazia)                        │             │  • marca COA/COD recebido
-                                                                    └─────────────┘  • RECONCILIA a entrega
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'actorBkg':'#dfe5ea','actorBorder':'#5b6472','actorTextColor':'#1f2430','noteTextColor':'#1f2430','noteBkgColor':'#f4e6c4','noteBorderColor':'#b08a3e'}}}%%
+sequenceDiagram
+    box rgb(215,233,210) Aplicações
+        participant P as Producer
+        participant BC as Consumidor de negócio
+    end
+    box rgb(207,224,239) Broker
+        participant QM as Queue Manager QM1
+    end
+    box rgb(244,230,196) Relatórios
+        participant RC as Report Consumer
+    end
+
+    P->>QM: send(msg) — PUT em APP.BUSINESS.QUEUE
+    Note over P,QM: JMSReplyTo=REPORT.QUEUE · Report=COA+COD · Persistent<br/>registra MessageId no CorrelationStore
+    QM-->>RC: COA (na chegada)
+    BC->>QM: receive() — GET destrutivo + commit()
+    QM-->>RC: COD (no consumo + commit)
+    Note over RC: lê Feedback (259/260)<br/>correlaciona CorrelId → MessageId original<br/>marca COA/COD recebido · RECONCILIA a entrega
 ```
 
 ## Seção 3 — Configuração do Ambiente (deep dive de propriedades)
@@ -556,7 +577,7 @@ independentemente da app.
 
 ## Seção 4 — Implementação Prática (código real, compilável)
 
-Todo o código desta seção vem do projeto `ibmmq-jms-guide/` (compila com `maven.compiler.release=21`).
+Todo o código desta seção vem do projeto `ibmmq-jms-guide/` (compila com `maven.compiler.release=25`).
 
 ### 4.1 Bootstrap Micronaut — dependências e `@Factory` do pool
 
@@ -945,22 +966,26 @@ operações MQ**. É o default deste guia (ver `BusinessMessageConsumer`).
 **Transação XA (2PC)** = transação **distribuída**, coordenada por um *transaction manager* (Atomikos/Narayana no
 Micronaut), abrangendo **MQ + outro recurso** (ex.: banco de dados) atomicamente.
 
-```text
-                   Preciso atomicidade entre MQ e OUTRO recurso (banco)?
-                                    │
-                  ┌─────────────────┴─────────────────┐
-                 NÃO                                  SIM
-                  │                                    │
-        Transação LOCAL                     Posso usar o padrão OUTBOX
-   (SESSION_TRANSACTED + commit)            (gravar evento no banco na mesma
-   • mais simples e rápida                   transação, publicar depois)?
-   • default deste guia                          │
-                                       ┌──────────┴──────────┐
-                                      SIM                    NÃO
-                                       │                      │
-                              OUTBOX (recomendado)        XA / JTA (2PC)
-                              • evita overhead do 2PC      • Atomikos/Narayana
-                              • idempotência na publicação • mais lento e complexo
+```mermaid
+flowchart TD
+    Q1{"Preciso atomicidade entre MQ<br/>e OUTRO recurso (banco)?"}
+    LOCAL["Transação LOCAL<br/>(SESSION_TRANSACTED + commit)<br/>• mais simples e rápida<br/>• default deste guia"]
+    Q2{"Posso usar o padrão OUTBOX?<br/>(gravar evento no banco na mesma<br/>transação, publicar depois)"}
+    OUTBOX["OUTBOX (recomendado)<br/>• evita overhead do 2PC<br/>• idempotência na publicação"]
+    XA["XA / JTA (2PC)<br/>• Atomikos/Narayana<br/>• mais lento e complexo"]
+
+    Q1 -->|NÃO| LOCAL
+    Q1 -->|SIM| Q2
+    Q2 -->|SIM| OUTBOX
+    Q2 -->|NÃO| XA
+
+    classDef decision fill:#dfe5ea,stroke:#5b6472,color:#1f2430;
+    classDef good fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+    classDef caution fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+
+    class Q1,Q2 decision;
+    class LOCAL,OUTBOX good;
+    class XA caution;
 ```
 
 > ✅ **Boa prática — preferir transação local + outbox a XA, salvo necessidade real.** XA (2PC) tem *overhead* de
@@ -1017,26 +1042,37 @@ Java você define a **CipherSuite** equivalente. Em **TLS 1.3** os nomes coincid
 `2397 JSSE_ERROR`); `useIBMCipherMappings` não existe mais (9.4.0+). **Sintoma observável:**
 `2393 SSL_INITIALIZATION_ERROR`/`2397` no connect, sem causa óbvia se você não souber dessas duas armadilhas.
 
-### 5.7 Virtual Threads — análise honesta
+### 5.7 Virtual Threads — análise honesta (Java 25 / JEP 491)
 
-Virtual Threads (Java 21) brilham em I/O-bound de **orquestração**: fan-out de chamadas, agregação de respostas. Mas com
-o cliente MQ há armadilhas:
+Virtual Threads brilham em I/O-bound de **orquestração**: fan-out de chamadas, agregação de respostas. Com o cliente MQ, o
+quadro **mudou no Java 25**:
 
-> ⚠️ **Atenção — *pinning* e thread-safety com Virtual Threads + cliente MQ.**
-> - **Pinning:** o cliente MQ tem **blocos `synchronized`** internos. Quando uma virtual thread bloqueia dentro de um
-    `synchronized`, ela **pina** a carrier thread (não desmonta), anulando o ganho de escala dos VTs. Trechos de I/O do
-    cliente JMS que entram em `synchronized` causam isso.
-> - **Thread-safety:** `Session` e `JMSContext` **não são thread-safe**. Um `JMSContext` é de **uma** thread por vez.
-    Distribuir um mesmo `JMSContext` por várias virtual threads é incorreto, VTs ou não.
+> ℹ️ **Nota — o JEP 491 muda o jogo do *pinning*.** Até o Java 21, uma virtual thread que bloqueava **dentro de um bloco
+> `synchronized`** *pinava* a carrier thread (não desmontava), anulando o ganho de escala — e o cliente MQ tem
+> `synchronized` internos no caminho de I/O. O **JEP 491** (final no JDK 24, presente no **Java 25**) **eliminou esse
+> pinning**: blocos `synchronized` que bloqueiam não pinam mais. Em Java 25, o principal vetor de pinning do cliente MQ
+> **desapareceu**.
 
-> ✅ **Boa prática — VTs na camada de orquestração; I/O JMS em threads de plataforma com pool.** Use virtual threads para
-> o fan-out de lógica de negócio, mas mantenha o consumo/produção JMS em **threads de plataforma** (consumidores
-> dedicados) com `JmsPoolConnectionFactory`, **um `JMSContext` por thread**.
+> ⚠️ **Atenção — o que AINDA exige cuidado em Java 25.**
+> - **Pinning residual:** ocorre agora só em **frames nativos (JNI)** e *downcalls* FFM. O cliente MQ **carrega
+>   bibliotecas nativas** (`System.loadLibrary` — daí o `--enable-native-access=ALL-UNNAMED`), então **meça** o pinning
+>   residual (`-Djdk.tracePinnedThreads=full` ou eventos JFR `jdk.VirtualThreadPinned`) antes de assumir ganho pleno.
+> - **Thread-safety (inalterado):** `Session`/`JMSContext` **continuam não thread-safe**, em qualquer versão. Um
+>   `JMSContext` é de **uma** thread por vez (virtual ou de plataforma). Compartilhá-lo entre VTs é incorreto.
+> - **Tempestade de conexões (a nova armadilha sob alta concorrência):** com VTs é tentador abrir **uma VT por mensagem**,
+>   cada uma criando seu próprio `JMSContext`. Sob **~10.000 rpm** isso vira uma tempestade de sessões/conexões que estoura
+>   o `JmsPoolConnectionFactory` e os limites do QMgr. O gargalo deixa de ser CPU e passa a ser o pool/QMgr.
+
+> ✅ **Boa prática (Java 25) — VTs para orquestração; I/O JMS com `JMSContext` por unidade de trabalho, do pool, com
+> concorrência limitada.** Use virtual threads no fan-out de lógica; para o I/O JMS, **um `JMSContext` por tarefa** vindo
+> do `JmsPoolConnectionFactory`, com um **limite de concorrência** (semáforo/bulkhead) dimensionado ao pool e ao
+> `SHARECNV` do canal. Meça o pinning residual nas chamadas nativas.
 >
-> ❌ **Má prática — um pool de virtual threads consumindo JMS, compartilhando `JMSContext`.** Você combina o pior dos
-> dois: *pinning* nos `synchronized` do cliente (sem ganho de escala) **e** corrupção por `JMSContext` compartilhado. *
-*Sintoma observável:** `javax.jms.IllegalStateException`/erros intermitentes de estado, mensagens "sumindo" ou
-> duplicando, e *throughput* pior que com threads de plataforma.
+> ❌ **Má prática — `JMSContext` compartilhado entre VTs, ou VT-por-mensagem sem teto.** Compartilhar o contexto corrompe
+> estado (**sintoma:** `javax.jms.IllegalStateException`, mensagens "sumindo"/duplicando). VT-por-mensagem sem limite, sob
+> ~10k rpm, esgota o pool e os limites do QMgr (**sintomas:** `2025 MQRC_MAX_CONNS_LIMIT_REACHED`,
+> `2537 MQRC_CHANNEL_NOT_AVAILABLE`, timeouts de checkout do pool). Em ambos, o *throughput* fica **pior** que com um pool
+> dimensionado de consumidores.
 
 ### 5.8 Outros ajustes de performance
 
@@ -1135,7 +1171,7 @@ Referência rápida dos pares ✅/❌ usados ao longo do guia.
 | **Poison message**             | `BOTHRESH`/`BOQNAME` + processamento idempotente.                                   | Retry infinito sem `BOTHRESH`/idempotência → thread em loop a 100% CPU, fila parada, duplicação de dados a jusante.                                     |
 | **Reconexão**                  | Auto-reconnect + **idempotência** + validar pool×reconnect.                         | Reconexão sem idempotência → reprocessamento duplicado; conexão "morta" devolvida pelo pool.                                                            |
 | **Concorrência JMS**           | **Um `JMSContext` por thread**; I/O em threads de plataforma.                       | `Session`/`JMSContext` compartilhado entre threads → `IllegalStateException`, mensagens sumindo/duplicando.                                             |
-| **Virtual Threads**            | VTs na orquestração; JMS em threads de plataforma com pool.                         | VTs consumindo JMS com `JMSContext` compartilhado → pinning nos `synchronized` + corrupção de estado; throughput pior que threads de plataforma.        |
+| **Virtual Threads**            | VTs na orquestração; JMS em threads de plataforma com pool.                         | `JMSContext` compartilhado entre VTs → corrupção de estado; VT-por-mensagem sem teto → tempestade de conexões. (Java 25/JEP 491: pinning em `synchronized` resolvido; resta só em frames nativos.)        |
 | **Segurança (relatórios)**     | Conceder `PUT+SETALL` ao principal específico.                                      | App rodando como `admin` para "resolver o 2035" → buraco de segurança; quebra quando CHLAUTH endurece.                                                  |
 | **Segurança (TLS)**            | TLS 1.3, nomes coincidentes, PKCS12, sem `useIBMCipherMappings`.                    | `TLS_RSA_*`/`useIBMCipherMappings` → `2393`/`2397` no connect (RSA desabilitado no Java 25; propriedade removida no 9.4.0).                             |
 | **Segredos**                   | `password` via secret/env (`${IBM_MQ_PASSWORD}`).                                   | Senha hardcoded no fonte/YAML versionado → vazamento no Git; `2035` ao trocar a senha.                                                                  |
