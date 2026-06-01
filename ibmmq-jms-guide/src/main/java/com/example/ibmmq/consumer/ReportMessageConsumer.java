@@ -110,21 +110,16 @@ public class ReportMessageConsumer {
                         correlationStore.markCoaReceived(correlationId);
                         LOG.info("[stage=COA] Confirmacao de chegada (arrival) registrada: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
+                        // Reconcilia tambem aqui: sob competing consumers, o COD pode ter sido processado
+                        // ANTES do COA em outro pod — entao e o COA que completa o par. Independente de ordem.
+                        reconcileIfComplete(correlationId, originalMessageId);
                     }
                     case COD -> {
                         // COD = Confirmation On Delivery: a mensagem foi CONSUMIDA destrutivamente.
                         correlationStore.markCodReceived(correlationId);
                         LOG.info("[stage=COD] Confirmacao de entrega (delivery) registrada: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
-                        // Com COA+COD confirmados, a entrega esta completa: reconcilia e remove a pendencia.
-                        correlationStore.findByMessageId(correlationId)
-                                .filter(PendingMessage::isFullyConfirmed)
-                                .ifPresent(p -> {
-                                    correlationStore.remove(correlationId);
-                                    LOG.info("[stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, "
-                                                    + "originalMsgId={}, pendentesRestantes={}",
-                                            originalMessageId, correlationStore.pendingCount());
-                                });
+                        reconcileIfComplete(correlationId, originalMessageId);
                     }
                     case EXPIRATION, NAN, EXCEPTION ->
                             LOG.warn("[stage=PROBLEM] Relatorio de problema: tipo={}, feedback={}, correlId={}",
@@ -147,6 +142,21 @@ public class ReportMessageConsumer {
             }
         } catch (Exception e) {
             throw new IllegalStateException("Falha ao processar relatorio de entrega", e);
+        }
+    }
+
+    /**
+     * Reconciliacao independente de ordem: qualquer relatorio (COA ou COD) que complete o par remove a
+     * pendencia atomicamente. Seguro sob competing report-consumers em pods distintos — exatamente uma
+     * chamada remove (ver {@link CorrelationStore#removeIfFullyConfirmed}). Isto faz o
+     * {@code pendingCount()} drenar a zero mesmo quando COA e COD chegam fora de ordem em pods
+     * diferentes, sem depender de um sweep manual de operador.
+     */
+    private void reconcileIfComplete(String correlationId, String originalMessageId) {
+        if (correlationStore.removeIfFullyConfirmed(correlationId)) {
+            LOG.info("[stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, "
+                            + "originalMsgId={}, pendentesRestantes={}",
+                    originalMessageId, correlationStore.pendingCount());
         }
     }
 }

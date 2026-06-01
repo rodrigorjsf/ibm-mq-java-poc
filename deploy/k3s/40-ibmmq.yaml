@@ -1,0 +1,122 @@
+# =============================================================================
+# IBM MQ — queue manager QM1 as a StatefulSet (stable identity + persistent storage).
+#
+# - StatefulSet (not Deployment): a queue manager is stateful (message store, logs); it needs stable
+#   network identity and a PVC that survives reschedules.
+# - Headless Service `ibmmq` gives stable DNS ibmmq.ibmmq-harness.svc.cluster.local, used by the app's
+#   IBM_MQ_CONNECTION_NAME_LIST as ibmmq.ibmmq-harness.svc.cluster.local(1414).
+# - PVC at /mnt/mqm persists the QMgr across restarts. securityContext.fsGroup makes it writable by the
+#   image's runtime UID/GID (1001) under k3s local-path (advisor note).
+# - MQSC ConfigMap mounted via subPath at /etc/mqm/90-report-authority.mqsc (NOT over the whole dir —
+#   a bare mount would MASK the image's baked /etc/mqm, so DEV.* objects + DEV.APP.SVRCONN/CHLAUTH would
+#   never be created) applies the report-PUT authority grant at QM creation (idempotent only at first
+#   creation — recreate the PVC to re-run; see README).
+# - Passwords come from the mq-credentials Secret mounted at /run/secrets (MQ_APP_PASSWORD is
+#   deprecated since 9.4.0; the dev image reads /run/secrets/mqAppPassword + mqAdminPassword).
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: ibmmq
+  namespace: ibmmq-harness
+  labels:
+    app.kubernetes.io/name: ibmmq
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: ibmmq
+  ports:
+    - name: listener
+      port: 1414
+      targetPort: 1414
+    - name: console
+      port: 9443
+      targetPort: 9443
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ibmmq
+  namespace: ibmmq-harness
+  labels:
+    app.kubernetes.io/name: ibmmq
+spec:
+  serviceName: ibmmq
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ibmmq
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibmmq
+    spec:
+      # The MQ container does not talk to the Kubernetes API, so don't automount the ServiceAccount
+      # token. Critically, this also AVOIDS A STARTUP-FATAL MOUNT COLLISION: we mount the mq-credentials
+      # Secret at /run/secrets (readOnly), which makes /run/secrets a read-only filesystem; the kubelet
+      # then cannot create /run/secrets/kubernetes.io/serviceaccount for the token submount
+      # (/var/run -> /run), so the container fails OCI init with "read-only file system" and CrashLoops.
+      # Disabling the token automount removes that submount entirely.
+      automountServiceAccountToken: false
+      securityContext:
+        # The MQ image runs as UID/GID 1001; fsGroup makes the local-path PVC writable for it.
+        fsGroup: 1001
+      containers:
+        - name: ibmmq
+          image: icr.io/ibm-messaging/mq:9.4.5.0-r2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LICENSE
+              value: "accept"
+            - name: MQ_QMGR_NAME
+              value: "QM1"
+            # No password env here: the dev image AUTO-READS the app/admin passwords from the files
+            # mounted at /run/secrets/mqAppPassword + /run/secrets/mqAdminPassword (path convention).
+            # MQ_APP_PASSWORD is deprecated since 9.4.0 and there is no honored *_FILE env variant.
+          ports:
+            - name: listener
+              containerPort: 1414
+            - name: console
+              containerPort: 9443
+          readinessProbe:
+            # No HTTP health endpoint we want to depend on -> TCP probe on the listener port.
+            tcpSocket:
+              port: 1414
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 12
+          livenessProbe:
+            tcpSocket:
+              port: 1414
+            initialDelaySeconds: 90
+            periodSeconds: 20
+          volumeMounts:
+            - name: qm1-data
+              mountPath: /mnt/mqm
+            - name: mqsc
+              # subPath overlays ONLY this one file into /etc/mqm, leaving the dev image's baked
+              # symlinks/templates (10-dev.mqsc -> DEV.* objects + DEV.APP.SVRCONN channel & CHLAUTH
+              # USERMAP, web console, TLS templates) intact. A bare mountPath WITHOUT subPath masks the
+              # whole dir -> no channel/queues -> every app pod fails 2035. subPath disables ConfigMap
+              # auto-update, which is fine: MQSC autoconfig only runs at QM creation anyway.
+              mountPath: /etc/mqm/90-report-authority.mqsc
+              subPath: 90-report-authority.mqsc
+              readOnly: true
+            - name: mq-secrets
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        - name: mqsc
+          configMap:
+            name: mq-mqsc
+        - name: mq-secrets
+          secret:
+            secretName: mq-credentials
+  volumeClaimTemplates:
+    - metadata:
+        name: qm1-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

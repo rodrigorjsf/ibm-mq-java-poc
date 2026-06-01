@@ -55,8 +55,16 @@ public class MqConnectionFactoryFactory {
         // Nome da aplicacao (visivel em DIS CONN / monitoramento). Campo APPLICATIONNAME -> chave APPNAME.
         cf.setStringProperty(WMQConstants.WMQ_APPLICATIONNAME, props.getApplicationName());
 
-        // Numero de conversas compartilhadas por socket (SHARECNV). Reduz sockets em alta concorrencia.
-        cf.setIntProperty(WMQConstants.WMQ_SHARE_CONV_ALLOWED, props.getSharingConversations());
+        // Sharing conversations is a CLIENT on/off toggle: WMQ_SHARE_CONV_ALLOWED accepts ONLY
+        // WMQ_SHARE_CONV_ALLOWED_YES (1) / _NO (0) — NOT a count. The actual SHARECNV *number* of
+        // conversations multiplexed per TCP socket is a SVRCONN channel attribute negotiated
+        // server-side; the client cannot request a count through this property. Passing the raw
+        // count (e.g. 10) here throws JMSFMQ1006 at bean creation and crashes every harness pod on
+        // startup. Enable sharing whenever more than one conversation is wanted (default 10 > 1).
+        cf.setIntProperty(WMQConstants.WMQ_SHARE_CONV_ALLOWED,
+                props.getSharingConversations() > 1
+                        ? WMQConstants.WMQ_SHARE_CONV_ALLOWED_YES
+                        : WMQConstants.WMQ_SHARE_CONV_ALLOWED_NO);
 
         // ---- Autenticacao MQCSP (user/senha) ----
         if (props.hasCredentials()) {

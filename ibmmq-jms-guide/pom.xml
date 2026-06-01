@@ -30,6 +30,11 @@
 
         <jackson.version>2.18.2</jackson.version>
 
+        <!-- Driver Postgres do store de correlacao COMPARTILHADO (harness k3s, correlation.store=jdbc).
+             Versao FIXADA explicitamente — nao assumimos que o BOM do Micronaut a gerencie. O pool de
+             conexoes (HikariCP) vem de micronaut-jdbc-hikari, cuja versao e alinhada pelo BOM. -->
+        <postgresql.version>42.7.4</postgresql.version>
+
         <!-- Versoes de teste. -->
         <junit.version>5.11.4</junit.version>
         <mockito.version>5.14.2</mockito.version>
@@ -64,6 +69,15 @@
             <artifactId>micronaut-inject</artifactId>
             <scope>compile</scope>
         </dependency>
+        <!-- jakarta.annotation-api: fornece @PostConstruct/@PreDestroy (JSR-250), usados pelos beans de
+             ciclo de vida do harness (AbstractHarnessRunner, JdbcCorrelationStore). Provavelmente ja vem
+             transitivo via micronaut-inject; declarado explicitamente (sem versao — alinhada pelo BOM
+             micronaut-platform) para garantir a presenca em tempo de compilacao. -->
+        <dependency>
+            <groupId>jakarta.annotation</groupId>
+            <artifactId>jakarta.annotation-api</artifactId>
+            <scope>compile</scope>
+        </dependency>
         <!-- Runtime: ApplicationContext, bootstrap, suporte a application.yml. -->
         <dependency>
             <groupId>io.micronaut</groupId>
@@ -95,6 +109,28 @@
             <groupId>org.messaginghub</groupId>
             <artifactId>pooled-jms</artifactId>
             <version>${pooled.jms.version}</version>
+            <scope>compile</scope>
+        </dependency>
+
+        <!-- ===================== Store de correlacao COMPARTILHADO (JDBC/Postgres) ===================== -->
+        <!-- Habilita o JdbcCorrelationStore (gated por correlation.store=jdbc), usado pelo harness k3s
+             para reconciliar correlacao cluster-wide entre pods consumidores concorrentes (AC2).
+             micronaut-jdbc-hikari fornece o bean javax.sql.DataSource (HikariCP) a partir de uma config
+             datasources.* (dirigida por env no harness; ausente do application.yml para manter o contexto
+             de teste inerte). A versao e alinhada pelo BOM micronaut-platform.
+             O JdbcCorrelationStore usa JDBC puro (PreparedStatement) — sem Micronaut Data — para evitar
+             acoplar um annotation-processor adicional ao compilador. -->
+        <dependency>
+            <groupId>io.micronaut.sql</groupId>
+            <artifactId>micronaut-jdbc-hikari</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <!-- Driver JDBC do Postgres (versao fixada acima). Em producao prefira um backend transacional
+             para o outbox; aqui o Postgres atende ao harness e ao padrao pending_message. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${postgresql.version}</version>
             <scope>compile</scope>
         </dependency>
 
@@ -170,6 +206,32 @@
                 <groupId>io.micronaut.maven</groupId>
                 <artifactId>micronaut-maven-plugin</artifactId>
                 <version>${micronaut.maven.plugin.version}</version>
+            </plugin>
+
+            <!-- maven-dependency-plugin: copia TODAS as dependencias de runtime para target/dependency/
+                 na fase package. O jar produzido e "thin" (sem classpath embutido) — sem isto, um
+                 `java -jar` falha por classe nao encontrada. O Dockerfile entao lanca a app com
+                 `-cp "target/classes:target/dependency/*"` (sem maven-shade, que exigiria merge de
+                 META-INF/services para o DI do Micronaut funcionar). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.8.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-runtime-dependencies</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/dependency</outputDirectory>
+                            <includeScope>runtime</includeScope>
+                            <overWriteReleases>false</overWriteReleases>
+                            <overWriteSnapshots>true</overWriteSnapshots>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
 
             <!-- Compilador: release 25 + processadores de anotacao do Micronaut. -->

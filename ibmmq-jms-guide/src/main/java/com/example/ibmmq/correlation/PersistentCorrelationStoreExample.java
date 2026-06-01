@@ -69,6 +69,17 @@ public class PersistentCorrelationStoreExample implements CorrelationStore {
     }
 
     @Override
+    public boolean removeIfFullyConfirmed(String messageId) {
+        // Reconciliacao independente de ordem e race-free: remova SO se COA e COD ja estao ambos TRUE,
+        // numa unica operacao atomica, devolvendo se ESTA chamada removeu (exatamente uma vence).
+        // Ex. JDBC: DELETE FROM pending_message WHERE message_id = ? AND coa_received AND cod_received
+        //           -> retorne (executeUpdate() == 1)
+        //     Redis: use um script Lua (HGET dos flags + DEL condicional) para atomicidade.
+        throw new UnsupportedOperationException(
+                "Esqueleto: implemente o DELETE condicional atomico (so se COA+COD confirmados).");
+    }
+
+    @Override
     public int pendingCount() {
         // Ex. JDBC: SELECT COUNT(*) FROM pending_message WHERE NOT (coa_received AND cod_received)
         throw new UnsupportedOperationException("Esqueleto: implemente a contagem no backend escolhido.");

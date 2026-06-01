@@ -1,0 +1,39 @@
+# =============================================================================
+# ConfigMap: non-secret connection settings for the Java app, mapped to MqProperties + harness +
+# datasource via Micronaut's env-var binding (UPPER_SNAKE env -> kebab config key).
+#
+#   IBM_MQ_CONNECTION_NAME_LIST -> ibm-mq.connection-name-list  (MQ Service in-cluster DNS)
+#   IBM_MQ_CHANNEL              -> ibm-mq.channel
+#   IBM_MQ_QUEUE_MANAGER        -> ibm-mq.queue-manager
+#   IBM_MQ_USER                 -> ibm-mq.user
+#   IBM_MQ_BUSINESS_QUEUE       -> ibm-mq.business-queue
+#   IBM_MQ_REPORT_QUEUE         -> ibm-mq.report-queue
+#   CORRELATION_STORE           -> correlation.store         (=jdbc activates JdbcCorrelationStore)
+#   DATASOURCES_DEFAULT_*       -> datasources.default.*      (HikariCP / Postgres JDBC)
+#
+# Credentials (IBM_MQ_PASSWORD, DATASOURCES_DEFAULT_PASSWORD) come from Secrets, NOT here.
+# HARNESS_ROLE is set per-Deployment (publisher / business-consumer / report-consumer), not here.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: ibmmq-harness
+data:
+  # CONNAME list points at the MQ Service DNS; (1414) is the listener port. Format: host(port).
+  IBM_MQ_CONNECTION_NAME_LIST: "ibmmq.ibmmq-harness.svc.cluster.local(1414)"
+  IBM_MQ_CHANNEL: "DEV.APP.SVRCONN"
+  IBM_MQ_QUEUE_MANAGER: "QM1"
+  IBM_MQ_USER: "app"
+  IBM_MQ_BUSINESS_QUEUE: "DEV.QUEUE.1"
+  IBM_MQ_REPORT_QUEUE: "DEV.QUEUE.2"
+  IBM_MQ_APPLICATION_NAME: "ibmmq-harness"
+
+  # Activate the shared JDBC correlation store (else InMemoryCorrelationStore loads — per-pod, useless
+  # cluster-wide). The JDBC datasource: HikariCP via micronaut-jdbc-hikari, Postgres Service DNS.
+  CORRELATION_STORE: "jdbc"
+  DATASOURCES_DEFAULT_URL: "jdbc:postgresql://postgres.ibmmq-harness.svc.cluster.local:5432/correlation"
+  DATASOURCES_DEFAULT_DRIVER_CLASS_NAME: "org.postgresql.Driver"
+  DATASOURCES_DEFAULT_USERNAME: "corr"
+  # Small pool per pod; competing-consumer parallelism comes from replicas, not threads.
+  DATASOURCES_DEFAULT_MAXIMUM_POOL_SIZE: "4"
