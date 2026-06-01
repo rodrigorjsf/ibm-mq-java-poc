@@ -14,6 +14,6 @@ ADR-0002 mandates English for all durable **documentation** but is silent on **s
 
 - New source files and newly-added comments/JavaDoc/log strings are English; reviewers may block pt-BR in **new** in-code text (except `@DisplayName`).
 - Existing pt-BR comments/JavaDoc/logs are **not** a defect and are not translated on sight; touching a line for an unrelated reason does not oblige translating its comment.
-- **One-off carve-out:** PR #38 is open/unmerged, so its newly-added Java (the #11 MDC instrumentation comments and the #16 `CoaCodDemoRunner` + tests) is treated as **new**, not grandfathered, and is translated to English **before merge** under a tracked follow-up issue. This keeps the "new vs existing" boundary unambiguous: the line is "authored before this ADR and already merged" = existing.
+- **One-off carve-out:** PR #38 is open/unmerged, so its newly-added Java (the #11 MDC instrumentation comments and the #16 `CoaCodDemoRunner` + tests) is treated as **new**, not grandfathered, and is translated to English **before merge** under tracked follow-up issue #45. This keeps the "new vs existing" boundary unambiguous: the line is "authored before this ADR and already merged" = existing.
 - `.claude/rules/documentation-language-and-currency.md` and `src/test/CLAUDE.md` are updated to cite this ADR and stop contradicting each other.
 - ADR-0002 is unchanged (it remains correct for documentation); it carries a one-line pointer to this ADR for in-code scope.

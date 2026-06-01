@@ -81,7 +81,7 @@ It carries no repo-specific identifiers and drops cleanly into any messaging cod
 
 ## Documentation language
 
-The in-depth guide under `docs/` is written in **Brazilian Portuguese** by design. Code identifiers are English; code comments are pt-BR.
+Per **ADR-0002**, the in-depth guide is **canonical English** (`docs/guide-ibmmq-jms-micronaut.md`); the Brazilian-Portuguese mirror under `docs/i18n/` feeds the bilingual standalone HTML (`docs/index.html`), kept in sync by `build-html.py`'s parity gate. Per **ADR-0004**, in source code: identifiers are English; comments, JavaDoc, and log messages are **English going forward**, with pre-existing pt-BR grandfathered (a mixed-language transition) and JUnit `@DisplayName` kept **pt-BR** as a sanctioned exception.
 
 ## License
 
