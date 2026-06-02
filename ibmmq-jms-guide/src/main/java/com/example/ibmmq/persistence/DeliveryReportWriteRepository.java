@@ -59,11 +59,11 @@ public interface DeliveryReportWriteRepository extends GenericRepository<Deliver
             INSERT INTO delivery_report (
                 correlation_id, original_message_id, report_type, feedback, observed_at,
                 appl_identity_data, accounting_token_hex, correlation_id_bytes_hex,
-                message_id_bytes_hex, put_timestamp_utc, report_type_char)
+                message_id_bytes_hex, put_timestamp_utc, report_type_char, sent_at)
             VALUES (
                 :correlationId, :originalMessageId, :reportType, :feedback, :observedAt,
                 :applIdentityData, :accountingTokenHex, :correlationIdBytesHex,
-                :messageIdBytesHex, :putTimestampUtc, :reportTypeChar)
+                :messageIdBytesHex, :putTimestampUtc, :reportTypeChar, :sentAt)
             ON CONFLICT (correlation_id, feedback) DO NOTHING""")
     int insertIfAbsent(String correlationId,
                        String originalMessageId,
@@ -75,11 +75,32 @@ public interface DeliveryReportWriteRepository extends GenericRepository<Deliver
                        @Nullable String correlationIdBytesHex,
                        @Nullable String messageIdBytesHex,
                        @Nullable LocalDateTime putTimestampUtc,
-                       @Nullable String reportTypeChar);
+                       @Nullable String reportTypeChar,
+                       @Nullable Instant sentAt);
+
+    /**
+     * Backward-compatible 11-arg overload (issue #19 callers / ITs): inserts with the issue-#21
+     * {@code sent_at} latency column left {@code null}. Delegates to the 12-arg {@link #insertIfAbsent}.
+     */
+    default int insertIfAbsent(String correlationId,
+                               String originalMessageId,
+                               String reportType,
+                               int feedback,
+                               Instant observedAt,
+                               @Nullable String applIdentityData,
+                               @Nullable String accountingTokenHex,
+                               @Nullable String correlationIdBytesHex,
+                               @Nullable String messageIdBytesHex,
+                               @Nullable LocalDateTime putTimestampUtc,
+                               @Nullable String reportTypeChar) {
+        return insertIfAbsent(correlationId, originalMessageId, reportType, feedback, observedAt,
+                applIdentityData, accountingTokenHex, correlationIdBytesHex, messageIdBytesHex,
+                putTimestampUtc, reportTypeChar, null);
+    }
 
     /**
      * Backward-compatible 5-arg overload (issue #40 callers / ITs): inserts with the six issue-#19 MQMD
-     * columns left {@code null}. Delegates to the 11-arg {@link #insertIfAbsent}.
+     * columns AND the issue-#21 {@code sent_at} column left {@code null}. Delegates to the 11-arg overload.
      */
     default int insertIfAbsent(String correlationId,
                                String originalMessageId,

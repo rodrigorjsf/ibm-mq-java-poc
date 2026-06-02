@@ -113,6 +113,10 @@ public class ReportMessageConsumer {
             // Correlaciona de volta a mensagem original (CorrelationId == MessageId original).
             Optional<PendingMessage> pending = correlationStore.findByMessageId(correlationId);
             String originalMessageId = pending.map(PendingMessage::messageId).orElse(correlationId);
+            // Issue #21: capture the original send instant for the produce->report latency baseline. NULL when
+            // the pending row is unknown (the rare COA-before-register case) — a low-tail sample excluded from
+            // the percentiles in `make load-verify` (ADR-0007), so p95/p99 stay robust.
+            Instant sentAt = pending.map(PendingMessage::sentAt).orElse(null);
 
             // MDC: correlationId = JMSCorrelationID do relatorio; messageId = MessageId original
             // derivado pela correlacao. Vinculamos ANTES das etapas para que toda linha (classify,
@@ -139,7 +143,7 @@ public class ReportMessageConsumer {
                                 correlationId, originalMessageId);
                         // Append-only audit row (writer datasource). Best-effort: a persist failure must NOT
                         // break the reconciliation path that follows (the report is already acked).
-                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt, descriptor);
+                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt, sentAt, descriptor);
                         // Reconcilia tambem aqui: sob competing consumers, o COD pode ter sido processado
                         // ANTES do COA em outro pod — entao e o COA que completa o par. Independente de ordem.
                         reconcileIfComplete(correlationId, originalMessageId);
@@ -149,7 +153,7 @@ public class ReportMessageConsumer {
                         correlationStore.markCodReceived(correlationId);
                         LOG.info("[stage=COD] Confirmacao de entrega (delivery) registrada: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
-                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt, descriptor);
+                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt, sentAt, descriptor);
                         reconcileIfComplete(correlationId, originalMessageId);
                     }
                     case EXPIRATION, NAN, EXCEPTION ->
@@ -222,7 +226,8 @@ public class ReportMessageConsumer {
      * </ul>
      */
     private void persistAudit(ReportType type, int feedback, String correlationId,
-                              String originalMessageId, Instant observedAt, ReportDescriptor descriptor) {
+                              String originalMessageId, Instant observedAt, Instant sentAt,
+                              ReportDescriptor descriptor) {
         if (auditRepository == null) {
             return; // No datasource configured (e.g. unit/context test) — audit persistence is inert.
         }
@@ -241,7 +246,8 @@ public class ReportMessageConsumer {
                     descriptor.correlationIdBytesHex(),
                     descriptor.messageIdBytesHex(),
                     putTimestampUtc,
-                    reportTypeChar);
+                    reportTypeChar,
+                    sentAt);
             if (inserted == 0) {
                 LOG.debug("[stage=AUDIT] Report already persisted (idempotent duplicate): type={}, correlId={}",
                         type, correlationId);

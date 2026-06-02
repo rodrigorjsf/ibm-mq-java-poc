@@ -89,6 +89,17 @@ public class DeliveryReportSchema {
                 ADD COLUMN IF NOT EXISTS put_timestamp_utc        TIMESTAMP,
                 ADD COLUMN IF NOT EXISTS report_type_char         CHAR(1)""";
 
+    // Issue #21: ADDITIVELY add the per-message send instant so produce->COA / produce->COD latency can be
+    // computed at SQL level over this APPEND-ONLY table — the pending_message ledger is deleted on
+    // reconciliation, so it cannot retain latency (see ADR-0007). NULLABLE: the rare COA-before-register
+    // case leaves it null and is excluded from the percentiles (a low-tail sample, so p95/p99 stay robust).
+    // Idempotent (ADD COLUMN IF NOT EXISTS), safe under N concurrent replicas (first pod adds, rest no-op).
+    // WRITE-ONLY audit column: populated by the writer @Query (insertIfAbsent), queried by `make load-verify`
+    // via psql — intentionally NOT mapped on DeliveryReportRecord (no read path needs it).
+    private static final String ALTER_ADD_SENT_AT = """
+            ALTER TABLE delivery_report
+                ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP""";
+
     private final DataSource dataSource;
 
     public DeliveryReportSchema(DataSource dataSource) {
@@ -114,12 +125,15 @@ public class DeliveryReportSchema {
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement createPs = conn.prepareStatement(DDL);
-                 PreparedStatement alterPs = conn.prepareStatement(ALTER_ADD_MQMD_COLUMNS)) {
+                 PreparedStatement alterPs = conn.prepareStatement(ALTER_ADD_MQMD_COLUMNS);
+                 PreparedStatement alterSentAtPs = conn.prepareStatement(ALTER_ADD_SENT_AT)) {
                 createPs.execute();
                 // Additive (issue #19): add the six recovered-MQMD columns if not already present.
                 alterPs.execute();
+                // Additive (issue #21): add the sent_at latency column if not already present.
+                alterSentAtPs.execute();
                 LOG.info("[stage=AUDIT-INIT] Delivery-report audit schema ensured "
-                        + "(delivery_report + recovered-MQMD columns)");
+                        + "(delivery_report + recovered-MQMD columns + sent_at)");
                 return;
             } catch (SQLException e) {
                 last = e;

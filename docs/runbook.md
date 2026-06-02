@@ -435,6 +435,49 @@ with `correlationId == messageId`.
 
 ---
 
+### 5.3 Sustained-load profile (#21) — `make load` / `make load-verify`
+
+The **dedicated load profile** (ADR-0007) drives a bounded-yet-sustained run on the live k3d harness and
+**asserts** the result. It is **excluded** from the default `make verify` / `mvn verify` gate. All commands
+run from the repo root.
+
+```bash
+# 0. Harness up (builds the image, spins k3d, deploys all roles)
+make up
+
+# 1. Feasibility probe (short run) — read the "offered rate" line to confirm the box sustains ~167 msg/s
+make load LOAD_COUNT_PER_POD=500
+
+# 2. Full sustained run (default N=50000 @ ~167 msg/s ≈ 5 min, then 60s settle)
+make load
+#    Tunables: LOAD_PUB_REPLICAS, LOAD_COUNT_PER_POD, LOAD_INTERVAL_MS, LOAD_SETTLE_SECS
+
+# 3. ASSERT the run (exit non-zero on breach) — run WHILE consumers are still connected (before down)
+make load-verify
+
+# 4. Tear down
+make down
+```
+
+`make load` quiesces the publisher, clears the queues + truncates the audit/ledger (clean slate), launches
+`LOAD_PUB_REPLICAS` bounded publishers (each sends exactly `LOAD_COUNT_PER_POD`, then idles), waits for all
+to log `PUBLISH-DONE`, and settles. `make load-verify` then asserts, against the known denominator
+`N = replicas × count`:
+
+- **zero loss** — `distinct correlation_id` with feedback `259 == N` and `260 == N`;
+- **exactly-once across replicas** — no duplicate `(correlation_id, feedback)` rows; `IPPROCS>1` on both queues;
+- **latency** — measured p99 ≤ pre-declared ceilings (COA ≤ 5000 ms, COD ≤ 15000 ms), recording p50/p95/p99 as the baseline;
+- **no mis-auth** — DLQ `CURDEPTH == 0`.
+
+Baseline numbers + caveats (single-node clock validity, NULL-`sent_at` exclusion, baseline ≠ SLA):
+`research-output/phase-h-load-baseline-k3d.md`. The captured `load-verify` output feeds the #22 acceptance
+record (`docs/acceptance/prd1-acceptance.md`). **#22's final sign-off remains human (HITL).**
+
+> `make load` leaves the publisher in bounded+idle mode (env `HARNESS_PUBLISH_MAX_COUNT` set). To return to
+> the unbounded harness, `make restart` (or re-run `make load`); a `make down`/`make up` cycle resets it.
+
+---
+
 ## 6. IBM MQ Web Console Walkthrough
 
 The web console is the IBM MQ graphical administration interface.

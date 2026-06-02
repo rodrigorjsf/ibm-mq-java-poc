@@ -31,7 +31,8 @@ KUBECTL ?= kubectl --context k3d-$(CLUSTER)
 
 .DEFAULT_GOAL := help
 .PHONY: help doctor build pull-deps cluster-up import deploy wait up status logs \
-        verify console restart down clean test compose-up compose-logs compose-down
+        verify console restart down clean test compose-up compose-logs compose-down \
+        load load-verify
 
 help: ## Show this help
 	@echo "IBM MQ harness — make targets:"
@@ -102,6 +103,29 @@ down: ## Tear down the k3d cluster
 	-k3d cluster delete $(CLUSTER)
 
 clean: down ## Alias for `down` (remove the whole harness cluster)
+
+# ----------------------------- #21 sustained-load profile --------------------
+# The DEDICATED load profile (ADR-0007). Excluded from the default `verify`/`test` gate. `load` drives a
+# bounded-yet-sustained run at ~167 msg/s (tune below); `load-verify` ASSERTS the result (exit non-zero on
+# breach) — run it while consumers are still connected (before `make down`). Feasibility probe: a short run
+# e.g. `make load LOAD_COUNT_PER_POD=500` then read the "offered rate" line.
+LOAD_PUB_REPLICAS    ?= 4       # publisher pods (competing producers); aggregate rate ~ replicas*1000/interval
+LOAD_COUNT_PER_POD   ?= 12500   # messages EACH publisher sends (bounded); N = replicas*count (the denominator)
+LOAD_INTERVAL_MS     ?= 24      # per-pod inter-send sleep (ms); 4 pods @ 24ms ~= 167 msg/s; ~5 min for N=50000
+LOAD_SETTLE_SECS     ?= 60      # drain wait after publishers finish, before asserting
+LOAD_WAIT_SECS       ?= 600     # max wait for all publishers to log PUBLISH-DONE
+LOAD_CEIL_COA_P99_MS ?= 5000    # PRE-DECLARED generous COA p99 ceiling (committed before the run; ADR-0007)
+LOAD_CEIL_COD_P99_MS ?= 15000   # PRE-DECLARED generous COD p99 ceiling (committed before the run; ADR-0007)
+LOAD_ENV = CLUSTER=$(CLUSTER) NS=$(NS) \
+  LOAD_PUB_REPLICAS=$(LOAD_PUB_REPLICAS) LOAD_COUNT_PER_POD=$(LOAD_COUNT_PER_POD) \
+  LOAD_INTERVAL_MS=$(LOAD_INTERVAL_MS) LOAD_SETTLE_SECS=$(LOAD_SETTLE_SECS) LOAD_WAIT_SECS=$(LOAD_WAIT_SECS) \
+  LOAD_CEIL_COA_P99_MS=$(LOAD_CEIL_COA_P99_MS) LOAD_CEIL_COD_P99_MS=$(LOAD_CEIL_COD_P99_MS)
+
+load: ## #21 sustained-load run on the harness (bounded N, then settle). NOT in the default gate (ADR-0007).
+	$(LOAD_ENV) bash $(K8S_DIR)/load-run.sh
+
+load-verify: ## #21 ASSERT the load run (completeness, exactly-once, latency ceilings, DLQ); exit non-zero on breach.
+	$(LOAD_ENV) bash $(K8S_DIR)/load-verify.sh
 
 # ----------------------------- single-broker dev env (compose) ---------------
 compose-up: ## Start the single-broker IBM MQ dev env (docker compose)
