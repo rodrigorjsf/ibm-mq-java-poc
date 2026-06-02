@@ -1,7 +1,9 @@
 package com.example.ibmmq.harness;
 
 import com.example.ibmmq.consumer.ReportMessageConsumer;
+import com.example.ibmmq.persistence.DeliveryReportSchema;
 import io.micronaut.context.annotation.Requires;
+import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,10 +30,20 @@ public class ReportConsumerHarnessRunner extends AbstractHarnessRunner {
 
     private final ReportMessageConsumer reportConsumer;
     private final HarnessProperties harness;
+    // Injected ONLY to force the lazy DeliveryReportSchema bean to instantiate at report-consumer startup,
+    // running its @PostConstruct ensureSchema() (CREATE TABLE delivery_report) BEFORE reports are processed.
+    // Nothing else injects the schema bean, so without this the audit table is never created in the harness/
+    // production (issue #21; the ITs masked it via context.getBean(...)). @Nullable: absent when no datasource
+    // is configured. Not otherwise used — its construction side effect (schema creation) is the whole point.
+    @SuppressWarnings("unused")
+    private final DeliveryReportSchema auditSchema;
 
-    public ReportConsumerHarnessRunner(ReportMessageConsumer reportConsumer, HarnessProperties harness) {
+    public ReportConsumerHarnessRunner(ReportMessageConsumer reportConsumer,
+                                       HarnessProperties harness,
+                                       @Nullable DeliveryReportSchema auditSchema) {
         this.reportConsumer = reportConsumer;
         this.harness = harness;
+        this.auditSchema = auditSchema;
     }
 
     @Override

@@ -24,6 +24,15 @@ public class HarnessProperties {
     /** Intervalo (ms) entre envios do publisher. Default: ~10 msg/s por pod publisher. */
     private long publishIntervalMillis = 100L;
 
+    /**
+     * Numero maximo de mensagens que ESTE pod publisher envia antes de parar de produzir e ficar ocioso
+     * (mantendo a JVM viva). {@code <= 0} (default) = ilimitado (comportamento historico do harness).
+     * Usado pelo perfil de carga ({@code make load}) para um run LIMITADO-mas-sustentado: com
+     * {@code publishMaxCount=M} e {@code replicas=P}, o total {@code N=P*M} e conhecido a priori — o
+     * denominador das assercoes de completude / zero-perda de #21 (ver ADR-0007).
+     */
+    private long publishMaxCount = 0L;
+
     /** Prefixo do businessKey gerado pelo publisher (ajuda a identificar o pod de origem nos logs). */
     private String businessKeyPrefix = "harness";
 
@@ -44,6 +53,14 @@ public class HarnessProperties {
 
     public void setPublishIntervalMillis(long publishIntervalMillis) {
         this.publishIntervalMillis = publishIntervalMillis;
+    }
+
+    public long getPublishMaxCount() {
+        return publishMaxCount;
+    }
+
+    public void setPublishMaxCount(long publishMaxCount) {
+        this.publishMaxCount = publishMaxCount;
     }
 
     public String getBusinessKeyPrefix() {

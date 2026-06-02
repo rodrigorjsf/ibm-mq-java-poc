@@ -912,3 +912,41 @@ is not enabled — the invariant that keeps the already-acked report path safe a
 | `throwingGetterIsSwallowed` | A getter that throws `JMSException` is treated as absent (`null`), never propagated. |
 | `recoversAllSixWhenPresent` | With all six getters stubbed, `applIdentityData`, `accountingToken` (+`accountingTokenHex == "010203ff"`), `correlationIdBytes`, `messageIdBytes`, `putTimestampUtc == 2026-05-31T13:30:00.500`, `reportTypeChar == 'A'` are all recovered. |
 | `hexStringFallbackForBytesProperty` | A `byte[]` MQMD property arriving as a hex `String` (`"0a0b0c"`) is defensively decoded to bytes. |
+
+---
+
+## Load / volumetry scenarios (k3d harness profile, #21)
+
+These are **not** JUnit tests — they run the live **k3d harness** via the dedicated load profile
+(`make load` + `make load-verify`, ADR-0007), **excluded** from the default `mvn verify` / `make verify`
+gate. The "test file" is the make profile and its in-cluster scripts.
+
+### LOAD-01 — Sustained throughput + competing-consumers correlation at ~167 msg/s
+
+**Tier:** Rich (harness/broker-dependent)
+
+**"Test file":** `Makefile` targets `load` / `load-verify` → `deploy/k3s/load-run.sh` +
+`deploy/k3s/load-verify.sh`. Latency capture: the additive `delivery_report.sent_at` column written by
+`com.example.ibmmq.consumer.ReportMessageConsumer`; bounded producer via `harness.publish-max-count`
+(`com.example.ibmmq.harness.PublisherHarnessRunner`).
+
+**Pre-conditions:** harness up (`make up`); consumers at ≥2 replicas (business-consumer 3, report-consumer
+2); shared JDBC correlation store + append-only `delivery_report` audit on Postgres.
+
+**What it proves (issue #21 ACs):** under a bounded-yet-sustained run of a **known total N** at ~167 msg/s
+across real competing-consumer pods —
+
+| Check | Assertion (`load-verify` exits non-zero on breach) |
+|---|---|
+| AC1 zero loss | `distinct correlation_id` with feedback `259 == N` **and** `260 == N` (N = `replicas × count`; balance alone is NOT accepted). |
+| AC2 latency | measured p99 ≤ a **pre-declared** generous ceiling (COA ≤ 5000 ms, COD ≤ 15000 ms), NOT run-derived; p50/p95/p99 recorded as the baseline. |
+| AC3 exactly-once across replicas | zero duplicate `(correlation_id, feedback)` rows + `IPPROCS>1` on `DEV.QUEUE.1` and `DEV.QUEUE.2` (read live, before teardown). |
+| no mis-auth | DLQ `CURDEPTH == 0`. |
+
+**Diagnostics (not gating):** `pending_message` residual (flagless-orphan race); NULL `sent_at` rows
+(COA-before-register, excluded from the latency percentiles).
+
+**Why designed this way:** see **ADR-0007** (k3d real pods over a Testcontainers toy; in-cluster make
+profile over a Maven `-Pload`; `delivery_report` over `pending_message` for retained latency; pre-declared
+ceiling over run-derived; known-N denominator over balance). Run how-to: `docs/runbook.md`. Baseline
+numbers + caveats: `research-output/phase-h-load-baseline-k3d.md`.

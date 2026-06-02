@@ -106,6 +106,16 @@ Where the QMgr routes messages it cannot deliver — including reports whose PUT
 **Poison message / Backout**:
 A message that repeatedly fails processing; after `BOTHRESH` rollbacks the QMgr moves it to the backout queue (`BOQNAME`).
 
+### Load & performance
+
+**Sustained-load run (load profile)**:
+A bounded, fixed-rate drive of the harness — the producer runs at the target rate until a *known total* N is produced, then the in-flight messages drain — used to verify correlation completeness, exactly-once, and a latency baseline under load. Run via the dedicated load profile, **excluded** from the default verify gate (an asserting gate that exits non-zero on breach), distinct from the at-a-glance evidence the default gate only **displays**.
+_Avoid_: conflating it with the default snapshot (which displays, not asserts); calling an unbounded forever-loop a "sustained-load run" (no denominator → no zero-loss claim).
+
+**Latency baseline (vs SLA)**:
+The measured p50/p95/p99 of produce→COA / produce→COD on the local **single-node** harness, recorded as a non-regression reference — **distinct from a production latency SLA**. The asserted gate is a *separate*, pre-declared generous ceiling (a constant committed before the run), never the measured median.
+_Avoid_: treating a local baseline as a production SLA; asserting a run against thresholds derived from that same run (circular).
+
 ### Security
 
 **MQCSP**:
@@ -114,8 +124,8 @@ MQ Connection Security Parameters — the modern user/password authentication fl
 **CHLAUTH**:
 Channel Authentication Records — per-channel identity/authorization rules (`SET CHLAUTH`).
 
-**Report-PUT authority (2035 / +setall)**:
-To generate and deliver a report the QMgr does a PUT-with-context to the ReplyToQ, which needs context authority (`+setall`); a principal lacking it fails with `MQRC_NOT_AUTHORIZED (2035)` and the report is silently dead-lettered.
+**Report-PUT authority (2035 / +passid)**:
+To generate and deliver a report the QMgr does a PUT-with-context to the ReplyToQ, which needs context authority. The minimal authority it actually requires is **`+passid`** (pass identity context) — verified live on k3d, where `+put +setall` *without* `+passid` still failed `AMQ8077W … passid`. A principal lacking it fails with `MQRC_NOT_AUTHORIZED (2035)` and the report is silently dead-lettered. Grant the full context set `AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)`.
 
 **CipherSpec / CipherSuite**:
 The TLS algorithm name on the QMgr side (CipherSpec) paired with its Java / JSSE counterpart (CipherSuite).
