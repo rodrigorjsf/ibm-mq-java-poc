@@ -320,8 +320,20 @@
                          caro e potencialmente instavel para a gate `verify` do CI. Excluimo-lo do `verify`
                          padrao por tag; rode-o sob demanda com `mvn verify -Preplication` (o perfil abaixo
                          limpa este excludedGroups). O IT de persistencia DETERMINISTICO
-                         (DeliveryReportPersistenceIT) roda num UNICO container e PERMANECE no `verify`. -->
-                    <excludedGroups>replication</excludedGroups>
+                         (DeliveryReportPersistenceIT) roda num UNICO container e PERMANECE no `verify`.
+                         Os cenarios LENTOS/sensiveis a timing do Grupo A (ScenarioMatrixSlowIT,
+                         @Tag("scenario") — Expiration/Reconnect/PooledJmsInvalidation) tambem ficam FORA do
+                         `verify` padrao: eles esperam TTL expirar e/ou dao bounce no Queue Manager
+                         (endmqm/strmqm dentro do container) e fazem poll ate ele voltar — caros e
+                         potencialmente instaveis para a gate. Rode-os sob demanda com `mvn verify -Pscenarios`
+                         (o perfil abaixo inverte o filtro). Os cenarios DETERMINISTICOS do Grupo A
+                         (ScenarioMatrixIT) NAO sao taggeados e PERMANECEM no `verify`.
+                         A EVIDENCIA de Virtual Threads do Grupo B (VirtualThreadsEvidenceIT, @Tag("vt") —
+                         padrao certo vs errado de concorrencia + fronteira de pinning JEP-491) tambem fica
+                         FORA do `verify` padrao: ela roda micro-medicoes de concorrencia (bounded) e grava
+                         JFR programatico — util como evidencia, mas nao deterministica o bastante para a
+                         gate. Rode-a sob demanda com `mvn verify -Pvt`. -->
+                    <excludedGroups>replication,scenario,vt</excludedGroups>
                     <environmentVariables>
                         <!-- Docker 25+ (engine 29.x neste ambiente) exige API >= 1.40 e dropou versoes
                              antigas. O docker-java embutido no Testcontainers 1.20.x negocia para uma
@@ -366,6 +378,73 @@
                                  @Tag, overriding the inherited exclusion so only @Tag("replication") ITs run. -->
                             <groups>replication</groups>
                             <excludedGroups>none</excludedGroups>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Perfil opt-in para os cenarios LENTOS/sensiveis a timing do Grupo A (ScenarioMatrixSlowIT,
+             @Tag("scenario") — Expiration/Reconnect/PooledJmsInvalidation). Por que existe: o `verify`
+             padrao EXCLUI o grupo "scenario" (ver o failsafe acima) porque esses cenarios esperam um TTL
+             expirar e/ou dao bounce no Queue Manager (endmqm -i / strmqm DENTRO do container, preservando a
+             porta mapeada) e fazem poll ate ele voltar — caros e potencialmente instaveis para a gate de CI.
+             Este perfil INVERTE o filtro: roda APENAS os ITs com @Tag("scenario") (<groups>) e sobrescreve o
+             <excludedGroups> herdado com o mesmo sentinel "none" (uma tag inexistente) do perfil
+             `replication` — um <excludedGroups></excludedGroups> VAZIO nao sobrescreveria o valor herdado
+             "replication,scenario" (o Maven faz merge da config do plugin, nao blanking), entao ambos os
+             filtros se aplicariam e ZERO testes rodariam. Assim `mvn verify -Pscenarios` exercita os tres
+             cenarios lentos sob demanda. Espelha o padrao do perfil `replication` acima. -->
+        <profile>
+            <id>scenarios</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <!-- Run ONLY the scenario group. An EMPTY <excludedGroups></excludedGroups>
+                                 does NOT override the base <excludedGroups>replication,scenario</excludedGroups>:
+                                 Maven merges plugin configuration rather than blanking an inherited value, so
+                                 both filters would apply and run ZERO tests. The sentinel "none" matches no
+                                 @Tag, overriding the inherited exclusion so only @Tag("scenario") ITs run. -->
+                            <groups>scenario</groups>
+                            <excludedGroups>none</excludedGroups>
+                            <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Perfil opt-in para a EVIDENCIA de Virtual Threads do Grupo B (VirtualThreadsEvidenceIT,
+             @Tag("vt") — padrao certo vs errado de concorrencia + fronteira de pinning JEP-491). Por que
+             existe: o `verify` padrao EXCLUI o grupo "vt" (ver o failsafe acima) porque esses testes rodam
+             micro-medicoes de concorrencia (throughput/percentis de latencia, bounded) e gravam JFR
+             programatico (jdk.jfr.Recording / RecordingFile) — uteis como evidencia, mas nao deterministicos
+             o bastante para a gate de CI. Este perfil INVERTE o filtro: roda APENAS os ITs com @Tag("vt")
+             (<groups>) e sobrescreve o <excludedGroups> herdado com o mesmo sentinel "none" (uma tag
+             inexistente) dos perfis `replication`/`scenarios` — um <excludedGroups></excludedGroups> VAZIO
+             nao sobrescreveria o valor herdado "replication,scenario,vt" (o Maven faz merge da config do
+             plugin, nao blanking), entao ambos os filtros se aplicariam e ZERO testes rodariam. Assim
+             `mvn verify -Pvt` exercita a evidencia de Virtual Threads sob demanda. Espelha o perfil
+             `scenarios` acima. -->
+        <profile>
+            <id>vt</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <configuration>
+                            <!-- Run ONLY the vt group. An EMPTY <excludedGroups></excludedGroups> does NOT
+                                 override the base <excludedGroups>replication,scenario,vt</excludedGroups>:
+                                 Maven merges plugin configuration rather than blanking an inherited value, so
+                                 both filters would apply and run ZERO tests. The sentinel "none" matches no
+                                 @Tag, overriding the inherited exclusion so only @Tag("vt") ITs run. -->
+                            <groups>vt</groups>
+                            <excludedGroups>none</excludedGroups>
+                            <argLine>--enable-native-access=ALL-UNNAMED</argLine>
                         </configuration>
                     </plugin>
                 </plugins>
