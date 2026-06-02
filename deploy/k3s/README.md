@@ -346,6 +346,23 @@ drains `pending_message` to 0); they are documented so the reference is honest a
   (`WMQ_MQMD_WRITE_ENABLED` + set the MQMD MsgId) and `register` BEFORE `send` so the row always exists
   before any report — or keep a short-lived tombstone instead of deleting. Until then, the still-pending
   query above surfaces any orphans.
+- **Orphan-on-redelivery (rare, surfaced not swept).** Reconciliation removes the `pending_message` row
+  the moment COA+COD complete. If — after that removal — an at-least-once REDELIVERED COA/COD report for
+  the same message arrives (a genuine QM redelivery, or a report-consumer crash inside the ack window),
+  the upsert `mark` re-creates a single-flag stub that can never complete and so lingers in
+  `pendingCount()`. The higher-level `CorrelationStore.recordReport` (issue #26) detects this — there is
+  no prior registration for the correlation id — and classifies it as the `ORPHAN`
+  `ReconcileResult.Outcome`, which `ReportMessageConsumer` surfaces as a `[stage=ORPHAN]` WARN plus an
+  in-process orphan-rate counter (`getOrphanReportCount()`; no Micrometer dependency in the module, so it
+  follows the harness `AtomicLong` pattern). **Deliberately NOT swept:** no TTL/reaper is added — the
+  orphan is made *observable* (alert on a rising orphan rate) rather than silently masked. A robust fix is
+  the same register-before-send / tombstone follow-up noted in the cold-start race above.
+- **COA-only that never completes (correct signal, not swept).** A message that receives a COA but never
+  a COD (never consumed, or expired) keeps a `coa_received=true, cod_received=false` row. Each such COA is
+  a `RECORDED` outcome — a KNOWN message whose pair is merely incomplete, **not** an `ORPHAN` — so it is
+  not counted by the orphan-rate metric. This non-zero `pendingCount()` is CORRECT information: it reflects
+  genuinely-undelivered messages, so a TTL sweep is deliberately NOT added (it would mask the signal). Use
+  the still-pending query above to inspect these rows.
 - **Store resilience to DB unavailability.** `JdbcCorrelationStore` throws `IllegalStateException` on
   `SQLException`; on the report path (AUTO_ACKNOWLEDGE) a transient DB outage can drop a report. A
   production build should classify `SQLException` (transient vs permanent) with bounded retry/backoff,

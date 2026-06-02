@@ -2,6 +2,7 @@ package com.example.ibmmq.consumer;
 
 import com.example.ibmmq.config.MqProperties;
 import com.example.ibmmq.correlation.CorrelationStore;
+import com.example.ibmmq.correlation.ReconcileResult;
 import com.example.ibmmq.model.DeliveryEvent;
 import com.example.ibmmq.model.PendingMessage;
 import com.example.ibmmq.model.ReportType;
@@ -18,6 +19,7 @@ import org.slf4j.MDC;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 
 import javax.jms.JMSConsumer;
 import javax.jms.ConnectionFactory;
@@ -51,6 +53,13 @@ public class ReportMessageConsumer {
     // unit/context tests that run a bare ApplicationContext with no datasources — there persistence is
     // simply skipped and the consumer keeps working. Present in the k3s harness and the persistence IT.
     private final DeliveryReportWriteRepository auditRepository;
+
+    // Orphan-rate metric (issue #26): an in-process counter of COA/COD reports recorded for a
+    // correlation id with no prior registration (an at-least-once redelivery after the pair already
+    // completed, or a report this process never registered). No Micrometer dependency in this module,
+    // so we follow the harness AtomicLong pattern (PublisherHarnessRunner) + a [stage=ORPHAN] WARN line;
+    // a production build would back this with a Micrometer counter. Read via getOrphanReportCount().
+    private final AtomicLong orphanReportCount = new AtomicLong();
 
     public ReportMessageConsumer(ConnectionFactory connectionFactory,
                                  MqProperties props,
@@ -138,23 +147,23 @@ public class ReportMessageConsumer {
                 switch (type) {
                     case COA -> {
                         // COA = Confirmation On Arrival: a mensagem CHEGOU na fila de destino.
-                        correlationStore.markCoaReceived(correlationId);
                         LOG.info("[stage=COA] Confirmacao de chegada (arrival) registrada: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
                         // Append-only audit row (writer datasource). Best-effort: a persist failure must NOT
                         // break the reconciliation path that follows (the report is already acked).
                         persistAudit(type, feedback, correlationId, originalMessageId, observedAt, sentAt, descriptor);
-                        // Reconcilia tambem aqui: sob competing consumers, o COD pode ter sido processado
-                        // ANTES do COA em outro pod — entao e o COA que completa o par. Independente de ordem.
-                        reconcileIfComplete(correlationId, originalMessageId);
+                        // One higher-level call: mark COA + order-independent reconcile in a single step
+                        // (CorrelationStore.recordReport composes the primitives). Under competing consumers
+                        // the COD may have been processed FIRST on another pod, so the COA can complete the
+                        // pair — recordReport handles that ordering and surfaces the outcome.
+                        recordAndSurface(type, correlationId, originalMessageId);
                     }
                     case COD -> {
                         // COD = Confirmation On Delivery: a mensagem foi CONSUMIDA destrutivamente.
-                        correlationStore.markCodReceived(correlationId);
                         LOG.info("[stage=COD] Confirmacao de entrega (delivery) registrada: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
                         persistAudit(type, feedback, correlationId, originalMessageId, observedAt, sentAt, descriptor);
-                        reconcileIfComplete(correlationId, originalMessageId);
+                        recordAndSurface(type, correlationId, originalMessageId);
                     }
                     case EXPIRATION, NAN, EXCEPTION ->
                             LOG.warn("[stage=PROBLEM] Relatorio de problema: tipo={}, feedback={}, correlId={}",
@@ -191,18 +200,51 @@ public class ReportMessageConsumer {
     }
 
     /**
-     * Reconciliacao independente de ordem: qualquer relatorio (COA ou COD) que complete o par remove a
-     * pendencia atomicamente. Seguro sob competing report-consumers em pods distintos — exatamente uma
-     * chamada remove (ver {@link CorrelationStore#removeIfFullyConfirmed}). Isto faz o
-     * {@code pendingCount()} drenar a zero mesmo quando COA e COD chegam fora de ordem em pods
-     * diferentes, sem depender de um sweep manual de operador.
+     * Records one COA/COD report through {@link CorrelationStore#recordReport} (mark + order-independent
+     * reconcile in a single composed step) and surfaces the {@link ReconcileResult.Outcome} for logging
+     * and the orphan-rate metric:
+     *
+     * <ul>
+     *   <li>{@code COMPLETED} &rarr; the report completed the COA+COD pair and THIS call removed the row
+     *       — emit the {@code [stage=RECONCILE]} line (with {@code pendingCount()}) exactly as before.
+     *       Safe under competing report-consumers: exactly one call removes the row (the rest are
+     *       no-ops), so the line is emitted once per fully-reconciled message;</li>
+     *   <li>{@code ORPHAN} &rarr; the report had no prior registration (orphan-on-redelivery, or a report
+     *       this process never registered) — emit a {@code [stage=ORPHAN]} WARN and bump the orphan-rate
+     *       counter. Not swept (see the known-limitations ledger);</li>
+     *   <li>{@code RECORDED} &rarr; a known message whose pair is not yet complete — no extra line
+     *       (the {@code [stage=COA]}/{@code [stage=COD]} line already narrated the mark).</li>
+     * </ul>
+     *
+     * <p>This keeps {@code pendingCount()} draining to zero cluster-wide for fully-confirmed messages
+     * with NO operator sweep, while orphans are surfaced rather than silently lingering.</p>
      */
-    private void reconcileIfComplete(String correlationId, String originalMessageId) {
-        if (correlationStore.removeIfFullyConfirmed(correlationId)) {
-            LOG.info("[stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, "
+    private void recordAndSurface(ReportType type, String correlationId, String originalMessageId) {
+        ReconcileResult result = correlationStore.recordReport(correlationId, type);
+        switch (result.outcome()) {
+            case COMPLETED -> LOG.info(
+                    "[stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, "
                             + "originalMsgId={}, pendentesRestantes={}",
                     originalMessageId, correlationStore.pendingCount());
+            case ORPHAN -> {
+                long total = orphanReportCount.incrementAndGet();
+                LOG.warn("[stage=ORPHAN] Orphan {} report (no prior registration): correlId={}, "
+                                + "orphanReportCount={}, pendingCount={}",
+                        type, correlationId, total, correlationStore.pendingCount());
+            }
+            case RECORDED -> { /* Known message, pair not yet complete — already narrated by COA/COD line. */ }
         }
+    }
+
+    /**
+     * Current count of orphan COA/COD reports recorded by this consumer instance — the orphan-rate
+     * metric backing the {@code [stage=ORPHAN]} WARN. In-process counter (no Micrometer in this module),
+     * following the harness {@code AtomicLong} pattern; exposed for tests and any harness/JMX surface.
+     *
+     * @return the number of {@link ReconcileResult.Outcome#ORPHAN} outcomes observed so far.
+     */
+    public long getOrphanReportCount() {
+        return orphanReportCount.get();
     }
 
     /**
