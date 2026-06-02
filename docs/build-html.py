@@ -44,6 +44,13 @@ GUIDE_EN = DOCS / "guide-ibmmq-jms-micronaut.md"
 GUIDE_PT = DOCS / "i18n" / "guia-ibmmq-jms-micronaut.md"
 LANGS = ("en", "pt")
 OUT = DOCS / "index.html"
+# Canonical bibliography (issue #14): the standalone HTML's References section is GENERATED
+# from this single file by render_references(), so the two never diverge. It is rendered as a
+# language-NEUTRAL <section> OUTSIDE both <section class="lang-pane"> body fragments — never
+# appended into en["body"]/pt["body"] and never given the lang-pane class — so it stays
+# invisible to all four parity gates (parity_lang, cross_lang_parity, standalone_scan,
+# assembled_page_check) while still rendering on the page in either language.
+REFERENCES = DOCS / "references.md"
 
 # Per-language chrome rendered INTO each pane's markup (the parts python emits): code-block
 # copy button label + its post-click feedback (carried on data-copied for the shared JS) +
@@ -673,6 +680,12 @@ pre.mermaid{
 pre.mermaid[data-processed]{visibility:visible;}
 pre.mermaid svg{max-width:100%; height:auto;}
 
+/* ---- references section (issue #14: language-NEUTRAL, generated from docs/references.md) ---- */
+/* Lives inside <main> AFTER both lang-panes; it is NOT a .lang-pane, so it always shows in
+   either language. A top divider sets it apart as the shared bibliography below the guide. */
+.references{border-top:2px solid var(--border); margin-top:1em;}
+.references .main-inner{padding-top:24px;}
+
 /* ---- language toggle + bilingual panes ---- */
 /* Both languages are embedded; only the active language's panes show. The active language
    is set on <html data-lang="..."> early (no FOUC) and each inactive <section.lang-pane> /
@@ -1083,6 +1096,29 @@ MERMAID_INIT = r"""
 """
 
 
+def render_references():
+    """Render the canonical bibliography (docs/references.md, issue #14) to an HTML fragment.
+
+    Uses a FRESH markdown.Markdown instance (markdown.Markdown is stateful — a per-call instance
+    avoids id/state carry-over from the guide renders) with only tables/attr_list/sane_lists:
+    deliberately NO TocExtension, so the references headings get no auto-generated ids and stay
+    OUT of the nav (which keys off body <h2/h3 id>). Tables are wrapped in <div class=
+    "table-scroll"> exactly like render_lang does, so they reuse the same responsive styling.
+    The returned fragment is interpolated into a language-NEUTRAL <section> (see build()); it is
+    NOT a lang-pane and is NOT part of either language body fragment, so the four parity gates
+    never see it."""
+    src = REFERENCES.read_text(encoding="utf-8")
+    md = markdown.Markdown(extensions=["tables", "attr_list", "sane_lists"])
+    body = md.convert(src)
+    body = re.sub(
+        r"(<table>.*?</table>)",
+        r'<div class="table-scroll">\1</div>',
+        body,
+        flags=re.DOTALL,
+    )
+    return body
+
+
 def render_lang(src_path, chrome):
     """Run the full single-language pipeline on one source file. Returns the rendered body
     fragment (the <main> inner HTML), its nav, the source-side measurements, the callout
@@ -1141,6 +1177,8 @@ def build():
     # locals (avoid quote-nesting inside the f-string)
     pt_nav, en_nav = pt["nav"], en["nav"]
     pt_body, en_body = pt["body"], en["body"]
+    # Canonical bibliography (issue #14), rendered once into a language-NEUTRAL section below.
+    refs_html = render_references()
 
     # The static shell renders pt-BR chrome (the documented fallback). The no-FOUC head
     # script sets <html data-lang> before paint; setLang() then corrects panes ([hidden]) +
@@ -1216,6 +1254,11 @@ def build():
       <section class="lang-pane" data-lang="en" aria-label="Guide content (English)">
         <div class="main-inner">
 {en_body}
+        </div>
+      </section>
+      <section class="references" aria-label="References">
+        <div class="main-inner">
+{refs_html}
         </div>
       </section>
     </main>

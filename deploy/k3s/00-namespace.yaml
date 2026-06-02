@@ -1,0 +1,8 @@
+# Namespace for the IBM MQ + COA/COD distributed harness. All harness objects live here so the
+# whole stack can be torn down with a single `kubectl delete namespace ibmmq-harness`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ibmmq-harness
+  labels:
+    app.kubernetes.io/part-of: ibmmq-coa-cod-harness

@@ -1,0 +1,9 @@
+# Keep the Docker build context small and reproducible: send only pom.xml + src.
+target/
+.idea/
+*.iml
+.git/
+.gitignore
+README.md
+docker-compose.yml
+mise.toml
