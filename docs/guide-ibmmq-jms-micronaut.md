@@ -390,8 +390,8 @@ proof of delivery. To reinforce it, define the report queue with `DEFPSIST(YES)`
 > ❌ **Bad practice — persistent message + correlation store only in memory (`ConcurrentHashMap`).** The report
 > persists and arrives after the restart, but the registered `messageId` **vanished** with the JVM. **Observable symptom:**
 > "orphan" reports — the consumer receives a COD whose `CorrelationId` matches no known pending entry; the
-> reconciliation reports "unknown" deliveries and you cannot close the cycle. (That is why the project includes
-`PersistentCorrelationStoreExample` — see Section 4.)
+> reconciliation reports "unknown" deliveries and you cannot close the cycle. (That is why the project ships a
+shared, persistent store — `JdbcCorrelationStore` — see Section 4.)
 
 ### 2.8 Full-flow diagram
 
@@ -877,21 +877,17 @@ public ReportType classify(int feedbackCode) {
 
 ### 4.5 Correlation store — in-memory and the persistent path
 
-The `InMemoryCorrelationStore` (`@Primary`) uses a `ConcurrentHashMap`, with atomic updates via `computeIfPresent` (
-safe under report concurrency):
+The `InMemoryCorrelationStore` is the default — gated by `@Requires(property = "correlation.store", notEquals = "jdbc")`, the complement of the JDBC store's `correlation.store=jdbc` gate, so exactly one bean exists in any configuration. It uses a `ConcurrentHashMap` with atomic updates via `compute`/`computeIfPresent` (safe under report concurrency):
 
 ```java
 // ibmmq-jms-guide/src/main/java/com/example/ibmmq/correlation/InMemoryCorrelationStore.java
 @Override
 public Optional<PendingMessage> markCoaReceived(String messageId) {
-    // compute guarantees atomicity even under report concurrency.
-    return updateAtomically(messageId, PendingMessage::withCoaReceived);
+    return markFlag(messageId, true, false); // atomic compute: creates a stub if the report beat register()
 }
 ```
 
-To survive a restart, the project provides the `PersistentCorrelationStoreExample` skeleton (JDBC or Redis), with the
-key guidance: ideally do the `INSERT` of the pending entry within the **same transaction** as the send (*outbox*/XA pattern), and make
-the COA/COD markings **idempotent** (reports are delivered *at-least-once*).
+To survive a restart — and to reconcile across competing-consumer pods — the project ships `JdbcCorrelationStore`, a shared persistent store backed by Postgres via plain JDBC (gated by `correlation.store=jdbc`, the k3s harness default; ADR-0005). Every mutation is idempotent (reports are delivered *at-least-once*): `register` is `INSERT ... ON CONFLICT (message_id) DO UPDATE` of the descriptive fields only; the COA/COD marks are `INSERT ... ON CONFLICT DO UPDATE SET <flag> = TRUE ... RETURNING` (an upsert that creates a stub when a report arrives before the send's `register`); completion is an atomic `DELETE ... WHERE coa_received AND cod_received`. Redis is an alternative backend (a `corr:{messageId}` hash with `EXPIRE`); for the strongest guarantee, do the pending `INSERT` in the **same transaction** as the send (*outbox*/XA pattern).
 
 > ✅ **Good practice — persistent store + idempotent markings in critical production.** An
 `UPDATE ... SET coa_received=true WHERE message_id=?` is idempotent by nature. Marking twice causes no side

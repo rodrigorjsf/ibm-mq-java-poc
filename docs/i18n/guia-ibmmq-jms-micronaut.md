@@ -390,8 +390,8 @@ prova de entrega confiável. Para reforçar, defina a fila de relatórios com `D
 > ❌ **Má prática — mensagem persistente + store de correlação só em memória (`ConcurrentHashMap`).** O relatório
 > persiste e chega depois do restart, mas o `messageId` registrado **sumiu** com a JVM. **Sintoma observável:**
 > relatórios "órfãos" — o consumidor recebe um COD com `CorrelationId` que não bate com nenhuma pendência conhecida; a
-> reconciliação reporta entregas "desconhecidas" e você não consegue fechar o ciclo. (Por isso o projeto inclui
-`PersistentCorrelationStoreExample` — ver Seção 4.)
+> reconciliação reporta entregas "desconhecidas" e você não consegue fechar o ciclo. (Por isso o projeto fornece um
+store compartilhado e persistente — `JdbcCorrelationStore` — ver Seção 4.)
 
 ### 2.8 Diagrama do fluxo completo
 
@@ -877,21 +877,17 @@ public ReportType classify(int feedbackCode) {
 
 ### 4.5 Store de correlação — em memória e o caminho persistente
 
-O `InMemoryCorrelationStore` (`@Primary`) usa `ConcurrentHashMap`, com atualizações atômicas via `computeIfPresent` (
-seguro sob concorrência de relatórios):
+O `InMemoryCorrelationStore` é o default — gated por `@Requires(property = "correlation.store", notEquals = "jdbc")`, o complemento do gate `correlation.store=jdbc` do store JDBC, então existe exatamente um bean em qualquer configuração. Usa um `ConcurrentHashMap` com atualizações atômicas via `compute`/`computeIfPresent` (seguro sob concorrência de relatórios):
 
 ```java
 // ibmmq-jms-guide/src/main/java/com/example/ibmmq/correlation/InMemoryCorrelationStore.java
 @Override
 public Optional<PendingMessage> markCoaReceived(String messageId) {
-    // compute garante atomicidade mesmo sob concorrência de relatórios.
-    return updateAtomically(messageId, PendingMessage::withCoaReceived);
+    return markFlag(messageId, true, false); // compute atômico: cria um stub se o relatório chegou antes do register()
 }
 ```
 
-Para sobreviver a restart, o projeto fornece o esqueleto `PersistentCorrelationStoreExample` (JDBC ou Redis), com a
-orientação-chave: idealmente faça o `INSERT` da pendência na **mesma transação** do envio (padrão *outbox*/XA), e torne
-as marcações COA/COD **idempotentes** (relatórios são entregues *at-least-once*).
+Para sobreviver a restart — e para reconciliar entre pods competing-consumer — o projeto fornece o `JdbcCorrelationStore`, um store compartilhado e persistente sobre Postgres via JDBC puro (gated por `correlation.store=jdbc`, o default do harness k3s; ADR-0005). Toda mutação é idempotente (relatórios são entregues *at-least-once*): `register` é `INSERT ... ON CONFLICT (message_id) DO UPDATE` só dos campos descritivos; as marcações COA/COD são `INSERT ... ON CONFLICT DO UPDATE SET <flag> = TRUE ... RETURNING` (um upsert que cria um stub quando um relatório chega antes do `register` do envio); a conclusão é um `DELETE ... WHERE coa_received AND cod_received` atômico. Redis é um backend alternativo (um hash `corr:{messageId}` com `EXPIRE`); para a garantia mais forte, faça o `INSERT` da pendência na **mesma transação** do envio (padrão *outbox*/XA).
 
 > ✅ **Boa prática — store persistente + marcações idempotentes em produção crítica.** Um
 `UPDATE ... SET coa_received=true WHERE message_id=?` é idempotente por natureza. Marcar duas vezes não causa efeito
