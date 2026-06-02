@@ -5,13 +5,18 @@ import com.example.ibmmq.correlation.CorrelationStore;
 import com.example.ibmmq.model.DeliveryEvent;
 import com.example.ibmmq.model.PendingMessage;
 import com.example.ibmmq.model.ReportType;
+import com.example.ibmmq.persistence.DeliveryReportWriteRepository;
+import com.example.ibmmq.report.ReportDescriptor;
 import com.example.ibmmq.report.ReportFeedbackRouter;
 import com.ibm.msg.client.wmq.WMQConstants;
+import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 import javax.jms.JMSConsumer;
@@ -41,15 +46,22 @@ public class ReportMessageConsumer {
     private final MqProperties props;
     private final CorrelationStore correlationStore;
     private final ReportFeedbackRouter feedbackRouter;
+    // Append-only audit persistence of each COA/COD report (issue #40), on the WRITER datasource.
+    // Nullable on purpose: the repository bean is gated on datasources.default.url, so it is ABSENT in
+    // unit/context tests that run a bare ApplicationContext with no datasources — there persistence is
+    // simply skipped and the consumer keeps working. Present in the k3s harness and the persistence IT.
+    private final DeliveryReportWriteRepository auditRepository;
 
     public ReportMessageConsumer(ConnectionFactory connectionFactory,
                                  MqProperties props,
                                  CorrelationStore correlationStore,
-                                 ReportFeedbackRouter feedbackRouter) {
+                                 ReportFeedbackRouter feedbackRouter,
+                                 @Nullable DeliveryReportWriteRepository auditRepository) {
         this.connectionFactory = connectionFactory;
         this.props = props;
         this.correlationStore = correlationStore;
         this.feedbackRouter = feedbackRouter;
+        this.auditRepository = auditRepository;
     }
 
     /**
@@ -61,8 +73,14 @@ public class ReportMessageConsumer {
     public DeliveryEvent receiveOneReport(long timeoutMillis) {
         try (JMSContext context = connectionFactory.createContext(JMSContext.AUTO_ACKNOWLEDGE)) {
 
+            // Enable MQMD read on the consume destination via the URI form (issue #19): the
+            // JMS_IBM_MQMD_* properties (ApplIdentityData, AccountingToken, MsgId, PutDate/PutTime) are
+            // populated ONLY when mdReadEnabled=true on the report destination — there is no setter on the
+            // ConnectionFactory. The URI property is preferred over an MQDestination cast because it
+            // survives the JmsPoolConnectionFactory wrapper (no provider cast). The canonical
+            // JMS_IBM_Feedback used for classification needs no read-enable.
             JMSConsumer consumer = context.createConsumer(
-                    context.createQueue("queue:///" + props.getReportQueue()));
+                    context.createQueue("queue:///" + props.getReportQueue() + "?mdReadEnabled=true"));
 
             Message report = consumer.receive(timeoutMillis);
             if (report == null) {
@@ -86,35 +104,161 @@ public class ReportMessageConsumer {
 
             ReportType type = feedbackRouter.classify(feedback);
 
+            // Issue #19: recover the six MQMD values from the report's OWN descriptor (verdict (R)-all).
+            // Fully null-safe and non-throwing — when mdReadEnabled is off (e.g. unit tests with a bare
+            // mock) every MQMD getter returns null, so the descriptor degrades gracefully and the
+            // already-acked report path is never aborted.
+            ReportDescriptor descriptor = ReportDescriptor.from(report, type);
+
             // Correlaciona de volta a mensagem original (CorrelationId == MessageId original).
             Optional<PendingMessage> pending = correlationStore.findByMessageId(correlationId);
             String originalMessageId = pending.map(PendingMessage::messageId).orElse(correlationId);
+            // Issue #21: capture the original send instant for the produce->report latency baseline. NULL when
+            // the pending row is unknown (the rare COA-before-register case) — a low-tail sample excluded from
+            // the percentiles in `make load-verify` (ADR-0007), so p95/p99 stay robust.
+            Instant sentAt = pending.map(PendingMessage::sentAt).orElse(null);
 
-            // Atualiza o estado da pendencia conforme o tipo de relatorio.
-            switch (type) {
-                case COA -> correlationStore.markCoaReceived(correlationId);
-                case COD -> {
-                    correlationStore.markCodReceived(correlationId);
-                    // Com COA+COD confirmados, a entrega esta completa: pode-se remover a pendencia.
-                    correlationStore.findByMessageId(correlationId)
-                            .filter(PendingMessage::isFullyConfirmed)
-                            .ifPresent(p -> correlationStore.remove(correlationId));
+            // MDC: correlationId = JMSCorrelationID do relatorio; messageId = MessageId original
+            // derivado pela correlacao. Vinculamos ANTES das etapas para que toda linha (classify,
+            // correlate, COA/COD, reconcile) carregue os mesmos ids — fechando a rastreabilidade
+            // ponta-a-ponta: o mesmo id do PRODUCE aparece aqui no relatorio.
+            MDC.put("messageId", originalMessageId);
+            MDC.put("correlationId", correlationId);
+            try {
+                LOG.info("[stage=CLASSIFY] Relatorio classificado: tipo={}, feedback={}, correlId={}",
+                        type, feedback, correlationId);
+                LOG.info("[stage=CORRELATE] Correlacionado a mensagem original: originalMsgId={}, conhecido={}",
+                        originalMessageId, pending.isPresent());
+
+                // Observation instant: shared by both the durable audit row and the DeliveryEvent below,
+                // so the persisted timestamp matches the event the caller sees.
+                Instant observedAt = Instant.now();
+
+                // Atualiza o estado da pendencia conforme o tipo de relatorio.
+                switch (type) {
+                    case COA -> {
+                        // COA = Confirmation On Arrival: a mensagem CHEGOU na fila de destino.
+                        correlationStore.markCoaReceived(correlationId);
+                        LOG.info("[stage=COA] Confirmacao de chegada (arrival) registrada: correlId={}, originalMsgId={}",
+                                correlationId, originalMessageId);
+                        // Append-only audit row (writer datasource). Best-effort: a persist failure must NOT
+                        // break the reconciliation path that follows (the report is already acked).
+                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt, sentAt, descriptor);
+                        // Reconcilia tambem aqui: sob competing consumers, o COD pode ter sido processado
+                        // ANTES do COA em outro pod — entao e o COA que completa o par. Independente de ordem.
+                        reconcileIfComplete(correlationId, originalMessageId);
+                    }
+                    case COD -> {
+                        // COD = Confirmation On Delivery: a mensagem foi CONSUMIDA destrutivamente.
+                        correlationStore.markCodReceived(correlationId);
+                        LOG.info("[stage=COD] Confirmacao de entrega (delivery) registrada: correlId={}, originalMsgId={}",
+                                correlationId, originalMessageId);
+                        persistAudit(type, feedback, correlationId, originalMessageId, observedAt, sentAt, descriptor);
+                        reconcileIfComplete(correlationId, originalMessageId);
+                    }
+                    case EXPIRATION, NAN, EXCEPTION ->
+                            LOG.warn("[stage=PROBLEM] Relatorio de problema: tipo={}, feedback={}, correlId={}",
+                                    type, feedback, correlationId);
+                    default -> { /* PAN/UNKNOWN: apenas registra no resumo abaixo. */ }
                 }
-                case EXPIRATION, NAN, EXCEPTION ->
-                        LOG.warn("Relatorio de problema: tipo={}, feedback={}, correlId={}",
-                                type, feedback, correlationId);
-                default -> { /* PAN/UNKNOWN: apenas registra abaixo. */ }
+
+                // Full 6-field event (issue #19): only this call site builds the extended DeliveryEvent;
+                // pre-#19 call sites keep using the 5-arg secondary constructor unchanged.
+                DeliveryEvent event = new DeliveryEvent(
+                        type, feedback, correlationId, originalMessageId, observedAt,
+                        descriptor.applIdentityData(),
+                        descriptor.accountingToken(),
+                        descriptor.correlationIdBytes(),
+                        descriptor.messageIdBytes(),
+                        descriptor.putTimestampUtc(),
+                        descriptor.reportTypeChar());
+
+                LOG.info("[stage=REPORT-DONE] Relatorio processado: tipo={}, feedback={}, correlId={}, originalMsgId={}, "
+                                + "conhecido={}, putTsUtc={}, reportTypeChar={}, msgIdHex={}",
+                        type, feedback, correlationId, originalMessageId, pending.isPresent(),
+                        descriptor.putTimestampUtc(), descriptor.reportTypeChar(), descriptor.messageIdBytesHex());
+
+                return event;
+            } finally {
+                // Limpa o MDC antes de devolver a thread ao pool (ver nota do produtor): sob ~10k rpm
+                // uma thread reutilizada nao pode vazar os ids deste relatorio para o proximo.
+                MDC.remove("messageId");
+                MDC.remove("correlationId");
             }
-
-            DeliveryEvent event = new DeliveryEvent(
-                    type, feedback, correlationId, originalMessageId, Instant.now());
-
-            LOG.info("Relatorio processado: tipo={}, feedback={}, correlId={}, originalMsgId={}, conhecido={}",
-                    type, feedback, correlationId, originalMessageId, pending.isPresent());
-
-            return event;
         } catch (Exception e) {
             throw new IllegalStateException("Falha ao processar relatorio de entrega", e);
+        }
+    }
+
+    /**
+     * Reconciliacao independente de ordem: qualquer relatorio (COA ou COD) que complete o par remove a
+     * pendencia atomicamente. Seguro sob competing report-consumers em pods distintos — exatamente uma
+     * chamada remove (ver {@link CorrelationStore#removeIfFullyConfirmed}). Isto faz o
+     * {@code pendingCount()} drenar a zero mesmo quando COA e COD chegam fora de ordem em pods
+     * diferentes, sem depender de um sweep manual de operador.
+     */
+    private void reconcileIfComplete(String correlationId, String originalMessageId) {
+        if (correlationStore.removeIfFullyConfirmed(correlationId)) {
+            LOG.info("[stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, "
+                            + "originalMsgId={}, pendentesRestantes={}",
+                    originalMessageId, correlationStore.pendingCount());
+        }
+    }
+
+    /**
+     * Appends one durable COA/COD audit row to {@code delivery_report} on the WRITER datasource —
+     * <b>best-effort</b>.
+     *
+     * <p>Three properties matter here, all by design:</p>
+     * <ul>
+     *   <li><b>Optional.</b> When no datasource is configured (unit/context tests) the repository bean
+     *       is absent ({@code auditRepository == null}) and we skip silently — the audit is a harness/
+     *       production feature, not a unit-test concern.</li>
+     *   <li><b>Idempotent.</b> The repository's {@code INSERT ... ON CONFLICT (correlation_id, feedback)
+     *       DO NOTHING} returns {@code 0} on a duplicate (report redelivered at-least-once, or two
+     *       competing consumers processing the same report) instead of throwing — no duplicate row, no
+     *       exception on the acked path (AC4).</li>
+     *   <li><b>Non-fatal.</b> The report was already acked under {@code AUTO_ACKNOWLEDGE} before
+     *       processing, so a persist failure (transient DB outage) must NOT propagate and abort the
+     *       reconciliation that follows. We catch, log at WARN, and continue — same best-effort posture
+     *       as the rest of the report path (a transacted/CLIENT_ACKNOWLEDGE store path is a documented
+     *       follow-up in ADR-0005).</li>
+     * </ul>
+     */
+    private void persistAudit(ReportType type, int feedback, String correlationId,
+                              String originalMessageId, Instant observedAt, Instant sentAt,
+                              ReportDescriptor descriptor) {
+        if (auditRepository == null) {
+            return; // No datasource configured (e.g. unit/context test) — audit persistence is inert.
+        }
+        try {
+            // Issue #19: additively persist the six recovered MQMD values (all nullable). The byte[]
+            // fields go in as hex strings; the report-type char goes in as a one-char String (null when
+            // it is the sentinel, so non-COA/COD reports leave the column NULL rather than storing '?').
+            char domainChar = descriptor.reportTypeChar();
+            String reportTypeChar = domainChar == ReportType.DOMAIN_CHAR_OTHER
+                    ? null : String.valueOf(domainChar);
+            LocalDateTime putTimestampUtc = descriptor.putTimestampUtc();
+            int inserted = auditRepository.insertIfAbsent(
+                    correlationId, originalMessageId, type.name(), feedback, observedAt,
+                    descriptor.applIdentityData(),
+                    descriptor.accountingTokenHex(),
+                    descriptor.correlationIdBytesHex(),
+                    descriptor.messageIdBytesHex(),
+                    putTimestampUtc,
+                    reportTypeChar,
+                    sentAt);
+            if (inserted == 0) {
+                LOG.debug("[stage=AUDIT] Report already persisted (idempotent duplicate): type={}, correlId={}",
+                        type, correlationId);
+            } else {
+                LOG.info("[stage=AUDIT] Report persisted (delivery_report): type={}, feedback={}, correlId={}, originalMsgId={}",
+                        type, feedback, correlationId, originalMessageId);
+            }
+        } catch (RuntimeException e) {
+            // Best-effort: the report is already acked; never break reconciliation on a persist failure.
+            LOG.warn("[stage=AUDIT] Failed to persist report (best-effort, ignored): type={}, correlId={}, cause={}",
+                    type, correlationId, e.getMessage());
         }
     }
 }

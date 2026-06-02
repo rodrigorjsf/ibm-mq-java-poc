@@ -6,6 +6,8 @@ All durable documentation in this repository is written in **English**, includin
 
 This supersedes the locked brief's P16. Rationale: align with the global durable-artifacts-in-English convention and serve an international audience, while preserving the original pt-BR reading experience in the flagship HTML.
 
+Scope note: this ADR governs **documentation**. The language of **in-code** text (Java comments, JavaDoc, log messages) and the `@DisplayName` exception are governed by **ADR-0004**.
+
 ## Consequences
 - The guide has two markdown sources — `docs/guide-*.md` (English, the canonical doc) and a pt-BR source under `docs/i18n/` (the HTML's pt-BR view only). `docs/build-html.py` generates the single bilingual file from both, embedding both languages (still standalone, no external deps).
 - Sync is enforced mechanically by a build-time **parity gate**: the EN and pt-BR sources (and the generated HTML) must share identical structure — same sections, callouts, code blocks, and Mermaid diagrams (labels localized per language). A structural mismatch fails the build.

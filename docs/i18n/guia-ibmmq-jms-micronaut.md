@@ -623,6 +623,8 @@ public JmsPoolConnectionFactory connectionFactory(MqProperties props) throws JMS
     JmsPoolConnectionFactory pool = new JmsPoolConnectionFactory();
     pool.setConnectionFactory(mqCf);     // aceita a interface javax.jms.ConnectionFactory
     pool.setMaxConnections(8);           // limita conexões físicas; sessions são multiplexadas
+    // maxSessionsPerConnection fica no default do pooled-jms (500) aqui; veja o deep dive
+    // abaixo para quando e como ajustá-lo (mantenha <= o SHARECNV do canal).
     return pool;
 }
 ```
@@ -634,6 +636,105 @@ public JmsPoolConnectionFactory connectionFactory(MqProperties props) throws JMS
 > TCP nova ao QMgr. **Sintoma observável:** *latency* alta por causa do handshake repetido, esgotamento de
 > sockets/threads, e o QMgr atingindo `MAXCHANNELS`/`MAXINST` (recusando conexões). Em pico, o serviço "trava" sem erro
 > óbvio.
+
+#### O que cada parâmetro controla — `maxConnections` vs `maxSessionsPerConnection`
+
+Esses dois parâmetros limitam **recursos diferentes** e são rotineiramente confundidos. `maxConnections` limita **conexões físicas** (sockets TCP ao QMgr, cada um pagando um handshake TCP + TLS + MQ e um slot no canal SVRCONN). `maxSessionsPerConnection` limita **sessions** — as unidades de trabalho lógicas e baratas, multiplexadas sobre *cada* conexão física como shared conversations. Os valores abaixo são os defaults autênticos do `pooled-jms` 2.0.9 (validados em `research-output/pooled-jms-factory-tuning.md`).
+
+| Parâmetro | Limita | Default (2.0.9) | Limite do mundo real |
+|---|---|---|---|
+| `maxConnections` | Conexões TCP físicas seguradas pelo pool | **1** | `maxConnections × réplicas` deve ficar abaixo do `MAXINST` do canal |
+| `maxSessionsPerConnection` | Sessions ativas emprestadas por **cada** conexão | **500** | Mantenha em/abaixo do `SHARECNV` do canal |
+| `blockIfSessionPoolIsFull` | O que acontece quando as sessions se esgotam | **true** (bloqueia, não lança) | Um chamador faminto espera; não falha rápido |
+| `blockIfSessionPoolIsFullTimeout` | Por quanto tempo bloquear | **-1** (para sempre) | A inanição aparece como *travamento*, não erro |
+
+O teto efetivo das sessions concorrentes que um único pod consegue entregar é o **produto** `maxConnections × maxSessionsPerConnection`. Quando uma thread pede uma session além desse teto, o comportamento default é **bloquear indefinidamente** (`blockIfSessionPoolIsFull=true`, timeout `-1`) — não lançar. É por isso que um pool sub-dimensionado sob carga parece um serviço congelado sem stack trace.
+
+> ⚠️ **Atenção — um pool sub-dimensionado falha *em silêncio*.** Com os defaults, esgotar o teto `maxConnections × maxSessionsPerConnection` faz `createContext`/`createSession` **bloquear para sempre**, não lançar. **Sintoma:** threads de request empilham esperando, o throughput estagna, e *não* há exceção para grepar. Dimensione o produto para sua concorrência real, ou defina `blockIfSessionPoolIsFullTimeout` para que a inanição apareça como um timeout sobre o qual você consegue alertar.
+
+#### Dimensionando o pool do producer sob ~10k rpm
+
+Sob a topologia vigente (Kubernetes, competing consumers, ~167 msg/s), o pool vive **por pod**, então o QMgr vê `réplicas × maxConnections` conexões físicas no total. Esse total é limitado pelo `MAXINST` do canal SVRCONN (e `MAXINSTC` por endereço); ultrapasse-o e o QMgr **recusa** novas conexões com `2025 MQRC_MAX_CONNS_LIMIT_REACHED` / `2537 MQRC_CHANNEL_NOT_AVAILABLE`. Logo `maxConnections` nunca é uma decisão local do pod — um valor inofensivo em uma réplica vira uma indisponibilidade por esgotamento de canal em cinquenta. No eixo das sessions, mantenha `maxSessionsPerConnection` em ou abaixo do `SHARECNV` negociado do canal (10 no `DEV.APP.SVRCONN` de dev); sessions além disso não conseguem compartilhar um único socket, então o cliente abre sockets extras e a economia de sockets pela qual o pool existe se erode.
+
+> ℹ️ **Nota — dois limites, dois escopos.** `maxConnections` é limitado *no lado do cluster* por `réplicas × maxConnections ≤ MAXINST`; `maxSessionsPerConnection` é limitado *no lado do canal* por `≤ SHARECNV`. Dimensione cada um contra o seu próprio teto — eles não se compensam mutuamente.
+
+#### `maxConnections`: cenários bom vs. ruim
+
+```mermaid
+flowchart TB
+  subgraph GOOD["✅ Bem dimensionado"]
+    direction LR
+    GP["N pods<br/>maxConnections=2"] --> GS["réplicas × 2 ≤ MAXINST"] --> GQ["QMgr aceita tudo"]
+  end
+  subgraph BAD["❌ Super dimensionado"]
+    direction LR
+    BP["N pods<br/>maxConnections=8"] --> BS["réplicas × 8 > MAXINST"] --> BQ["QMgr recusa<br/>2025 / 2537"]
+  end
+  classDef good fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+  classDef warn fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+  classDef bad fill:#e6c9c9,stroke:#a85555,color:#1f2430;
+  classDef info fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+  class GP,GS info;
+  class GQ good;
+  class BP,BS warn;
+  class BQ bad;
+  style GOOD fill:#eef5ea,stroke:#5a8f63,color:#1f2430;
+  style BAD fill:#f3e7e7,stroke:#a85555,color:#1f2430;
+```
+
+#### `maxSessionsPerConnection`: cenários bom vs. ruim
+
+```mermaid
+flowchart TB
+  subgraph GOOD2["✅ maxSessionsPerConnection ≤ SHARECNV"]
+    direction LR
+    GA["8 sessions"] -->|multiplexado| GK["1 socket<br/>SHARECNV=10"] --> GR["reuso eficiente"]
+  end
+  subgraph BAD2["❌ maxSessionsPerConnection ≫ SHARECNV"]
+    direction LR
+    BA["50 sessions"] -->|excesso| BK["sockets extras<br/>/ serialização"] --> BR["economia de socket perdida"]
+  end
+  classDef good fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+  classDef warn fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+  classDef bad fill:#e6c9c9,stroke:#a85555,color:#1f2430;
+  classDef info fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+  class GA,GK info;
+  class GR good;
+  class BA,BK warn;
+  class BR bad;
+  style GOOD2 fill:#eef5ea,stroke:#5a8f63,color:#1f2430;
+  style BAD2 fill:#f3e7e7,stroke:#a85555,color:#1f2430;
+```
+
+#### Um pool ou dois? Factories de producer vs. consumer
+
+O producer e o consumer têm **ciclos de vida de conexão opostos**, então um pool certo para um é errado para o outro. Um producer abre um `JMSContext` curto por `send` e o devolve — exatamente o churn que o pool otimiza, então **poolar o producer é um ganho forte e incondicional**. O consumer de produção idiomático é o oposto: é **longevo**, segurando uma conexão física pela vida do pod e iterando `receive()`/`commit()` sobre a mesma session. Um pool embrulhando uma única conexão longeva colapsa para tamanho efetivo 1 — não acrescenta nada — e, para um `MessageListener` assíncrono, o `pooled-jms` desaconselha ativamente o pooling (a conexão fica segurada fora do controle do pool).
+
+| Papel | Ciclo de vida da conexão | O pool ajuda? |
+|---|---|---|
+| **Producer** | Contexto curto por `send` | **Sim, fortemente** — reusa o socket entre sends |
+| **Consumer longevo** | Uma conexão segurada pela vida do pod | **Pouco ou nada** — o pool colapsa para tamanho 1; um CF cru é mais limpo |
+| **Consumer com churn** (didático) | Contexto por poll, como um producer | **Sim** — mesmo argumento de reuso do producer |
+
+É por isso que a topologia do mundo real de **uma factory poolada para o publisher + um `MQConnectionFactory` cru para o consumer** é sólida, não um cheiro — *desde que o consumer seja longevo*. Uma factory crua, não-poolada, é correta **apenas** para um consumer longevo; pareá-la com um consumer com churn faria um handshake de socket por mensagem. Os dois temas se encontram aqui: os parâmetros de *sizing* acima governam o pool do producer, enquanto a decisão de *topologia* governa se o consumer deve estar nesse pool. (Essa topologia role-based está registrada na ADR-0006; sua implementação é rastreada na issue #25.)
+
+> ✅ **Boa prática — factories por papel.** Um `JmsPoolConnectionFactory` para o producer (dimensionado pelas regras acima) e uma factory **dedicada** para o consumer longevo. **Impacto:** cada lado é ajustado ao seu próprio ciclo de vida; a conexão longeva do consumer nunca rouba um slot do pool do producer.
+>
+> ❌ **Má prática — um pool único usado cegamente para tudo, *com* um listener assíncrono nele.** O pool é ajustado para uma carga enquanto serve duas opostas, e um `MessageListener` prende uma conexão poolada fora do controle do pool. **Sintoma:** um producer que bloqueia intermitentemente no checkout porque um consumer segura conexões pooladas, além dos cuidados de listener que o `pooled-jms` alerta. (Um pool único compartilhado só é aceitável quando **ambos** os lados fazem churn de contextos curtos e **nenhum** listener assíncrono é usado.)
+
+#### Pool, commit e idempotência — três camadas diferentes
+
+Uma confusão frequente é achar que a connection factory afeta de alguma forma o commit ou a idempotência. Não afeta. Esses três vivem em camadas diferentes, e a escolha da factory toca apenas a primeira:
+
+| Camada | O que é | Quem é dono |
+|---|---|---|
+| **Ciclo de vida de conexão / session** | Como sockets e sessions são criados, reusados, dimensionados | A ConnectionFactory / pool — **a única coisa que o pooling afeta** |
+| **Commit** | Confirmar uma unidade de trabalho | A **session** (`context.commit()`), nunca a conexão; o pool só faz rollback de uma session transacionada não-commitada na devolução |
+| **Idempotência** | Não reprocessar uma entrega duplicada | O **Correlation store** compartilhado/persistente, deduplicando por id — independente da factory |
+
+Então trocar poolada ↔ crua, ou compartilhada ↔ por-papel, tem efeito **zero** sobre a semântica de commit ou a idempotência de entrega. A relação real é *inversa*: um pool — ou qualquer falha de conexão em volta do commit, como uma conexão invalidada no meio da transação — pode ser uma **fonte** de redelivery; o Correlation store é a **defesa** que torna esse redelivery inofensivo.
+
+> ℹ️ **Nota — o pool é uma *fonte* de duplicata, o store é a *defesa*.** Não raciocine "o pool me dá exactly-once" — não dá. Exactly-once vem de um consumo transacionado mais um Correlation store idempotente; a factory só decide como conexões e sessions são criadas e reusadas.
 
 ### 4.2 Producer — habilita COA/COD, persiste e registra a correlação
 
@@ -1083,6 +1184,9 @@ quadro **mudou no Java 25**:
   leitura, mas mensagens pré-buscadas podem se perder se o cliente cair (não use para persistentes que exigem garantia).
 - **SHARECNV** — `WMQ_SHARE_CONV_ALLOWED` multiplexa conversas num socket. Reduz o número de sockets/canais sob alta
   concorrência; deve casar com o `SHARECNV` definido no canal.
+- **Sizing do pool** — dimensione o pool do producer para que `maxConnections × réplicas ≤ MAXINST` e
+  `maxSessionsPerConnection ≤ SHARECNV` (detalhe em §4.1). Um pool sub-dimensionado bloqueia `createContext` para sempre por
+  default; um super-dimensionado esgota o canal.
 
 ## Apêndices
 
@@ -1160,7 +1264,9 @@ Referência rápida dos pares ✅/❌ usados ao longo do guia.
 | Tema                           | ✅ Boa prática                                                                       | ❌ Má prática (e sintoma observável)                                                                                                                     |
 |--------------------------------|-------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Fila de report**             | Fila **dedicada** (`APP.REPORT.QUEUE`) apontada por `JMSReplyTo`.                   | `JMSReplyTo` para a fila de negócio → consumidor processa relatórios como pedidos; parsing quebra, loop de erro enchendo backout/DLQ.                   |
-| **Conexão**                    | Sempre `JmsPoolConnectionFactory` com `maxConnections` limitado.                    | CF cru + conexão por mensagem → handshake repetido, esgotamento de sockets, QMgr em `MAXCHANNELS`, serviço trava sem erro óbvio.                        |
+| **Conexão**                    | Factory poolada para o producer com `maxConnections` limitado.                    | CF cru + conexão por mensagem → handshake repetido, esgotamento de sockets, QMgr em `MAXCHANNELS`, serviço trava sem erro óbvio.                        |
+| **Topologia de factory**       | **Por papel**: factory poolada para o producer; factory dedicada para o consumer longevo (ADR-0006). | Um pool único usado cegamente para os dois ciclos de vida, ou um CF não-poolado atrás de um consumer com churn (um socket por mensagem). |
+| **Sizing do pool**             | `maxConnections × réplicas ≤ MAXINST`; `maxSessionsPerConnection ≤ SHARECNV`.       | 8×8 "por garantia" sob um modelo single-thread-por-pod → teto de 64 sessions nunca usado; ou sub-dimensionado → `createContext` bloqueia para sempre (travamento silencioso). |
 | **Conexão (HA)**               | CCDT/`CONNECTION_NAME_LIST` gerenciados por operação.                               | Host/porta fixos únicos → `2059`/`2538` em cascata sem auto-recuperação.                                                                                |
 | **COA/COD (uso)**              | Habilitar seletivamente onde a prova de entrega tem valor.                          | COA+COD+Exception+Expiration em todo alto volume → throughput despenca, `REPORT.QUEUE` com backlog, disco do QMgr satura.                               |
 | **COA/COD (dados)**            | `MQRO_COA`/`MQRO_COD` sem `_WITH_DATA` por padrão.                                  | `_WITH_FULL_DATA` indiscriminado → duplicação de payload e **exposição de PII** na fila de relatórios.                                                  |

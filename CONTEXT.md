@@ -55,6 +55,10 @@ By default (`MQRO_COPY_MSG_ID_TO_CORREL_ID`) the original message's MessageId be
 The keyed record of in-flight business messages awaiting their COA/COD, used to reconcile delivery. Must be shared/persistent across replicas, not per-instance memory.
 _Avoid_: tracker, cache.
 
+**Log trace context (MDC)**:
+The pair of ids (MessageId + CorrelationId) bound into the logging framework's Mapped Diagnostic Context so every log line of one business message's lifecycle (PRODUCE → CONSUME → COA/COD → reconcile) carries them — making a single message greppable end-to-end. This is a **logging/observability** concern, distinct from the Correlation store: it reconciles nothing and holds no delivery state, it only decorates log output.
+_Avoid_: naming it with "Correlation" (e.g. `CorrelationContext`) — that overloads the Correlation store; "tracing" without naming MDC.
+
 **Competing consumers**:
 Multiple consumer instances (e.g. Kubernetes replicas) reading the same queue; MQ load-balances messages across them, so producer, consumer, and report-receiver are generally different pods.
 
@@ -67,8 +71,23 @@ The server-connection channel a CLIENT-mode JMS application connects through; go
 CLIENT mode reaches a remote QMgr over a TCP socket (the microservices case); BINDINGS mode uses shared memory on the same host.
 
 **Connection pool (pooled-jms)**:
-The pool that wraps the MQ ConnectionFactory and reuses physical connections instead of opening one per message.
-_Avoid_: generic "JMS pool" without naming pooled-jms.
+The pool that wraps the MQ ConnectionFactory and reuses **physical connections** instead of opening one per message, lending **sessions** from each. Its value is concentrated on the producer side (short-lived, bursty contexts); a long-lived consumer that holds one connection for the pod's life gains little from it.
+_Avoid_: generic "JMS pool" without naming pooled-jms; treating it as a source of idempotency (it is not — see Correlation store).
+
+**Physical connection**:
+One TCP socket to the QMgr through a SVRCONN channel — the heavyweight resource the pool reuses. Its creation pays the TCP + TLS + MQ handshake, so opening one per message is the canonical anti-pattern.
+_Avoid_: conflating it with a session or a JMSContext.
+
+**Session**:
+The JMS unit of work (one transacted scope, used by a single thread) carried over a physical connection as a shared conversation. `commit()`/`rollback()` act on a session, never on a connection. Many sessions multiplex over one physical connection.
+_Avoid_: equating "session" with "connection".
+
+**Shared conversation (SHARECNV)**:
+A logical conversation multiplexed over one physical connection/socket. The number of conversations that may share a socket is negotiated against the SVRCONN channel's `SHARECNV`; how many sessions a single pooled connection can usefully carry is bounded by it.
+
+**Role-based connection factories**:
+The practice of giving the producer and the consumer **distinct** ConnectionFactory beans tuned to their opposite lifecycles — a pooled factory for the bursty producer, a dedicated (often non-pooled) factory for the long-lived consumer — instead of one shared pool for both. The shared-pool topology is acceptable only when both sides churn short-lived contexts and use no async listener.
+_Avoid_: assuming "one pool for everything" is always correct.
 
 **MCA (Message Channel Agent)**:
 The agent that moves messages across a channel, running under the `MCAUSER` identity.
@@ -87,6 +106,16 @@ Where the QMgr routes messages it cannot deliver — including reports whose PUT
 **Poison message / Backout**:
 A message that repeatedly fails processing; after `BOTHRESH` rollbacks the QMgr moves it to the backout queue (`BOQNAME`).
 
+### Load & performance
+
+**Sustained-load run (load profile)**:
+A bounded, fixed-rate drive of the harness — the producer runs at the target rate until a *known total* N is produced, then the in-flight messages drain — used to verify correlation completeness, exactly-once, and a latency baseline under load. Run via the dedicated load profile, **excluded** from the default verify gate (an asserting gate that exits non-zero on breach), distinct from the at-a-glance evidence the default gate only **displays**.
+_Avoid_: conflating it with the default snapshot (which displays, not asserts); calling an unbounded forever-loop a "sustained-load run" (no denominator → no zero-loss claim).
+
+**Latency baseline (vs SLA)**:
+The measured p50/p95/p99 of produce→COA / produce→COD on the local **single-node** harness, recorded as a non-regression reference — **distinct from a production latency SLA**. The asserted gate is a *separate*, pre-declared generous ceiling (a constant committed before the run), never the measured median.
+_Avoid_: treating a local baseline as a production SLA; asserting a run against thresholds derived from that same run (circular).
+
 ### Security
 
 **MQCSP**:
@@ -95,8 +124,8 @@ MQ Connection Security Parameters — the modern user/password authentication fl
 **CHLAUTH**:
 Channel Authentication Records — per-channel identity/authorization rules (`SET CHLAUTH`).
 
-**Report-PUT authority (2035 / +setall)**:
-To generate and deliver a report the QMgr does a PUT-with-context to the ReplyToQ, which needs context authority (`+setall`); a principal lacking it fails with `MQRC_NOT_AUTHORIZED (2035)` and the report is silently dead-lettered.
+**Report-PUT authority (2035 / +passid)**:
+To generate and deliver a report the QMgr does a PUT-with-context to the ReplyToQ, which needs context authority. The minimal authority it actually requires is **`+passid`** (pass identity context) — verified live on k3d, where `+put +setall` *without* `+passid` still failed `AMQ8077W … passid`. A principal lacking it fails with `MQRC_NOT_AUTHORIZED (2035)` and the report is silently dead-lettered. Grant the full context set `AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)`.
 
 **CipherSpec / CipherSuite**:
 The TLS algorithm name on the QMgr side (CipherSpec) paired with its Java / JSSE counterpart (CipherSuite).

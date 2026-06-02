@@ -2,7 +2,7 @@
 
 **Created:** 2026-05-31
 **Repo:** `/home/rodrigo/IBM-MQ` (NOT a git repo — no branches/commits; state lives in files on disk)
-**Driver:** the locked brief `research-prompt-ibmmq-jms-micronaut.md` (premises P1–P20 are TRAVADAS — do not reopen)
+**Driver:** the locked brief `research-prompt-ibmmq-jms-micronaut.md` (premises P1–P20 are LOCKED — do not reopen)
 
 ---
 
@@ -22,7 +22,7 @@ Building a production-grade, pt-BR deliverable: a runnable Micronaut 4 + IBM MQ 
    - **TASK_3 — integration-test scenario matrix + Virtual Threads + load/volumetry** (after TASK_2 — its field-recovery IT depends on TASK_2's names).
    - **TASK_4 — project-agnostic LLM analysis skill at `ai/skills/`** (last, for evidence-harvesting; **soft**-coupled to TASK_2/3, not hard-gated).
    Add sub-steps as needed (e.g. D: nav/sidebar, syntax highlight + copy, callouts ✅/❌/⚠️/ℹ️, WCAG AA, responsive; E: each checklist line). **Note:** TASK_3 and TASK_5 both edit the guide — any guide edit after Phase D means the HTML must be **regenerated** (not hand-patched) and Phase E's "HTML mirrors all sections" item re-checked.
-2. **Read these for grounding (in order):** `research-prompt-ibmmq-jms-micronaut.md` (§ESTRUTURA, P17, P20, §3.1), `CLAUDE.md` (validated facts + env quirks + the mandatory reference-doc rule), `docs/guia-ibmmq-jms-micronaut.md` (the source content the HTML must mirror).
+2. **Read these for grounding (in order):** `research-prompt-ibmmq-jms-micronaut.md` (§STRUCTURE, P17, P20, §3.1), `CLAUDE.md` (validated facts + env quirks + the mandatory reference-doc rule), `docs/guia-ibmmq-jms-micronaut.md` (the source content the HTML must mirror).
 
 ---
 
@@ -126,7 +126,7 @@ Building a production-grade, pt-BR deliverable: a runnable Micronaut 4 + IBM MQ 
 
 ### Immediate (Phase D — HTML)
 1. Create the remaining `TaskCreate` list (see top).
-2. Generate a **single standalone HTML file** (embedded CSS/JS, no backend, no required external deps) that mirrors ALL sections of `docs/guia-ibmmq-jms-micronaut.md`, per **P17** (fixed left nav with active-section highlight; navigable TOC; code blocks with syntax highlight + copy button; distinct callouts ✅ Boa prática / ❌ Má prática / ⚠️ Atenção / ℹ️ Nota — the guide already uses these markers; responsive; WCAG AA contrast ≥4.5:1) and **P20** palette/typography (see Skills section). Prefer delegating to a subagent (P18) that receives the consolidated guide and returns the finished HTML; pass it the P20 override verbatim. `ce-frontend-design` = quality engine only.
+2. Generate a **single standalone HTML file** (embedded CSS/JS, no backend, no required external deps) that mirrors ALL sections of `docs/guia-ibmmq-jms-micronaut.md`, per **P17** (fixed left nav with active-section highlight; navigable TOC; code blocks with syntax highlight + copy button; distinct callouts ✅ Good practice / ❌ Bad practice / ⚠️ Caution / ℹ️ Note — the guide already uses these markers; responsive; WCAG AA contrast ≥4.5:1) and **P20** palette/typography (see Skills section). Prefer delegating to a subagent (P18) that receives the consolidated guide and returns the finished HTML; pass it the P20 override verbatim. `ce-frontend-design` = quality engine only.
 
 ### Subsequent (Phase E — validation)
 3. Run `cd` env + `mvn -f ibmmq-jms-guide/pom.xml clean verify` (sandbox off) for a pristine end-to-end pass.
@@ -162,7 +162,7 @@ mvn -f $P/pom.xml clean verify                      # full: unit + COA/COD IT
 ## Open Questions
 
 **Tier 1 (brief deliverable):**
-- [ ] HTML output filename/location: `docs/index.html` vs repo-root `index.html` (brief says "abrir direto no navegador"; pick one and note it in Phase E).
+- [ ] HTML output filename/location: `docs/index.html` vs repo-root `index.html` (brief says "open directly in the browser"; pick one and note it in Phase E).
 - [ ] Keep the IT on `admin`, or add a `withStartupMQSC` `SET AUTHREC` grant so it runs as `app` (more production-realistic)? Current `admin` approach is green and documented; optional polish.
 
 **Tier 2 (each deferred TASK carries its own in-task open questions — resolved during *its* execution, not blockers for D/E):**
@@ -334,7 +334,7 @@ This work is **deferred** — the section below is the build sheet for a future 
 Per the repo reference-documentation rule (CLAUDE.md), the scenario catalog is a durable artifact and must live in the repo:
 
 - **Create `docs/testing-scenarios.md`** as the canonical scenario catalog. Every scenario below is one entry, written with the **exact mandatory template**: **Scenario** / **Impact** / **Community reports (with links/sources)** / **Application behavior (explained)** / **Solution (clear WHY it happens and HOW the fix actually resolves it)**. The catalog is the source of truth; the test files are the executable proof of each entry.
-- **Cross-link from the guide**: add a pointer from `docs/guia-ibmmq-jms-micronaut.md` §5.1 ("Estratégia de testes híbrida") and §5.2 ("Gotchas reais") to `docs/testing-scenarios.md`, and extend §5.7 (Virtual Threads) once Group B is measured. Do not duplicate the catalog into the guide — link to it.
+- **Cross-link from the guide**: add a pointer from `docs/guia-ibmmq-jms-micronaut.md` §5.1 ("Hybrid testing strategy") and §5.2 ("Real gotchas") to `docs/testing-scenarios.md`, and extend §5.7 (Virtual Threads) once Group B is measured. Do not duplicate the catalog into the guide — link to it.
 - **English** for both files (durable artifacts), even though the guide prose is pt-BR.
 
 ### Test layout, tagging, and keeping `mvn verify` fast

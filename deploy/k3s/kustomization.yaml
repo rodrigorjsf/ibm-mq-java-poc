@@ -1,0 +1,45 @@
+# =============================================================================
+# Kustomization for the IBM MQ + COA/COD distributed harness on local k3s.
+#
+# Apply everything (creates the namespace + all objects):
+#   kubectl apply -k deploy/k3s
+#
+# Resources are listed in dependency order; kubectl/kustomize applies them together, but for a clean
+# first bring-up follow the staged order in README.md (namespace -> secrets/config -> Postgres -> MQ
+# (wait Ready) -> consumers -> publisher) so the MQ queue manager is Ready before consumers connect.
+#
+# Parameterize without editing the base manifests:
+#   - replicas:  the `replicas:` blocks below override the per-Deployment defaults.
+#   - image tag: the `images:` block below retags ibmmq-jms-harness for all three role Deployments,
+#                so a new build (e.g. :1.0.1) is rolled out by changing one line.
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ibmmq-harness
+
+resources:
+  - 00-namespace.yaml
+  - 10-secrets.yaml
+  - 20-postgres.yaml
+  - 30-mq-config.yaml
+  - 31-app-config.yaml
+  - 40-ibmmq.yaml
+  - 50-publisher.yaml
+  - 51-business-consumer.yaml
+  - 52-report-consumer.yaml
+
+# Single source of truth for the harness image tag across all three role Deployments.
+# After `docker build -t ibmmq-jms-harness:1.0.0 ...` + `k3s ctr images import`, this tag must match.
+images:
+  - name: ibmmq-jms-harness
+    newTag: "1.0.0"
+
+# Tune competing-consumer parallelism here (one place) instead of editing each Deployment.
+replicas:
+  - name: publisher
+    count: 1
+  - name: business-consumer
+    count: 3
+  - name: report-consumer
+    count: 2

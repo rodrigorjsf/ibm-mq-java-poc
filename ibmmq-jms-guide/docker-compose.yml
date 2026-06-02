@@ -1,14 +1,29 @@
 # =============================================================================
-# docker-compose.yml — IBM MQ Advanced for Developers (single QMgr) para o guia.
+# docker-compose.yml — IBM MQ Advanced for Developers (single QMgr) + Postgres
+# primary/replica (read/write split) para o guia.
 #
-# Sobe um gerenciador de filas QM1 com os objetos DEV.* default, listener 1414 e
-# console web 9443. Os arquivos mqsc/ sao montados em /etc/mqm e aplicados UMA VEZ
-# na criacao do QMgr (autoconfig) — adicionam os objetos APP.* de producao por cima.
+# Sobe:
+#   * mq               — gerenciador de filas QM1 (DEV.* default, listener 1414, console 9443).
+#   * postgres-primary — Postgres WRITER (streaming-replication master) na porta 5432.
+#   * postgres-replica — Postgres READER (hot-standby, streaming replication) na porta 5433.
+#
+# O par primary/replica realiza localmente o read/write split do issue #40 (ADR-0005): a app escreve
+# (JdbcCorrelationStore + audit delivery_report) no `default`/writer (postgres-primary) e le o read-model
+# de auditoria no `reader`/replica (postgres-replica). Streaming replication fisica: a tabela
+# delivery_report e cada linha apendada chegam ao standby por replicacao (sem DDL no replica).
+#
+# Os arquivos mqsc/ sao montados em /etc/mqm e aplicados UMA VEZ na criacao do QMgr (autoconfig).
 #
 # Uso:
 #   docker compose up -d
-#   docker compose logs -f mq      # aguarde "Started queue manager"
-#   docker compose down            # (use 'down -v' para descartar o volume)
+#   docker compose logs -f mq                  # aguarde "Started queue manager"
+#   docker compose logs -f postgres-replica    # aguarde "started streaming WAL from primary"
+#   docker compose down                        # (use 'down -v' para descartar os volumes)
+#
+# Conexao da app ao split (override do application.yml por -D ou env):
+#   datasources.default.url = jdbc:postgresql://localhost:5432/correlation   (writer)
+#   datasources.reader.url  = jdbc:postgresql://localhost:5433/correlation   (reader/replica)
+#   usuario/senha: corr / corrpass
 # =============================================================================
 services:
   mq:
@@ -22,6 +37,11 @@ services:
       # Protege DEV.APP.SVRCONN com senha. ATENCAO: MQ_APP_PASSWORD esta DEPRECADA
       # a partir da v9.4.0.0 — em producao prefira os secrets mqAppPassword/mqAdminPassword.
       MQ_APP_PASSWORD: passw0rd
+      # Senha do usuario 'admin' (canal DEV.ADMIN.SVRCONN). Necessaria para o runner gated da demo
+      # COA/COD (perfil "demo"): so o admin tem autoridade de contexto (+setall) para o QMgr gerar e
+      # entregar os relatorios — o 'app' falharia com MQRC_NOT_AUTHORIZED (2035) e o relatorio iria
+      # para a DLQ. MESMA depreciacao do MQ_APP_PASSWORD: em producao use o secret mqAdminPassword.
+      MQ_ADMIN_PASSWORD: passw0rd
     ports:
       - "1414:1414"   # listener MQ (clientes JMS)
       - "9443:9443"   # console web (https://localhost:9443/ibmmq/console)
@@ -32,5 +52,55 @@ services:
       # Persiste os dados do QMgr entre reinicios do container.
       - mqdata:/mnt/mqm
 
+  # ---------------------------------------------------------------------------------------------------
+  # Postgres WRITER (primary) — streaming-replication master. A app escreve aqui (datasources.default).
+  # Imagem bitnamilegacy: dirigida por env (POSTGRESQL_REPLICATION_MODE=master) — sobe pronta para streaming
+  # replication sem scripts de init manuais. Use bitnamilegacy/postgresql:16 — a Bitnami moveu as imagens
+  # free do Docker Hub para o namespace bitnamilegacy/ em 2025 (bitnami/postgresql:16* nao e mais pullable).
+  # ---------------------------------------------------------------------------------------------------
+  postgres-primary:
+    image: bitnamilegacy/postgresql:16
+    container_name: ibmmq-pg-primary
+    environment:
+      POSTGRESQL_REPLICATION_MODE: master
+      # Usuario dedicado de replicacao (o standby autentica com ele para puxar o WAL).
+      POSTGRESQL_REPLICATION_USER: repluser
+      POSTGRESQL_REPLICATION_PASSWORD: replpass
+      # Usuario/senha/db da APLICACAO (datasources.default.username/password).
+      POSTGRESQL_USERNAME: corr
+      POSTGRESQL_PASSWORD: corrpass
+      POSTGRESQL_DATABASE: correlation
+    ports:
+      - "5432:5432"   # writer endpoint (datasources.default.url)
+    volumes:
+      - pgprimary:/bitnami/postgresql
+
+  # ---------------------------------------------------------------------------------------------------
+  # Postgres READER (replica) — hot-standby por streaming replication. A app le o read-model de
+  # auditoria aqui (datasources.reader). depends_on garante que o primary suba primeiro; a replicacao
+  # fisica copia o catalogo de roles, entao o usuario `corr` da app existe no standby sem recriar.
+  # Sinal de "caught up" nos logs: "started streaming WAL from primary" / "database system is ready to
+  # accept read-only connections".
+  # ---------------------------------------------------------------------------------------------------
+  postgres-replica:
+    image: bitnamilegacy/postgresql:16
+    container_name: ibmmq-pg-replica
+    depends_on:
+      - postgres-primary
+    environment:
+      POSTGRESQL_REPLICATION_MODE: slave
+      POSTGRESQL_REPLICATION_USER: repluser
+      POSTGRESQL_REPLICATION_PASSWORD: replpass
+      POSTGRESQL_MASTER_HOST: postgres-primary
+      POSTGRESQL_MASTER_PORT_NUMBER: "5432"
+      # Senha do usuario admin (postgres) usada pelo standby ao se anexar ao master.
+      POSTGRESQL_PASSWORD: corrpass
+    ports:
+      - "5433:5432"   # reader endpoint (datasources.reader.url -> localhost:5433)
+    volumes:
+      - pgreplica:/bitnami/postgresql
+
 volumes:
   mqdata:
+  pgprimary:
+  pgreplica:

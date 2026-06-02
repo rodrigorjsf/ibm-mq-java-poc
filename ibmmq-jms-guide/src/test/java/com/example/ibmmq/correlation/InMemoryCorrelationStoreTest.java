@@ -42,7 +42,9 @@ class InMemoryCorrelationStoreTest {
         // exercitados nesse caminho, entao mockamos o CF e usamos props default.
         ConnectionFactory cf = mock(ConnectionFactory.class);
         MqProperties props = new MqProperties();
-        reportConsumer = new ReportMessageConsumer(cf, props, store, new ReportFeedbackRouter());
+        // auditRepository=null: este teste unitario nao tem datasource, entao a persistencia de auditoria
+        // (delivery_report) fica inerte — o consumer skipa o persist quando o repo e nulo.
+        reportConsumer = new ReportMessageConsumer(cf, props, store, new ReportFeedbackRouter(), null);
     }
 
     @Test

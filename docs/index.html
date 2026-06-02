@@ -219,6 +219,12 @@ pre.mermaid{
 pre.mermaid[data-processed]{visibility:visible;}
 pre.mermaid svg{max-width:100%; height:auto;}
 
+/* ---- references section (issue #14: language-NEUTRAL, generated from docs/references.md) ---- */
+/* Lives inside <main> AFTER both lang-panes; it is NOT a .lang-pane, so it always shows in
+   either language. A top divider sets it apart as the shared bibliography below the guide. */
+.references{border-top:2px solid var(--border); margin-top:1em;}
+.references .main-inner{padding-top:24px;}
+
 /* ---- language toggle + bilingual panes ---- */
 /* Both languages are embedded; only the active language's panes show. The active language
    is set on <html data-lang="..."> early (no FOUC) and each inactive <section.lang-pane> /
@@ -1222,6 +1228,8 @@ public JmsPoolConnectionFactory connectionFactory(MqProperties props) throws JMS
     JmsPoolConnectionFactory pool = new JmsPoolConnectionFactory();
     pool.setConnectionFactory(mqCf);     // aceita a interface javax.jms.ConnectionFactory
     pool.setMaxConnections(8);           // limita conexões físicas; sessions são multiplexadas
+    // maxSessionsPerConnection fica no default do pooled-jms (500) aqui; veja o deep dive
+    // abaixo para quando e como ajustá-lo (mantenha &lt;= o SHARECNV do canal).
     return pool;
 }
 </code></pre></div>
@@ -1230,6 +1238,151 @@ o número delas (<code>maxConnections</code>). <strong>Impacto:</strong> sob alt
 TCP nova ao QMgr. <strong>Sintoma observável:</strong> <em>latency</em> alta por causa do handshake repetido, esgotamento de
 sockets/threads, e o QMgr atingindo <code>MAXCHANNELS</code>/<code>MAXINST</code> (recusando conexões). Em pico, o serviço "trava" sem erro
 óbvio.</p></div></div>
+<h4 id="o-que-cada-parâmetro-controla--maxconnections-vs-maxsessionsperconnection">O que cada parâmetro controla — <code>maxConnections</code> vs <code>maxSessionsPerConnection</code></h4>
+<p>Esses dois parâmetros limitam <strong>recursos diferentes</strong> e são rotineiramente confundidos. <code>maxConnections</code> limita <strong>conexões físicas</strong> (sockets TCP ao QMgr, cada um pagando um handshake TCP + TLS + MQ e um slot no canal SVRCONN). <code>maxSessionsPerConnection</code> limita <strong>sessions</strong> — as unidades de trabalho lógicas e baratas, multiplexadas sobre <em>cada</em> conexão física como shared conversations. Os valores abaixo são os defaults autênticos do <code>pooled-jms</code> 2.0.9 (validados em <code>research-output/pooled-jms-factory-tuning.md</code>).</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Parâmetro</th>
+<th>Limita</th>
+<th>Default (2.0.9)</th>
+<th>Limite do mundo real</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>maxConnections</code></td>
+<td>Conexões TCP físicas seguradas pelo pool</td>
+<td><strong>1</strong></td>
+<td><code>maxConnections × réplicas</code> deve ficar abaixo do <code>MAXINST</code> do canal</td>
+</tr>
+<tr>
+<td><code>maxSessionsPerConnection</code></td>
+<td>Sessions ativas emprestadas por <strong>cada</strong> conexão</td>
+<td><strong>500</strong></td>
+<td>Mantenha em/abaixo do <code>SHARECNV</code> do canal</td>
+</tr>
+<tr>
+<td><code>blockIfSessionPoolIsFull</code></td>
+<td>O que acontece quando as sessions se esgotam</td>
+<td><strong>true</strong> (bloqueia, não lança)</td>
+<td>Um chamador faminto espera; não falha rápido</td>
+</tr>
+<tr>
+<td><code>blockIfSessionPoolIsFullTimeout</code></td>
+<td>Por quanto tempo bloquear</td>
+<td><strong>-1</strong> (para sempre)</td>
+<td>A inanição aparece como <em>travamento</em>, não erro</td>
+</tr>
+</tbody>
+</table></div>
+<p>O teto efetivo das sessions concorrentes que um único pod consegue entregar é o <strong>produto</strong> <code>maxConnections × maxSessionsPerConnection</code>. Quando uma thread pede uma session além desse teto, o comportamento default é <strong>bloquear indefinidamente</strong> (<code>blockIfSessionPoolIsFull=true</code>, timeout <code>-1</code>) — não lançar. É por isso que um pool sub-dimensionado sob carga parece um serviço congelado sem stack trace.</p>
+<div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Atenção — um pool sub-dimensionado falha <em>em silêncio</em>.</strong> Com os defaults, esgotar o teto <code>maxConnections × maxSessionsPerConnection</code> faz <code>createContext</code>/<code>createSession</code> <strong>bloquear para sempre</strong>, não lançar. <strong>Sintoma:</strong> threads de request empilham esperando, o throughput estagna, e <em>não</em> há exceção para grepar. Dimensione o produto para sua concorrência real, ou defina <code>blockIfSessionPoolIsFullTimeout</code> para que a inanição apareça como um timeout sobre o qual você consegue alertar.</p></div></div>
+<h4 id="dimensionando-o-pool-do-producer-sob-10k-rpm">Dimensionando o pool do producer sob ~10k rpm</h4>
+<p>Sob a topologia vigente (Kubernetes, competing consumers, ~167 msg/s), o pool vive <strong>por pod</strong>, então o QMgr vê <code>réplicas × maxConnections</code> conexões físicas no total. Esse total é limitado pelo <code>MAXINST</code> do canal SVRCONN (e <code>MAXINSTC</code> por endereço); ultrapasse-o e o QMgr <strong>recusa</strong> novas conexões com <code>2025 MQRC_MAX_CONNS_LIMIT_REACHED</code> / <code>2537 MQRC_CHANNEL_NOT_AVAILABLE</code>. Logo <code>maxConnections</code> nunca é uma decisão local do pod — um valor inofensivo em uma réplica vira uma indisponibilidade por esgotamento de canal em cinquenta. No eixo das sessions, mantenha <code>maxSessionsPerConnection</code> em ou abaixo do <code>SHARECNV</code> negociado do canal (10 no <code>DEV.APP.SVRCONN</code> de dev); sessions além disso não conseguem compartilhar um único socket, então o cliente abre sockets extras e a economia de sockets pela qual o pool existe se erode.</p>
+<div class="callout callout-nota" role="note"><span class="callout-icon" aria-hidden="true">ℹ️</span><div class="callout-body"><p><strong>Nota — dois limites, dois escopos.</strong> <code>maxConnections</code> é limitado <em>no lado do cluster</em> por <code>réplicas × maxConnections ≤ MAXINST</code>; <code>maxSessionsPerConnection</code> é limitado <em>no lado do canal</em> por <code>≤ SHARECNV</code>. Dimensione cada um contra o seu próprio teto — eles não se compensam mutuamente.</p></div></div>
+<h4 id="maxconnections-cenários-bom-vs-ruim"><code>maxConnections</code>: cenários bom vs. ruim</h4>
+<pre class="mermaid">flowchart TB
+  subgraph GOOD[&quot;✅ Bem dimensionado&quot;]
+    direction LR
+    GP[&quot;N pods&lt;br/&gt;maxConnections=2&quot;] --&gt; GS[&quot;réplicas × 2 ≤ MAXINST&quot;] --&gt; GQ[&quot;QMgr aceita tudo&quot;]
+  end
+  subgraph BAD[&quot;❌ Super dimensionado&quot;]
+    direction LR
+    BP[&quot;N pods&lt;br/&gt;maxConnections=8&quot;] --&gt; BS[&quot;réplicas × 8 &gt; MAXINST&quot;] --&gt; BQ[&quot;QMgr recusa&lt;br/&gt;2025 / 2537&quot;]
+  end
+  classDef good fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+  classDef warn fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+  classDef bad fill:#e6c9c9,stroke:#a85555,color:#1f2430;
+  classDef info fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+  class GP,GS info;
+  class GQ good;
+  class BP,BS warn;
+  class BQ bad;
+  style GOOD fill:#eef5ea,stroke:#5a8f63,color:#1f2430;
+  style BAD fill:#f3e7e7,stroke:#a85555,color:#1f2430;
+</pre>
+<h4 id="maxsessionsperconnection-cenários-bom-vs-ruim"><code>maxSessionsPerConnection</code>: cenários bom vs. ruim</h4>
+<pre class="mermaid">flowchart TB
+  subgraph GOOD2[&quot;✅ maxSessionsPerConnection ≤ SHARECNV&quot;]
+    direction LR
+    GA[&quot;8 sessions&quot;] --&gt;|multiplexado| GK[&quot;1 socket&lt;br/&gt;SHARECNV=10&quot;] --&gt; GR[&quot;reuso eficiente&quot;]
+  end
+  subgraph BAD2[&quot;❌ maxSessionsPerConnection ≫ SHARECNV&quot;]
+    direction LR
+    BA[&quot;50 sessions&quot;] --&gt;|excesso| BK[&quot;sockets extras&lt;br/&gt;/ serialização&quot;] --&gt; BR[&quot;economia de socket perdida&quot;]
+  end
+  classDef good fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+  classDef warn fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+  classDef bad fill:#e6c9c9,stroke:#a85555,color:#1f2430;
+  classDef info fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+  class GA,GK info;
+  class GR good;
+  class BA,BK warn;
+  class BR bad;
+  style GOOD2 fill:#eef5ea,stroke:#5a8f63,color:#1f2430;
+  style BAD2 fill:#f3e7e7,stroke:#a85555,color:#1f2430;
+</pre>
+<h4 id="um-pool-ou-dois-factories-de-producer-vs-consumer">Um pool ou dois? Factories de producer vs. consumer</h4>
+<p>O producer e o consumer têm <strong>ciclos de vida de conexão opostos</strong>, então um pool certo para um é errado para o outro. Um producer abre um <code>JMSContext</code> curto por <code>send</code> e o devolve — exatamente o churn que o pool otimiza, então <strong>poolar o producer é um ganho forte e incondicional</strong>. O consumer de produção idiomático é o oposto: é <strong>longevo</strong>, segurando uma conexão física pela vida do pod e iterando <code>receive()</code>/<code>commit()</code> sobre a mesma session. Um pool embrulhando uma única conexão longeva colapsa para tamanho efetivo 1 — não acrescenta nada — e, para um <code>MessageListener</code> assíncrono, o <code>pooled-jms</code> desaconselha ativamente o pooling (a conexão fica segurada fora do controle do pool).</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Papel</th>
+<th>Ciclo de vida da conexão</th>
+<th>O pool ajuda?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Producer</strong></td>
+<td>Contexto curto por <code>send</code></td>
+<td><strong>Sim, fortemente</strong> — reusa o socket entre sends</td>
+</tr>
+<tr>
+<td><strong>Consumer longevo</strong></td>
+<td>Uma conexão segurada pela vida do pod</td>
+<td><strong>Pouco ou nada</strong> — o pool colapsa para tamanho 1; um CF cru é mais limpo</td>
+</tr>
+<tr>
+<td><strong>Consumer com churn</strong> (didático)</td>
+<td>Contexto por poll, como um producer</td>
+<td><strong>Sim</strong> — mesmo argumento de reuso do producer</td>
+</tr>
+</tbody>
+</table></div>
+<p>É por isso que a topologia do mundo real de <strong>uma factory poolada para o publisher + um <code>MQConnectionFactory</code> cru para o consumer</strong> é sólida, não um cheiro — <em>desde que o consumer seja longevo</em>. Uma factory crua, não-poolada, é correta <strong>apenas</strong> para um consumer longevo; pareá-la com um consumer com churn faria um handshake de socket por mensagem. Os dois temas se encontram aqui: os parâmetros de <em>sizing</em> acima governam o pool do producer, enquanto a decisão de <em>topologia</em> governa se o consumer deve estar nesse pool. (Essa topologia role-based está registrada na ADR-0006; sua implementação é rastreada na issue #25.)</p>
+<div class="callout callout-boa-pratica" role="note"><span class="callout-icon" aria-hidden="true">✅</span><div class="callout-body"><p><strong>Boa prática — factories por papel.</strong> Um <code>JmsPoolConnectionFactory</code> para o producer (dimensionado pelas regras acima) e uma factory <strong>dedicada</strong> para o consumer longevo. <strong>Impacto:</strong> cada lado é ajustado ao seu próprio ciclo de vida; a conexão longeva do consumer nunca rouba um slot do pool do producer.</p></div></div><div class="callout callout-ma-pratica" role="note"><span class="callout-icon" aria-hidden="true">❌</span><div class="callout-body"><p><strong>Má prática — um pool único usado cegamente para tudo, <em>com</em> um listener assíncrono nele.</strong> O pool é ajustado para uma carga enquanto serve duas opostas, e um <code>MessageListener</code> prende uma conexão poolada fora do controle do pool. <strong>Sintoma:</strong> um producer que bloqueia intermitentemente no checkout porque um consumer segura conexões pooladas, além dos cuidados de listener que o <code>pooled-jms</code> alerta. (Um pool único compartilhado só é aceitável quando <strong>ambos</strong> os lados fazem churn de contextos curtos e <strong>nenhum</strong> listener assíncrono é usado.)</p></div></div>
+<h4 id="pool-commit-e-idempotência--três-camadas-diferentes">Pool, commit e idempotência — três camadas diferentes</h4>
+<p>Uma confusão frequente é achar que a connection factory afeta de alguma forma o commit ou a idempotência. Não afeta. Esses três vivem em camadas diferentes, e a escolha da factory toca apenas a primeira:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Camada</th>
+<th>O que é</th>
+<th>Quem é dono</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Ciclo de vida de conexão / session</strong></td>
+<td>Como sockets e sessions são criados, reusados, dimensionados</td>
+<td>A ConnectionFactory / pool — <strong>a única coisa que o pooling afeta</strong></td>
+</tr>
+<tr>
+<td><strong>Commit</strong></td>
+<td>Confirmar uma unidade de trabalho</td>
+<td>A <strong>session</strong> (<code>context.commit()</code>), nunca a conexão; o pool só faz rollback de uma session transacionada não-commitada na devolução</td>
+</tr>
+<tr>
+<td><strong>Idempotência</strong></td>
+<td>Não reprocessar uma entrega duplicada</td>
+<td>O <strong>Correlation store</strong> compartilhado/persistente, deduplicando por id — independente da factory</td>
+</tr>
+</tbody>
+</table></div>
+<p>Então trocar poolada ↔ crua, ou compartilhada ↔ por-papel, tem efeito <strong>zero</strong> sobre a semântica de commit ou a idempotência de entrega. A relação real é <em>inversa</em>: um pool — ou qualquer falha de conexão em volta do commit, como uma conexão invalidada no meio da transação — pode ser uma <strong>fonte</strong> de redelivery; o Correlation store é a <strong>defesa</strong> que torna esse redelivery inofensivo.</p>
+<div class="callout callout-nota" role="note"><span class="callout-icon" aria-hidden="true">ℹ️</span><div class="callout-body"><p><strong>Nota — o pool é uma <em>fonte</em> de duplicata, o store é a <em>defesa</em>.</strong> Não raciocine "o pool me dá exactly-once" — não dá. Exactly-once vem de um consumo transacionado mais um Correlation store idempotente; a factory só decide como conexões e sessions são criadas e reusadas.</p></div></div>
 <h3 id="42-producer--habilita-coacod-persiste-e-registra-a-correlação">4.2 Producer — habilita COA/COD, persiste e registra a correlação</h3>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/producer/BusinessMessageProducer.java
 public String send(String businessKey, String jsonPayload) {
@@ -1601,6 +1754,9 @@ dimensionado de consumidores.</p></div></div>
   leitura, mas mensagens pré-buscadas podem se perder se o cliente cair (não use para persistentes que exigem garantia).</li>
 <li><strong>SHARECNV</strong> — <code>WMQ_SHARE_CONV_ALLOWED</code> multiplexa conversas num socket. Reduz o número de sockets/canais sob alta
   concorrência; deve casar com o <code>SHARECNV</code> definido no canal.</li>
+<li><strong>Sizing do pool</strong> — dimensione o pool do producer para que <code>maxConnections × réplicas ≤ MAXINST</code> e
+  <code>maxSessionsPerConnection ≤ SHARECNV</code> (detalhe em §4.1). Um pool sub-dimensionado bloqueia <code>createContext</code> para sempre por
+  default; um super-dimensionado esgota o canal.</li>
 </ul>
 <h2 id="apêndices">Apêndices</h2>
 <h3 id="nota-de-fora-de-escopo-interop-não-jms">Nota de fora de escopo (interop não-JMS)</h3>
@@ -1804,8 +1960,18 @@ você adotar o módulo declarativo (que abstrai justamente o objeto que COA/COD 
 </tr>
 <tr>
 <td><strong>Conexão</strong></td>
-<td>Sempre <code>JmsPoolConnectionFactory</code> com <code>maxConnections</code> limitado.</td>
+<td>Factory poolada para o producer com <code>maxConnections</code> limitado.</td>
 <td>CF cru + conexão por mensagem → handshake repetido, esgotamento de sockets, QMgr em <code>MAXCHANNELS</code>, serviço trava sem erro óbvio.</td>
+</tr>
+<tr>
+<td><strong>Topologia de factory</strong></td>
+<td><strong>Por papel</strong>: factory poolada para o producer; factory dedicada para o consumer longevo (ADR-0006).</td>
+<td>Um pool único usado cegamente para os dois ciclos de vida, ou um CF não-poolado atrás de um consumer com churn (um socket por mensagem).</td>
+</tr>
+<tr>
+<td><strong>Sizing do pool</strong></td>
+<td><code>maxConnections × réplicas ≤ MAXINST</code>; <code>maxSessionsPerConnection ≤ SHARECNV</code>.</td>
+<td>8×8 "por garantia" sob um modelo single-thread-por-pod → teto de 64 sessions nunca usado; ou sub-dimensionado → <code>createContext</code> bloqueia para sempre (travamento silencioso).</td>
 </tr>
 <tr>
 <td><strong>Conexão (HA)</strong></td>
@@ -2747,6 +2913,8 @@ public JmsPoolConnectionFactory connectionFactory(MqProperties props) throws JMS
     JmsPoolConnectionFactory pool = new JmsPoolConnectionFactory();
     pool.setConnectionFactory(mqCf);     // accepts the javax.jms.ConnectionFactory interface
     pool.setMaxConnections(8);           // limits physical connections; sessions are multiplexed
+    // maxSessionsPerConnection is left at the pooled-jms default (500) here; see the deep dive
+    // below for when and how to tune it (keep it &lt;= the channel SHARECNV).
     return pool;
 }
 </code></pre></div>
@@ -2755,6 +2923,151 @@ their number (<code>maxConnections</code>). <strong>Impact:</strong> under high 
 TCP connection to the QMgr. <strong>Observable symptom:</strong> high <em>latency</em> due to the repeated handshake, socket/thread
 exhaustion, and the QMgr hitting <code>MAXCHANNELS</code>/<code>MAXINST</code> (refusing connections). At peak, the service "hangs" with no
 obvious error.</p></div></div>
+<h4 id="what-each-knob-controls--maxconnections-vs-maxsessionsperconnection">What each knob controls — <code>maxConnections</code> vs <code>maxSessionsPerConnection</code></h4>
+<p>These two knobs bound <strong>different resources</strong> and are routinely confused. <code>maxConnections</code> limits <strong>physical connections</strong> (TCP sockets to the QMgr, each paying a TCP + TLS + MQ handshake and one slot against the SVRCONN channel). <code>maxSessionsPerConnection</code> limits <strong>sessions</strong> — the cheap, logical units of work multiplexed onto <em>each</em> physical connection as shared conversations. The values below are the authentic <code>pooled-jms</code> 2.0.9 defaults (validated in <code>research-output/pooled-jms-factory-tuning.md</code>).</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Knob</th>
+<th>Bounds</th>
+<th>Default (2.0.9)</th>
+<th>Real-world bound</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>maxConnections</code></td>
+<td>Physical TCP connections held by the pool</td>
+<td><strong>1</strong></td>
+<td><code>maxConnections × replicas</code> must stay under the channel's <code>MAXINST</code></td>
+</tr>
+<tr>
+<td><code>maxSessionsPerConnection</code></td>
+<td>Active sessions lent by <strong>each</strong> connection</td>
+<td><strong>500</strong></td>
+<td>Keep at/below the channel's <code>SHARECNV</code></td>
+</tr>
+<tr>
+<td><code>blockIfSessionPoolIsFull</code></td>
+<td>What happens when sessions are exhausted</td>
+<td><strong>true</strong> (block, not throw)</td>
+<td>A starved caller waits; it does not fail fast</td>
+</tr>
+<tr>
+<td><code>blockIfSessionPoolIsFullTimeout</code></td>
+<td>How long to block</td>
+<td><strong>-1</strong> (forever)</td>
+<td>Starvation presents as a <em>hang</em>, not an error</td>
+</tr>
+</tbody>
+</table></div>
+<p>The effective ceiling on the concurrent sessions a single pod can hand out is the <strong>product</strong> <code>maxConnections × maxSessionsPerConnection</code>. When a thread requests a session beyond that ceiling, the default behaviour is to <strong>block indefinitely</strong> (<code>blockIfSessionPoolIsFull=true</code>, timeout <code>-1</code>) — not to throw. That is why an under-sized pool under load looks like a frozen service with no stack trace.</p>
+<div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Attention — an under-sized pool fails <em>silently</em>.</strong> With the defaults, exhausting the <code>maxConnections × maxSessionsPerConnection</code> ceiling makes <code>createContext</code>/<code>createSession</code> <strong>block forever</strong>, not raise. <strong>Symptom:</strong> request threads pile up waiting, throughput flatlines, and there is <em>no</em> exception to grep for. Either size the product to your real concurrency, or set <code>blockIfSessionPoolIsFullTimeout</code> so starvation surfaces as a timeout you can alert on.</p></div></div>
+<h4 id="sizing-the-producer-pool-under-10k-rpm">Sizing the producer pool under ~10k rpm</h4>
+<p>Under the standing topology (Kubernetes, competing consumers, ~167 msg/s), the pool lives <strong>per pod</strong>, so the QMgr sees <code>replicas × maxConnections</code> physical connections in total. That total is capped by the SVRCONN channel's <code>MAXINST</code> (and per-address <code>MAXINSTC</code>); exceed it and the QMgr <strong>refuses</strong> new connections with <code>2025 MQRC_MAX_CONNS_LIMIT_REACHED</code> / <code>2537 MQRC_CHANNEL_NOT_AVAILABLE</code>. So <code>maxConnections</code> is never a pod-local decision — a value that is harmless at one replica becomes a channel-exhaustion outage at fifty. On the session axis, keep <code>maxSessionsPerConnection</code> at or below the channel's negotiated <code>SHARECNV</code> (10 on the dev <code>DEV.APP.SVRCONN</code>); sessions beyond that cannot all share one socket, so the client opens extra sockets and the socket-economy the pool exists for erodes.</p>
+<div class="callout callout-nota" role="note"><span class="callout-icon" aria-hidden="true">ℹ️</span><div class="callout-body"><p><strong>Note — two bounds, two scopes.</strong> <code>maxConnections</code> is bounded <em>cluster-side</em> by <code>replicas × maxConnections ≤ MAXINST</code>; <code>maxSessionsPerConnection</code> is bounded <em>channel-side</em> by <code>≤ SHARECNV</code>. Size each against its own ceiling — they do not trade off against each other.</p></div></div>
+<h4 id="maxconnections-good-vs-bad-scenarios"><code>maxConnections</code>: good vs. bad scenarios</h4>
+<pre class="mermaid">flowchart TB
+  subgraph GOOD[&quot;✅ Right-sized&quot;]
+    direction LR
+    GP[&quot;N pods&lt;br/&gt;maxConnections=2&quot;] --&gt; GS[&quot;replicas × 2 ≤ MAXINST&quot;] --&gt; GQ[&quot;QMgr accepts all&quot;]
+  end
+  subgraph BAD[&quot;❌ Over-sized&quot;]
+    direction LR
+    BP[&quot;N pods&lt;br/&gt;maxConnections=8&quot;] --&gt; BS[&quot;replicas × 8 &gt; MAXINST&quot;] --&gt; BQ[&quot;QMgr refuses&lt;br/&gt;2025 / 2537&quot;]
+  end
+  classDef good fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+  classDef warn fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+  classDef bad fill:#e6c9c9,stroke:#a85555,color:#1f2430;
+  classDef info fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+  class GP,GS info;
+  class GQ good;
+  class BP,BS warn;
+  class BQ bad;
+  style GOOD fill:#eef5ea,stroke:#5a8f63,color:#1f2430;
+  style BAD fill:#f3e7e7,stroke:#a85555,color:#1f2430;
+</pre>
+<h4 id="maxsessionsperconnection-good-vs-bad-scenarios"><code>maxSessionsPerConnection</code>: good vs. bad scenarios</h4>
+<pre class="mermaid">flowchart TB
+  subgraph GOOD2[&quot;✅ maxSessionsPerConnection ≤ SHARECNV&quot;]
+    direction LR
+    GA[&quot;8 sessions&quot;] --&gt;|multiplexed| GK[&quot;1 socket&lt;br/&gt;SHARECNV=10&quot;] --&gt; GR[&quot;efficient reuse&quot;]
+  end
+  subgraph BAD2[&quot;❌ maxSessionsPerConnection ≫ SHARECNV&quot;]
+    direction LR
+    BA[&quot;50 sessions&quot;] --&gt;|overflow| BK[&quot;extra sockets&lt;br/&gt;/ serialization&quot;] --&gt; BR[&quot;socket economy lost&quot;]
+  end
+  classDef good fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+  classDef warn fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+  classDef bad fill:#e6c9c9,stroke:#a85555,color:#1f2430;
+  classDef info fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+  class GA,GK info;
+  class GR good;
+  class BA,BK warn;
+  class BR bad;
+  style GOOD2 fill:#eef5ea,stroke:#5a8f63,color:#1f2430;
+  style BAD2 fill:#f3e7e7,stroke:#a85555,color:#1f2430;
+</pre>
+<h4 id="one-pool-or-two-producer-vs-consumer-factories">One pool or two? Producer vs. consumer factories</h4>
+<p>The producer and the consumer have <strong>opposite connection lifecycles</strong>, so a pool that is right for one is wrong for the other. A producer opens a short-lived <code>JMSContext</code> per <code>send</code> and returns it — exactly the churn the pool optimises, so <strong>pooling the producer is a strong, unconditional win</strong>. The idiomatic production consumer is the opposite: it is <strong>long-lived</strong>, holding one physical connection for the pod's life and looping <code>receive()</code>/<code>commit()</code> on the same session. A pool wrapping a single long-held connection collapses to effective size 1 — it adds nothing — and for an async <code>MessageListener</code>, <code>pooled-jms</code> actively discourages pooling (the connection is held outside the pool's control).</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Role</th>
+<th>Connection lifecycle</th>
+<th>Does the pool help?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Producer</strong></td>
+<td>Short-lived context per <code>send</code></td>
+<td><strong>Yes, strongly</strong> — reuses the socket across sends</td>
+</tr>
+<tr>
+<td><strong>Long-lived consumer</strong></td>
+<td>One connection held for the pod's life</td>
+<td><strong>Little to none</strong> — pool collapses to size 1; a raw CF is cleaner</td>
+</tr>
+<tr>
+<td><strong>Churning consumer</strong> (didactic)</td>
+<td>Context per poll, like a producer</td>
+<td><strong>Yes</strong> — same reuse argument as the producer</td>
+</tr>
+</tbody>
+</table></div>
+<p>This is why the real-world topology of <strong>a pooled factory for the publisher + a raw <code>MQConnectionFactory</code> for the consumer</strong> is sound, not a smell — <em>provided the consumer is long-lived</em>. A raw, non-pooled factory is correct <strong>only</strong> for a long-lived consumer; pairing it with a churning consumer would handshake a socket per message. The two themes meet here: the <em>sizing</em> knobs above govern the producer's pool, while the <em>topology</em> decision governs whether the consumer should be on that pool at all. (This role-based topology is recorded in ADR-0006; its implementation is tracked in issue #25.)</p>
+<div class="callout callout-boa-pratica" role="note"><span class="callout-icon" aria-hidden="true">✅</span><div class="callout-body"><p><strong>Good practice — role-based factories.</strong> A <code>JmsPoolConnectionFactory</code> for the producer (sized per the rules above) and a <strong>dedicated</strong> factory for the long-lived consumer. <strong>Impact:</strong> each side is tuned to its own lifecycle; the consumer's long-held connection never steals a slot from the producer's pool.</p></div></div><div class="callout callout-ma-pratica" role="note"><span class="callout-icon" aria-hidden="true">❌</span><div class="callout-body"><p><strong>Bad practice — one shared pool used blindly for everything, <em>with</em> an async listener on it.</strong> The pool is tuned for one workload while serving two opposites, and a <code>MessageListener</code> pins a pooled connection outside the pool's control. <strong>Symptom:</strong> a producer that intermittently blocks on checkout because a consumer holds pooled connections, plus the listener caveats <code>pooled-jms</code> warns about. (A single shared pool is acceptable only when <strong>both</strong> sides churn short-lived contexts and <strong>no</strong> async listener is used.)</p></div></div>
+<h4 id="pool-commit-and-idempotency--three-different-layers">Pool, commit, and idempotency — three different layers</h4>
+<p>A frequent conflation is that the connection factory somehow affects commit or idempotency. It does not. These live in three different layers, and the factory choice touches only the first:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>What it is</th>
+<th>What owns it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Connection / session lifecycle</strong></td>
+<td>How sockets and sessions are created, reused, sized</td>
+<td>The ConnectionFactory / pool — <strong>the only thing pooling affects</strong></td>
+</tr>
+<tr>
+<td><strong>Commit</strong></td>
+<td>Confirming a unit of work</td>
+<td>The <strong>session</strong> (<code>context.commit()</code>), never the connection; the pool only rolls back an uncommitted transacted session on return</td>
+</tr>
+<tr>
+<td><strong>Idempotency</strong></td>
+<td>Not reprocessing a duplicate delivery</td>
+<td>The shared/persistent <strong>Correlation store</strong>, deduping by id — independent of the factory</td>
+</tr>
+</tbody>
+</table></div>
+<p>So swapping pooled ↔ raw, or shared ↔ per-role factories, has <strong>zero</strong> effect on commit semantics or delivery idempotency. The real relationship is <em>inverse</em>: a pool — or any connection failure around the commit, such as a connection invalidated mid-transaction — can be a <strong>source</strong> of redelivery; the Correlation store is the <strong>defence</strong> that makes that redelivery harmless.</p>
+<div class="callout callout-nota" role="note"><span class="callout-icon" aria-hidden="true">ℹ️</span><div class="callout-body"><p><strong>Note — the pool is a duplicate <em>source</em>, the store is the <em>defence</em>.</strong> Do not reason "the pool gives me exactly-once" — it does not. Exactly-once comes from a transacted consume plus an idempotent Correlation store; the factory only decides how connections and sessions are created and reused.</p></div></div>
 <h3 id="42-producer--enables-coacod-persists-and-records-the-correlation">4.2 Producer — enables COA/COD, persists, and records the correlation</h3>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/producer/BusinessMessageProducer.java
 public String send(String businessKey, String jsonPayload) {
@@ -2941,7 +3254,8 @@ DeliveryEvent event = reportConsumer.handleReport(coaReport);
 assertEquals(ReportType.COA, event.reportType());
 </code></pre></div>
 <p><strong>Integration (with a real broker):</strong> <code>CoaCodEndToEndIT</code> brings up an IBM MQ via Testcontainers, produces with COA+COD,
-consumes+commits, and requires that <strong>both</strong> reports arrive, each with <code>CorrelationId == MessageId</code> of the original.</p>
+consumes+commits, and requires that <strong>both</strong> reports arrive, each with <code>CorrelationId == MessageId</code> of the original.
+The full per-scenario catalogue (rich entry for IT-01, compact entries for UT-01 and UT-02) is in <a href="testing-scenarios.md"><code>docs/testing-scenarios.md</code></a>.</p>
 <div class="callout callout-nota" role="note"><span class="callout-icon" aria-hidden="true">ℹ️</span><div class="callout-body"><p><strong>Note — Testcontainers via the official IBM module (there is no <code>org.testcontainers</code> module for MQ).</strong> The real setup uses <strong><code>org.testcontainers:testcontainers:2.0.5</code></strong> (core) + <strong><code>com.ibm.mq:mq-java-testcontainer:2.0.3</code></strong> (class
 <code>com.ibm.mq.testcontainers.MQContainer</code>), with the image <code>icr.io/ibm-messaging/mq:9.4.5.0-r2</code>. Stand-in brokers like
 ActiveMQ Artemis do <strong>not</strong> implement COA/COD — only a real MQ validates this flow.</p></div></div>
@@ -3126,6 +3440,8 @@ sized pool of consumers.</p></div></div>
   gain, but pre-fetched messages may be lost if the client drops (do not use for persistent messages that require a guarantee).</li>
 <li><strong>SHARECNV</strong> — <code>WMQ_SHARE_CONV_ALLOWED</code> multiplexes conversations over one socket. Reduces the number of sockets/channels under high
   concurrency; it must match the <code>SHARECNV</code> defined on the channel.</li>
+<li><strong>Pool sizing</strong> — size the producer pool so <code>maxConnections × replicas ≤ MAXINST</code> and <code>maxSessionsPerConnection ≤ SHARECNV</code>
+  (deep dive in §4.1). An under-sized pool blocks <code>createContext</code> forever by default; an over-sized one exhausts the channel.</li>
 </ul>
 <h2 id="appendices">Appendices</h2>
 <h3 id="out-of-scope-note-non-jms-interop">Out-of-scope note (non-JMS interop)</h3>
@@ -3329,8 +3645,18 @@ you adopt the declarative module (which abstracts away precisely the object that
 </tr>
 <tr>
 <td><strong>Connection</strong></td>
-<td>Always <code>JmsPoolConnectionFactory</code> with a bounded <code>maxConnections</code>.</td>
+<td>Pooled factory for the producer with a bounded <code>maxConnections</code>.</td>
 <td>Raw CF + connection per message → repeated handshake, socket exhaustion, QMgr at <code>MAXCHANNELS</code>, the service hangs with no obvious error.</td>
+</tr>
+<tr>
+<td><strong>Factory topology</strong></td>
+<td><strong>Role-based</strong>: pooled factory for the producer; dedicated factory for the long-lived consumer (ADR-0006).</td>
+<td>One shared pool used blindly for both lifecycles, or a non-pooled CF behind a churning consumer (a socket per message).</td>
+</tr>
+<tr>
+<td><strong>Pool sizing</strong></td>
+<td><code>maxConnections × replicas ≤ MAXINST</code>; <code>maxSessionsPerConnection ≤ SHARECNV</code>.</td>
+<td>8×8 "just in case" under a single-thread-per-pod model → 64-session ceiling never used; or under-sized → <code>createContext</code> blocks forever (silent hang).</td>
 </tr>
 <tr>
 <td><strong>Connection (HA)</strong></td>
@@ -3409,6 +3735,253 @@ you adopt the declarative module (which abstracts away precisely the object that
 <p>End of the guide. The complete reference code is in <code>ibmmq-jms-guide/</code> (compilable with <code>mvn test</code>; end-to-end
 COA/COD integration test with <code>mvn verify</code>).</p>
 </blockquote>
+        </div>
+      </section>
+      <section class="references" aria-label="References">
+        <div class="main-inner">
+<h1>References — consolidated bibliography</h1>
+<p>Canonical catalogue of <strong>every source consulted</strong> to build and evolve this repository. Each
+entry names the source, the concept / term / discovery it grounded, and its link. This file is
+the single source of truth: the standalone HTML doc's References section is <strong>generated</strong> from
+it by <code>docs/build-html.py</code> (no divergent copies), and the root <code>README.md</code> summarises and links
+it.</p>
+<p>Sources were harvested from the bytecode-verified research in
+<a href="../research-output/phase-a-fact-sheet.md"><code>research-output/phase-a-fact-sheet.md</code></a> and
+<a href="../research-output/coa-cod-validation-findings.md"><code>research-output/coa-cod-validation-findings.md</code></a>,
+then deduplicated: recurring links (the <code>com.ibm.mq.allclient</code> jar, the <code>setgetweb</code> report
+pages) are listed once with the union of the concepts they grounded.</p>
+<h2>Primary artifacts (bytecode / POM, verified)</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Grounds (concept / term / discovery)</th>
+<th>Link</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>com.ibm.mq.allclient</code> 9.4.5.0 jar (bytecode, sha1 <code>26c8f5cd163847990d270acf2f4f0a7f773c3bbd</code>)</td>
+<td>Authoritative values for the report property fields (<code>JMS_IBM_REPORT_*</code> → mixed-case String values), the <code>MQRO_*</code> / <code>MQFB_*</code> integer constants (declared in <code>com.ibm.mq.constants.CMQC</code>, <strong>not</strong> <code>WMQConstants</code>), the connection properties (<code>WMQ_*</code> → <code>XMSC_*</code>), and the auth/TLS constants. Refuted <code>WMQ_USER_AUTHENTICATION_MQCSP</code> (correct field is <code>USER_AUTHENTICATION_MQCSP</code>) and <code>WMQ_SSL_CERT_STORES</code> (only <code>_COL</code> / <code>_STR</code> exist); confirmed the <code>WMQ_APPLICATIONNAME</code> vs <code>XMSC_WMQ_APPNAME</code> casing divergence.</td>
+<td><a href="https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar">https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar</a></td>
+</tr>
+<tr>
+<td><code>com.ibm.mq.allclient</code> Maven metadata</td>
+<td>Artifact existence / version line: 9.4.5.0 jar size (8,477,900 bytes), publish date (2026-01-30), <code>&lt;latest&gt;</code>/<code>&lt;release&gt;</code> = 9.4.5.1; <code>javax.jms</code> / JMS 2.0 client (POM depends on <code>javax.jms:javax.jms-api:2.0.1</code>).</td>
+<td><a href="https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/maven-metadata.xml">https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/maven-metadata.xml</a></td>
+</tr>
+<tr>
+<td><code>com.ibm.mq.jakarta.client</code> 9.4.5.0 jar</td>
+<td>The <code>jakarta.jms</code> (Jakarta Messaging 3.0) sibling client — bytecode references only <code>jakarta/jms/</code>; line begins at 9.3.0.0. Grounds the javax-vs-jakarta client split decision.</td>
+<td><a href="https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.jakarta.client/9.4.5.0/com.ibm.mq.jakarta.client-9.4.5.0.jar">https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.jakarta.client/9.4.5.0/com.ibm.mq.jakarta.client-9.4.5.0.jar</a></td>
+</tr>
+<tr>
+<td><code>io.micronaut.platform:micronaut-platform</code> 4.9.4 POM</td>
+<td><strong>Build-breaking discovery:</strong> the Micronaut platform BOM for the 4.9.x line stops at <strong>4.9.4</strong> (then jumps to 4.10.x) — a <code>pom.xml</code> pinning 4.9.9 does <strong>not</strong> resolve. Only <code>io.micronaut:micronaut-core</code> 4.9.9 exists (divergent versioning).</td>
+<td><a href="https://repo1.maven.org/maven2/io/micronaut/platform/micronaut-platform/4.9.4/micronaut-platform-4.9.4.pom">https://repo1.maven.org/maven2/io/micronaut/platform/micronaut-platform/4.9.4/micronaut-platform-4.9.4.pom</a></td>
+</tr>
+<tr>
+<td><code>io.micronaut.maven:micronaut-maven-plugin</code> Maven metadata</td>
+<td>Plugin coordinate (<code>groupId</code> is <code>io.micronaut.maven</code>, not <code>io.micronaut</code>); latest 5.0.0, but the 4.9.x project uses the 4.x line (latest <strong>4.11.6</strong>). 5.0.0 aligns with Micronaut 5 / Java 25.</td>
+<td><a href="https://repo1.maven.org/maven2/io/micronaut/maven/micronaut-maven-plugin/maven-metadata.xml">https://repo1.maven.org/maven2/io/micronaut/maven/micronaut-maven-plugin/maven-metadata.xml</a></td>
+</tr>
+<tr>
+<td><code>io.micronaut.jms:micronaut-jms-core</code> 4.3.0 jar</td>
+<td>The Micronaut JMS module is <strong>jakarta-only</strong> (bytecode 4.3.0 references only <code>jakarta/jms</code>), so it is correctly excluded from this javax project; the real coordinate is <code>micronaut-jms-core</code> (+ <code>micronaut-jms-bom</code>), there is no bare <code>micronaut-jms</code> artifact.</td>
+<td><a href="https://repo1.maven.org/maven2/io/micronaut/jms/micronaut-jms-core/4.3.0/micronaut-jms-core-4.3.0.jar">https://repo1.maven.org/maven2/io/micronaut/jms/micronaut-jms-core/4.3.0/micronaut-jms-core-4.3.0.jar</a></td>
+</tr>
+<tr>
+<td><code>org.messaginghub:pooled-jms</code> <code>JmsPoolConnectionFactory</code> source (1.2.8)</td>
+<td>Framing correction: <code>pooled-jms</code> 1.x <strong>and</strong> 2.x are both <code>javax.jms</code> (latest javax is <strong>2.0.9</strong>, the recommended line for a new javax project); 3.x is <code>jakarta.jms</code>. FQ class <code>org.messaginghub.pooled.jms.JmsPoolConnectionFactory</code>.</td>
+<td><a href="https://raw.githubusercontent.com/messaginghub/pooled-jms/1.2.8/pooled-jms/src/main/java/org/messaginghub/pooled/jms/JmsPoolConnectionFactory.java">https://raw.githubusercontent.com/messaginghub/pooled-jms/1.2.8/pooled-jms/src/main/java/org/messaginghub/pooled/jms/JmsPoolConnectionFactory.java</a></td>
+</tr>
+<tr>
+<td><code>org.messaginghub:pooled-jms</code> <strong>2.0.9 sources jar</strong> (<code>JmsPoolConnectionFactory.java</code>, <code>pool/PooledConnection.java</code>)</td>
+<td>Authentic tuning defaults grounding the pooling deep dive: <code>DEFAULT_MAX_CONNECTIONS = 1</code>, <code>DEFAULT_MAX_SESSIONS_PER_CONNECTION = 500</code>, <code>blockIfSessionPoolIsFull = true</code> + timeout <code>-1</code> (block forever on exhaustion), <code>connectionIdleTimeout = 30 000 ms</code>, eviction off (<code>-1</code>); the two-ceiling model (<code>maxConnections × maxSessionsPerConnection</code>) and <code>setBlockWhenExhausted</code> wiring. Persisted in <code>research-output/pooled-jms-factory-tuning.md</code>.</td>
+<td>local <code>~/.m2/repository/org/messaginghub/pooled-jms/2.0.9/pooled-jms-2.0.9-sources.jar</code> (Maven Central <code>org.messaginghub:pooled-jms:2.0.9</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<h2>IBM MQ container &amp; registry</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Grounds (concept / term / discovery)</th>
+<th>Link</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mq-container</code> README</td>
+<td>The <code>icr.io/ibm-messaging/mq</code> image is <strong>MQ Advanced for Developers</strong>; requires <code>LICENSE=accept</code> (or <code>view</code>) or the container exits.</td>
+<td><a href="https://raw.githubusercontent.com/ibm-messaging/mq-container/master/README.md">https://raw.githubusercontent.com/ibm-messaging/mq-container/master/README.md</a></td>
+</tr>
+<tr>
+<td><code>mq-container</code> developer-config docs</td>
+<td>Dev-default objects (<code>DEV.QUEUE.1/2/3</code>, <code>DEV.DEAD.LETTER.QUEUE</code>, <code>DEV.BASE.TOPIC</code>), channels (<code>DEV.ADMIN.SVRCONN</code> admin-only, <code>DEV.APP.SVRCONN</code> app-only), users (<code>admin</code>, <code>app</code> in group <code>mqclient</code>); <code>MQ_APP_PASSWORD</code> / <code>MQ_ADMIN_PASSWORD</code> deprecated from v9.4.0.0 → use the <code>mqAdminPassword</code> / <code>mqAppPassword</code> secrets (min 8 chars); <code>MQ_DEV=false</code> suppresses dev-object creation.</td>
+<td><a href="https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/developer-config.md">https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/developer-config.md</a></td>
+</tr>
+<tr>
+<td><code>mq-container</code> usage docs</td>
+<td>Base env vars (<code>LICENSE</code>, <code>MQ_QMGR_NAME</code>); MQSC auto-config via <code>*.mqsc</code> files in <code>/etc/mqm</code> (run <strong>once</strong> at QMgr creation); default listener port <strong>1414</strong> and web console on <strong>9443</strong> (<code>/ibmmq/console</code>).</td>
+<td><a href="https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/usage.md">https://raw.githubusercontent.com/ibm-messaging/mq-container/master/docs/usage.md</a></td>
+</tr>
+<tr>
+<td><code>icr.io</code> MQ image tag list</td>
+<td>Image tag format <code>9.4.&lt;fixpack&gt;-r&lt;N&gt;</code> (+ arch suffixes / multi-arch / <code>latest</code>); relevant tags <code>9.4.5.0-r1</code>, <code>9.4.5.0-r2</code>, <code>9.4.5.1-r1</code> — there is <strong>no</strong> bare <code>9.4.5.0</code> tag.</td>
+<td><a href="https://icr.io/v2/ibm-messaging/mq/tags/list">https://icr.io/v2/ibm-messaging/mq/tags/list</a></td>
+</tr>
+<tr>
+<td><code>com.ibm.mq:mq-java-testcontainer</code> Maven metadata</td>
+<td>The official IBM Testcontainers module (class <code>com.ibm.mq.testcontainers.MQContainer</code>); there is <strong>no</strong> module under <code>org.testcontainers</code> for MQ. Core Testcontainers latest = 2.0.5.</td>
+<td><a href="https://repo1.maven.org/maven2/com/ibm/mq/mq-java-testcontainer/maven-metadata.xml">https://repo1.maven.org/maven2/com/ibm/mq/mq-java-testcontainer/maven-metadata.xml</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2>COA / COD report &amp; feedback semantics</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Grounds (concept / term / discovery)</th>
+<th>Link</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IBM MQ report-options reference (<code>q097680</code>, setgetweb mirror)</td>
+<td>Report semantics: default id propagation <code>MQRO_COPY_MSG_ID_TO_CORREL_ID</code> (original MsgId → report CorrelId); COA timing (generated when the message is placed on the destination queue); COD timing (generated on destructive <code>MQGET</code>); syncpoint behaviour (COA recoverable only after producer commit, COD lost if the consumer backs out); and the <strong>refuted</strong> persistence claim — the report <strong>inherits</strong> the original's persistence ("Copied from the original message descriptor"), it is <em>not</em> non-persistent by default.</td>
+<td><a href="https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm">https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm</a></td>
+</tr>
+<tr>
+<td>IBM MQ feedback-codes reference (<code>q097510</code>, setgetweb mirror)</td>
+<td>Feedback ranges (<code>MQFB_SYSTEM_FIRST</code>=1 … <code>MQFB_APPL_LAST</code>=999999999) and the discovery that an exception report carries an <code>MQRC_*</code> reason code in its Feedback field — there is <strong>no</strong> <code>MQFB_EXCEPTION</code> constant.</td>
+<td><a href="https://setgetweb.com/p/MQ92/ref.dev/q097510_.htm">https://setgetweb.com/p/MQ92/ref.dev/q097510_.htm</a></td>
+</tr>
+<tr>
+<td>IBM MQ report-property mappings (<code>q032050</code>, setgetweb mirror)</td>
+<td>Cross-confirmation of the <code>JMS_IBM_Report_*</code> String property → <code>MQRO_*</code> option mappings.</td>
+<td><a href="https://www.setgetweb.com/p/MQ92/dev/q032050_.htm">https://www.setgetweb.com/p/MQ92/dev/q032050_.htm</a></td>
+</tr>
+<tr>
+<td>IBM Knowledge Center <code>csqzaq00122</code> (feedback codes)</td>
+<td>Cross-confirmation of the <code>MQFB_*</code> numeric values: <code>MQFB_EXPIRATION</code>=258, <code>MQFB_COA</code>=259, <code>MQFB_COD</code>=260, <code>MQFB_PAN</code>=275, <code>MQFB_NAN</code>=276 (so <code>MQFB_COA</code> is <strong>not</strong> to be confused with 271 = <code>MQFB_XMIT_Q_MSG_ERROR</code>).</td>
+<td><a href="https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=mqmd-feedback-mqlong">https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=mqmd-feedback-mqlong</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2>Connection, security &amp; TLS</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Grounds (concept / term / discovery)</th>
+<th>Link</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IBM MQ 9.4 Developing applications PDF (<code>mq94.develop.pdf</code>)</td>
+<td>Keystore/truststore wiring (JSSE default vs <code>setSSLSocketFactory()</code>; TLS active only when a CipherSuite is set; <code>WMQ_SSL_SOCKET_FACTORY</code> for JWT/HTTPS in 9.4.5); CipherSpec ↔ CipherSuite mappings (TLS 1.2 Table 41, TLS 1.3 same name in both JREs); and the discovery that <code>com.ibm.mq.cfg.useIBMCipherMappings</code> was <strong>removed</strong> in IBM MQ 9.4.0 (the <code>SSL_</code>/<code>TLS_</code> prefixes are not interchangeable from Java 11).</td>
+<td><a href="https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.develop.pdf">https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.develop.pdf</a></td>
+</tr>
+<tr>
+<td>IBM MQ 9.4 Reference / administration PDF (<code>mq94.refadmin.pdf</code>)</td>
+<td><code>CHCKCLNT</code> values (<code>NONE</code>/<code>OPTIONAL</code>/<code>REQUIRED</code>/<code>REQDADM</code>) and the <code>AUTHINFO(IDPWOS)</code> → <code>ALTER QMGR CONNAUTH</code> → <code>REFRESH SECURITY TYPE(CONNAUTH)</code> flow; the discovery that the canonical verb is <strong><code>SET CHLAUTH</code></strong> (there is no <code>DEFINE CHLAUTH</code>), with its <code>TYPE</code>/<code>ACTION</code>/<code>USERSRC</code>/<code>MCAUSER</code> keywords; <code>CHLAUTH(ENABLED\|DISABLED)</code> QMgr attribute.</td>
+<td><a href="https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.refadmin.pdf">https://public.dhe.ibm.com/software/integration/wmq/docs/V9.4/PDFs/mq94.refadmin.pdf</a></td>
+</tr>
+<tr>
+<td>IBM support: RC 2035 / CHLAUTH channel authentication</td>
+<td>The CHLAUTH block-by-default mechanism (<code>CHLAUTH(ENABLED)</code> + default <code>USERSRC(NOACCESS)</code> / <code>BLOCKUSER('*MQADMIN')</code>) and how to map a remote admin (<code>USERMAP</code>/<code>ADDRESSMAP</code> with <code>USERSRC(MAP) MCAUSER(...)</code>). Grounds the report-PUT <code>MQRC_NOT_AUTHORIZED (2035)</code> gotcha.</td>
+<td><a href="https://www.ibm.com/support/pages/mq-rc-2035-mqrcnotauthorized-or-amq4036-or-jmswmq2013-when-using-client-connection-mq-administrator-chlauth-channel-authentication-records">https://www.ibm.com/support/pages/mq-rc-2035-mqrcnotauthorized-or-amq4036-or-jmswmq2013-when-using-client-connection-mq-administrator-chlauth-channel-authentication-records</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2>MQSC syntax (object definition)</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Grounds (concept / term / discovery)</th>
+<th>Link</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IBM MQ 9.4 <code>DEFINE queues</code> reference</td>
+<td>Poison-message handling: <code>BOTHRESH(integer)</code> + <code>BOQNAME(queue-name)</code> are valid only on local/model queues; there is <strong>no</strong> "report queue" object type — reports flow via the ReplyToQ + report options.</td>
+<td><a href="https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-queues">https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-queues</a></td>
+</tr>
+<tr>
+<td>IBM MQ 9.4 <code>DEFINE CHANNEL</code> reference</td>
+<td><code>CHLTYPE(SVRCONN)</code> and the full set of channel types (<code>SDR</code>, <code>RCVR</code>, <code>SVR</code>, <code>RQSTR</code>, <code>CLNTCONN</code>, <code>CLUSSDR</code>, <code>CLUSRCVR</code>, <code>AMQP</code>, <code>MQTT</code>).</td>
+<td><a href="https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-channel-define-new-channel">https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-channel-define-new-channel</a></td>
+</tr>
+<tr>
+<td>IBM MQ 9.4 <code>DEFINE AUTHINFO</code> reference</td>
+<td><code>AUTHTYPE(IDPWOS)</code> and the 9.4 authinfo types (<code>CRLLDAP</code>, <code>OCSP</code>, <code>IDPWOS</code>, <code>IDPWLDAP</code>).</td>
+<td><a href="https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-authinfo-define-authentication-information-object">https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-define-authinfo-define-authentication-information-object</a></td>
+</tr>
+<tr>
+<td>IBM MQ 9.4 <code>ALTER QMGR</code> reference</td>
+<td><code>CONNAUTH(string)</code> + <code>DEADQ(string)</code> settings; after a CONNAUTH change run <code>REFRESH SECURITY TYPE(CONNAUTH)</code>; DEADQ must be a local queue.</td>
+<td><a href="https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-alter-qmgr-alter-queue-manager-settings">https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-alter-qmgr-alter-queue-manager-settings</a></td>
+</tr>
+<tr>
+<td>IBM MQ 9.4 <code>SET CHLAUTH</code> reference</td>
+<td>The <code>SET CHLAUTH</code> record types (<code>BLOCKUSER</code>, <code>BLOCKADDR</code>, <code>SSLPEERMAP</code>, <code>ADDRESSMAP</code>, <code>USERMAP</code>, <code>QMGRMAP</code>) and their pairing keywords.</td>
+<td><a href="https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-set-chlauth-create-modify-channel-authentication-record">https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=reference-set-chlauth-create-modify-channel-authentication-record</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2>JDK support &amp; runtime</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Grounds (concept / term / discovery)</th>
+<th>Link</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IBM MQ 9.4 — Java application dev via Maven</td>
+<td>Confirms <code>com.ibm.mq.allclient.jar</code> is the <code>javax.jms</code> / JMS 2.0 client and the Maven-repository consumption model.</td>
+<td><a href="https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=applications-java-application-development-using-maven-repository">https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=applications-java-application-development-using-maven-repository</a></td>
+</tr>
+<tr>
+<td>IBM MQ 9.4 — Developing JMS/Jakarta Messaging Java apps</td>
+<td>The dedicated <strong>Java 25</strong> operational guidance (refuting "Java 25 not listed for 9.4.5"): <code>TLS_RSA_*</code> CipherSpecs disabled from Java 25, native-access warnings for <code>com.ibm.mq.allclient.jar</code> → run with <code>--enable-native-access=ALL-UNNAMED</code>.</td>
+<td><a href="https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=applications-developing-jmsjakarta-messaging-java">https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=applications-developing-jmsjakarta-messaging-java</a></td>
+</tr>
+<tr>
+<td>IBM MQ 9.4 — Running under the Java Security Manager</td>
+<td>Refutes the "allclient breaks on JDK 24/25 via SecurityManager / JEP 486" claim — running under the Security Manager is <strong>optional</strong> (samples/scripts do not enable it).</td>
+<td><a href="https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=icmcjm-running-mq-classes-jms-applications-under-java-security-manager">https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=icmcjm-running-mq-classes-jms-applications-under-java-security-manager</a></td>
+</tr>
+<tr>
+<td>IBM MQ 9.4 — Prerequisites for MQ classes for Java</td>
+<td>Documents that the exhaustive certified-JDK matrix is deferred to the SPCR report (JS-rendered, not programmatically obtainable) — so "8/11/17/21 certified" is <strong>not</strong> asserted as hard fact.</td>
+<td><a href="https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=java-prerequisites-mq-classes">https://www.ibm.com/docs/en/ibm-mq/9.4.x?topic=java-prerequisites-mq-classes</a></td>
+</tr>
+<tr>
+<td>IBM support: JRE &amp; GSKit levels bundled with IBM MQ</td>
+<td>The bundled JRE of 9.4.5.0 = IBM Semeru 21.0.10; Semeru 21 packaged for Multiplatforms from 9.4.4 (z/OS since 9.3.0). Grounds the Java 21-support framing.</td>
+<td><a href="https://www.ibm.com/support/pages/levels-jre-and-gskit-bundled-ibm-mq">https://www.ibm.com/support/pages/levels-jre-and-gskit-bundled-ibm-mq</a></td>
+</tr>
+<tr>
+<td>IBM Community blog — MQ on z/OS with Java 21</td>
+<td>Source for the precise Java 21 timing wording (Semeru 21 on z/OS since 9.3.0; Multiplatforms from 9.4.4) — corrects the brief's "From IBM MQ 9.4.0" phrasing.</td>
+<td><a href="https://community.ibm.com/community/user/blogs/johnny-murphy/2024/12/11/mq-zos-j21">https://community.ibm.com/community/user/blogs/johnny-murphy/2024/12/11/mq-zos-j21</a></td>
+</tr>
+<tr>
+<td>Micronaut 4.0 announcement (Java 17 baseline)</td>
+<td>Micronaut 4.x baseline is Java 17, with Java 21 (LTS) fully supported on the 4.9.x line (selectable in Launch/CLI from 4.2.0).</td>
+<td><a href="https://micronaut.io/2023/02/16/micronaut-framework-4-0-with-java-17-baseline/">https://micronaut.io/2023/02/16/micronaut-framework-4-0-with-java-17-baseline/</a></td>
+</tr>
+</tbody>
+</table></div>
         </div>
       </section>
     </main>

@@ -29,9 +29,12 @@ ibmmq-jms-guide/                       runnable Micronaut + IBM MQ Maven project
 docs/
   guide-ibmmq-jms-micronaut.md          canonical technical guide (English, ~9.4k words)
   i18n/guia-ibmmq-jms-micronaut.md      pt-BR source feeding the standalone HTML
+  runbook.md                            operations runbook: bring-up, demo, validation, web console
   handoffs/                             session handoff notes
 research-output/                        bytecode-verified fact sheet + raw research
 research-prompt-ibmmq-jms-micronaut.md  the original brief
+ai/
+  skills/jms-mq-delivery-report-analyzer/  project-agnostic COA/COD review skill (matrix × dimensions)
 CLAUDE.md                               project guide: validated facts, env quirks, reference-doc rule
 ```
 
@@ -61,9 +64,24 @@ A producer sends a persistent `TextMessage` requesting **COA** (confirm on arriv
 - **Report persistence** is inherited from the original message — it is *not* non-persistent by default.
 - **Testcontainers + modern Docker:** use Testcontainers 2.x (older docker-java fails against Docker engine 29.x); pin `commons-codec:1.16.1` for the zerodep transport.
 
+## References
+
+Every source consulted to build and evolve this repository is catalogued in the canonical bibliography [`docs/references.md`](docs/references.md) — each entry names the source, the concept/term/discovery it grounded, and its link, grouped by topic (primary jar/POM artifacts, container & registry, COA/COD report semantics, connection & security, MQSC, and JDK support). It is the single source of truth: the standalone HTML doc's References section is **generated** from it by `docs/build-html.py`, so the two never diverge.
+
+Key primary sources: the bytecode-verified [`com.ibm.mq.allclient:9.4.5.0` jar](https://repo1.maven.org/maven2/com/ibm/mq/com.ibm.mq.allclient/9.4.5.0/com.ibm.mq.allclient-9.4.5.0.jar) (report/feedback constants), the [IBM MQ report-options reference](https://setgetweb.com/p/MQ92/ref.dev/q097680_.htm) (COA/COD semantics + persistence), and the [`micronaut-platform:4.9.4` POM](https://repo1.maven.org/maven2/io/micronaut/platform/micronaut-platform/4.9.4/micronaut-platform-4.9.4.pom) (the build-breaking 4.9.9 discovery).
+
+## AI assets
+
+[`ai/`](ai/README.md) holds reusable, project-agnostic AI assets. The first is the
+[`jms-mq-delivery-report-analyzer`](ai/skills/jms-mq-delivery-report-analyzer/SKILL.md)
+skill — it drives a rigorous LLM review of *any* IBM MQ + JMS 2.0 COA/COD application
+(four-cell reviewer matrix × nine check dimensions, a grill-me preamble, and the
+distributed ~10k-rpm lens), reporting each finding as WHERE / WHY / IMPACT / SOLUTIONS.
+It carries no repo-specific identifiers and drops cleanly into any messaging codebase.
+
 ## Documentation language
 
-The in-depth guide under `docs/` is written in **Brazilian Portuguese** by design. Code identifiers are English; code comments are pt-BR.
+Per **ADR-0002**, the in-depth guide is **canonical English** (`docs/guide-ibmmq-jms-micronaut.md`); the Brazilian-Portuguese mirror under `docs/i18n/` feeds the bilingual standalone HTML (`docs/index.html`), kept in sync by `build-html.py`'s parity gate. Per **ADR-0004**, in source code: identifiers are English; comments, JavaDoc, and log messages are **English going forward**, with pre-existing pt-BR grandfathered (a mixed-language transition) and JUnit `@DisplayName` kept **pt-BR** as a sanctioned exception.
 
 ## License
 
