@@ -114,12 +114,18 @@ clean: down ## Alias for `down` (remove the whole harness cluster)
 
 # ----------------------------- #21 sustained-load profile --------------------
 # The DEDICATED load profile (ADR-0007). Excluded from the default `verify`/`test` gate. `load` drives a
-# bounded-yet-sustained run at ~167 msg/s (tune below); `load-verify` ASSERTS the result (exit non-zero on
-# breach) — run it while consumers are still connected (before `make down`). Feasibility probe: a short run
-# e.g. `make load LOAD_COUNT_PER_POD=500` then read the "offered rate" line.
-LOAD_PUB_REPLICAS    ?= 4       # publisher pods (competing producers); aggregate rate ~ replicas*1000/interval
-LOAD_COUNT_PER_POD   ?= 12500   # messages EACH publisher sends (bounded); N = replicas*count (the denominator)
-LOAD_INTERVAL_MS     ?= 24      # per-pod inter-send sleep (ms); 4 pods @ 24ms ~= 167 msg/s; ~5 min for N=50000
+# bounded-yet-sustained run; `load-verify` ASSERTS the result (exit non-zero on breach) — run it while
+# consumers are still connected (before `make down`). Feasibility probe: short run, e.g.
+# `make load LOAD_COUNT_PER_POD=500`, then read the "offered rate" line.
+#
+# Defaults = the VALIDATED steady-state baseline on a 4-vCPU/8GB single-node box (zero loss, p99 ~20 ms —
+# research-output/phase-h-load-baseline-k3d.md). This box is report-drain-bound and saturates ~63 msg/s, so
+# the defaults stay safely under that. The ~167 msg/s (~10k rpm) mandate needs producer/consumer connection
+# pooling (#25) + more vCPU / a multi-node cluster — then scale these up. Override per run, e.g.
+# `make load LOAD_PUB_REPLICAS=2 LOAD_COUNT_PER_POD=2000`.
+LOAD_PUB_REPLICAS    ?= 1       # publisher pods (competing producers); throughput is report-drain-bound here
+LOAD_COUNT_PER_POD   ?= 1500    # messages EACH publisher sends (bounded); N = replicas*count (the denominator)
+LOAD_INTERVAL_MS     ?= 150     # per-pod inter-send sleep (ms); 1 pod @ 150ms ~= 5 msg/s steady state (~4 min)
 LOAD_SETTLE_SECS     ?= 60      # drain wait after publishers finish, before asserting
 LOAD_WAIT_SECS       ?= 600     # max wait for all publishers to log PUBLISH-DONE
 LOAD_CEIL_COA_P99_MS ?= 5000    # PRE-DECLARED generous COA p99 ceiling (committed before the run; ADR-0007)
