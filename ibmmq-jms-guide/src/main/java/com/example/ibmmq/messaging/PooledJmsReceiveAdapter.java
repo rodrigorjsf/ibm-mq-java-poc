@@ -1,16 +1,18 @@
 package com.example.ibmmq.messaging;
 
+import com.example.ibmmq.config.MqConnectionFactoryFactory;
 import com.example.ibmmq.model.ReportType;
 import com.example.ibmmq.report.ReportDescriptor;
 import com.example.ibmmq.report.ReportFeedbackRouter;
 import com.ibm.msg.client.wmq.WMQConstants;
+import com.ibm.mq.jms.MQConnectionFactory;
 import io.micronaut.context.annotation.Requires;
 import jakarta.annotation.PreDestroy;
+import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.jms.ConnectionFactory;
 import javax.jms.JMSConsumer;
 import javax.jms.JMSContext;
 import javax.jms.Message;
@@ -23,7 +25,7 @@ import javax.jms.TextMessage;
  *
  * <h2>Long-lived held contexts (ADR-0006 consumer lifecycle)</h2>
  * The adapter holds TWO long-lived {@link JMSContext}s drawn from the dedicated, non-pooled
- * consumer {@code ConnectionFactory}, each for the pod's life:
+ * consumer {@link MQConnectionFactory} (ADR-0006 {@code @Named(CONSUMER)} bean), each for the pod's life:
  * <ul>
  *   <li>a {@code SESSION_TRANSACTED} context for {@link #receiveWithinUnitOfWork} (the business consume whose
  *       commit releases the COD);</li>
@@ -49,7 +51,7 @@ public class PooledJmsReceiveAdapter implements ReceivePort {
 
     private static final Logger LOG = LoggerFactory.getLogger(PooledJmsReceiveAdapter.class);
 
-    private final ConnectionFactory connectionFactory;
+    private final MQConnectionFactory connectionFactory;
     private final ReportFeedbackRouter feedbackRouter;
 
     /** Long-lived held contexts (lazy). Guarded by their respective lock objects. */
@@ -58,7 +60,9 @@ public class PooledJmsReceiveAdapter implements ReceivePort {
     private final Object businessLock = new Object();
     private final Object reportLock = new Object();
 
-    public PooledJmsReceiveAdapter(ConnectionFactory connectionFactory, ReportFeedbackRouter feedbackRouter) {
+    public PooledJmsReceiveAdapter(
+            @Named(MqConnectionFactoryFactory.CONSUMER) MQConnectionFactory connectionFactory,
+            ReportFeedbackRouter feedbackRouter) {
         this.connectionFactory = connectionFactory;
         this.feedbackRouter = feedbackRouter;
     }

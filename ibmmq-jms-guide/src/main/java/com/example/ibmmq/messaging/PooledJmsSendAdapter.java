@@ -1,8 +1,10 @@
 package com.example.ibmmq.messaging;
 
+import com.example.ibmmq.config.MqConnectionFactoryFactory;
 import com.ibm.msg.client.wmq.WMQConstants;
 import com.ibm.mq.constants.MQConstants;
 import io.micronaut.context.annotation.Requires;
+import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 
@@ -32,7 +34,8 @@ public class PooledJmsSendAdapter implements SendPort {
 
     private final JmsPoolConnectionFactory connectionFactory;
 
-    public PooledJmsSendAdapter(JmsPoolConnectionFactory connectionFactory) {
+    public PooledJmsSendAdapter(
+            @Named(MqConnectionFactoryFactory.PRODUCER) JmsPoolConnectionFactory connectionFactory) {
         this.connectionFactory = connectionFactory;
     }
 
