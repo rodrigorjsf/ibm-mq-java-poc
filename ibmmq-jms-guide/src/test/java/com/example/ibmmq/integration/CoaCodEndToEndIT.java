@@ -180,7 +180,7 @@ class CoaCodEndToEndIT {
      *       {@code MQRO_COPY_MSG_ID_TO_CORREL_ID}); {@code reportTypeChar} == {@code 'A'}/{@code 'D'};
      *       {@code putTimestampUtc} non-null and plausibly recent.</li>
      *   <li><b>Tolerant:</b> {@code applIdentityData} recovered (read-enabled => non-null, may be blank);
-     *       {@code accountingToken} recovered (24 bytes, may be the QMgr default token).</li>
+     *       {@code accountingToken} recovered (32 bytes, may be the QMgr default token).</li>
      * </ul>
      */
     private static void assertRecoveredMqmdFields(Message report, ReportType type, LocalDateTime windowStartUtc,

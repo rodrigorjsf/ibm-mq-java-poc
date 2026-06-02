@@ -16,7 +16,7 @@ import java.time.LocalDateTime;
  * <ol>
  *   <li><b>{@code applIdentityData}</b> ({@code String}) — the report's own ApplIdentityData (QMgr-set;
  *       may be blank) via {@code JMS_IBM_MQMD_ApplIdentityData}.</li>
- *   <li><b>{@code accountingToken}</b> ({@code byte[]}, 24 bytes) — the report's own AccountingToken via
+ *   <li><b>{@code accountingToken}</b> ({@code byte[]}, 32 bytes) — the report's own AccountingToken via
  *       {@code JMS_IBM_MQMD_AccountingToken} (a {@code byte[]} object property; a hex {@code String} form
  *       is handled defensively).</li>
  *   <li><b>{@code correlationIdBytes}</b> ({@code byte[]}) — {@code getJMSCorrelationIDAsBytes()}; with the
@@ -41,7 +41,7 @@ import java.time.LocalDateTime;
  * reflective lookups, no intermediate collections.</p>
  *
  * @param applIdentityData   the report's own ApplIdentityData (may be {@code null}/blank).
- * @param accountingToken    the report's own AccountingToken bytes (may be {@code null}; typically 24 bytes).
+ * @param accountingToken    the report's own AccountingToken bytes (may be {@code null}; typically 32 bytes).
  * @param correlationIdBytes the report's CorrelId bytes == original MsgId under default id propagation (may
  *                           be {@code null}).
  * @param messageIdBytes     the report's own MsgId bytes (may be {@code null} when read is not enabled).
