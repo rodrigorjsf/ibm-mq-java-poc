@@ -1,17 +1,10 @@
 package com.example.ibmmq.consumer;
 
 import com.example.ibmmq.config.MqProperties;
+import com.example.ibmmq.messaging.ReceivePort;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
-
-import javax.jms.JMSConsumer;
-import javax.jms.ConnectionFactory;
-import javax.jms.JMSContext;
-import javax.jms.Message;
-import javax.jms.Queue;
-import javax.jms.TextMessage;
 
 /**
  * Consome (GET destrutivo) da fila de negocio. <b>E este consumo que dispara o relatorio COD.</b>
@@ -20,21 +13,33 @@ import javax.jms.TextMessage;
  * mensagem e recuperada destrutivamente. Nao ha API JMS para "pedir" o COD no consumo — ele decorre
  * automaticamente das opcoes de report ja gravadas no MQMD pela mensagem original.</p>
  *
- * <p><b>Syncpoint / timing:</b> usamos {@code SESSION_TRANSACTED}. O COD e gerado dentro da unidade
- * de trabalho (UoW) do consumidor e <em>so fica disponivel apos o commit</em>. Se a UoW sofrer
+ * <p><b>Syncpoint / timing:</b> o consumo roda dentro de uma unidade de trabalho (UoW) transacionada.
+ * O COD e gerado dentro dessa UoW e <em>so fica disponivel apos o commit</em>. Se a UoW sofrer
  * rollback (backout), o COD nao e enviado e a mensagem volta para a fila — coerente com "entregue de
- * verdade". Por isso confirmamos com {@code context.commit()} apos processar com sucesso.</p>
+ * verdade".</p>
+ *
+ * <p><b>Seam (ADR-0008):</b> este entry point nao abre mais um {@code JMSContext} proprio — delega ao
+ * {@link ReceivePort#receiveWithinUnitOfWork}. A porta executa o handler DENTRO da UoW e
+ * <b>commita</b> ao retorno normal (liberando o COD) ou faz <b>rollback</b> ao lancar (sem COD); este
+ * consumidor NUNCA chama commit()/rollback() diretamente. Nenhum {@code javax.jms.Message} chega aqui —
+ * o handler ve apenas o corpo decodificado.</p>
+ *
+ * <p><b>Nota de observabilidade (ADR-0008, consequencia intencional):</b> o seam expoe apenas o CORPO
+ * da mensagem consumida, NAO o messageId consumido (a assinatura {@code handle(String body)} e fixa).
+ * Por isso as linhas {@code [stage=CONSUME]}/{@code [stage=COMMIT]} nao podem mais vincular
+ * messageId/correlationId no MDC — uma consequencia aceita do seam travado. As tags de etapa e o corpo
+ * permanecem nas linhas; apenas o MDC de messageId e omitido para estas duas linhas.</p>
  */
 @Singleton
 public class BusinessMessageConsumer {
 
     private static final Logger LOG = LoggerFactory.getLogger(BusinessMessageConsumer.class);
 
-    private final ConnectionFactory connectionFactory;
+    private final ReceivePort receivePort;
     private final MqProperties props;
 
-    public BusinessMessageConsumer(ConnectionFactory connectionFactory, MqProperties props) {
-        this.connectionFactory = connectionFactory;
+    public BusinessMessageConsumer(ReceivePort receivePort, MqProperties props) {
+        this.receivePort = receivePort;
         this.props = props;
     }
 
@@ -45,55 +50,28 @@ public class BusinessMessageConsumer {
      * @return o corpo da mensagem consumida, ou {@code null} se o timeout expirar sem mensagem.
      */
     public String receiveOne(long timeoutMillis) {
-        // Contexto transacionado: o COD so fica visivel na fila de relatorios apos o commit.
-        try (JMSContext context = connectionFactory.createContext(JMSContext.SESSION_TRANSACTED)) {
+        // Transacted unit of work: the port commits on a normal handler return (releasing the COD) or
+        // rolls back on a throw (the message returns; no COD). On timeout it returns null without
+        // invoking the handler. We never call commit()/rollback() ourselves.
+        String body = receivePort.receiveWithinUnitOfWork(props.getBusinessQueue(), timeoutMillis, consumedBody -> {
+            // Observability note (ADR-0008): the seam surfaces only the body, not the consumed
+            // messageId, so this line cannot bind messageId/correlationId in MDC.
+            LOG.info("[stage=CONSUME] Mensagem de negocio consumida (GET destrutivo): body={}", consumedBody);
 
-            Queue businessQueue = context.createQueue("queue:///" + props.getBusinessQueue());
-            JMSConsumer consumer = context.createConsumer(businessQueue);
+            // ... processamento de negocio aqui ...
 
-            // GET destrutivo — remove a mensagem da fila e (dado MQRO_COD na origem) agenda o COD.
-            Message message = consumer.receive(timeoutMillis);
-            if (message == null) {
-                LOG.debug("Nenhuma mensagem na fila de negocio dentro do timeout ({} ms)", timeoutMillis);
-                // Nada a comitar; o try-with-resources fecha o contexto (rollback implicito vazio).
-                return null;
-            }
+            return consumedBody;
+        });
 
-            String body = (message instanceof TextMessage textMessage)
-                    ? textMessage.getText()
-                    : "(payload nao-texto)";
-
-            String messageId = message.getJMSMessageID();
-            // MDC: messageId = id consumido; correlationId = MESMO valor. O default IBM MQ
-            // MQRO_COPY_MSG_ID_TO_CORREL_ID fara este id virar o CorrelationId do COD que este
-            // consumo (apos commit) dispara — assim o mesmo id rastreia consumo e relatorio.
-            MDC.put("messageId", messageId);
-            MDC.put("correlationId", messageId);
-            try {
-                LOG.info("[stage=CONSUME] Mensagem de negocio consumida (GET destrutivo): messageId={}, body={}",
-                        messageId, body);
-
-                // ... processamento de negocio aqui ...
-
-                // Commit: confirma o consumo e libera o COD para a fila de relatorios.
-                // Em caso de excecao acima, o catch faz rollback (a mensagem volta; COD nao e gerado).
-                context.commit();
-
-                LOG.info("[stage=COMMIT] Consumo confirmado (commit): COD liberado para a fila de relatorios, messageId={}",
-                        messageId);
-
-                return body;
-            } finally {
-                // Limpa o MDC antes de devolver a thread ao pool (ver nota do produtor; evita vazamento
-                // de ids entre mensagens sob alta concorrencia / ~10k rpm).
-                MDC.remove("messageId");
-                MDC.remove("correlationId");
-            }
-        } catch (Exception e) {
-            // getText()/getJMSMessageID() lancam JMSException (checada). Em SESSION_TRANSACTED, ao
-            // fechar o contexto sem commit ocorre rollback automatico (a mensagem volta; COD nao e gerado).
-            LOG.error("Falha ao consumir/processar mensagem de negocio — rollback aplicado", e);
-            throw new IllegalStateException("Falha ao consumir mensagem de negocio", e);
+        if (body == null) {
+            LOG.debug("Nenhuma mensagem na fila de negocio dentro do timeout ({} ms)", timeoutMillis);
+            return null;
         }
+
+        // The port committed on the handler's normal return — the COD is now released to the report
+        // queue. Same observability note: no messageId is available to bind in MDC for this line.
+        LOG.info("[stage=COMMIT] Consumo confirmado (commit): COD liberado para a fila de relatorios");
+
+        return body;
     }
 }

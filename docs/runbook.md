@@ -110,6 +110,18 @@ image defaults (`DEV.*`), not these `APP.*` objects.
 | `DATASOURCES_READER_URL` | Reader/replica JDBC URL (audit read-model queries only) | unset |
 | `DATASOURCES_READER_USERNAME` / `DATASOURCES_READER_PASSWORD` | Reader credentials | unset |
 
+> **`${VAR:default}` set-empty vs unset footgun (dev/test).** The `passw0rd` default for
+> `IBM_MQ_PASSWORD` / `MQ_ADMIN_PASSWORD` comes from the bindings
+> `password: ${IBM_MQ_PASSWORD:passw0rd}` (and `${MQ_ADMIN_PASSWORD:passw0rd}` in the demo
+> profile), which apply the default **only when the variable is UNSET**. Exporting it
+> **empty** (`export IBM_MQ_PASSWORD=`) resolves to a **blank** password, not the default.
+> Combined with a non-blank `ibm-mq.user` (`app` / `admin`), the blank credential currently
+> fails at connect with `MQRC_NOT_AUTHORIZED (2035)`; once the fail-fast config validation
+> lands (issue #27 / ADR-0011, see `research-output/micronaut-config-validation-startup.md`)
+> it will instead refuse to **boot**. In k8s/prod the password is always set to a concrete
+> value via Secret (`deploy/k3s/10-secrets.yaml`), so this footgun is dev/test-only — leave
+> the variable **unset** (not empty) to use the default.
+
 > The committed `application.yml` defines **no** `datasources` block on purpose — a bare run (and the
 > unit-test `ApplicationContext`) stays inert with no HikariCP pool. The datasources are supplied by the
 > environment (the `docker-compose.yml` Postgres pair below, or the k3s harness ConfigMap/Secret).
@@ -375,8 +387,8 @@ is what you will see verbatim.
 ```
 INFO  [stage=BANNER] Iniciando a demo COA/COD ponta-a-ponta (produce -> consume -> COA/COD) contra o broker local.
 INFO  [stage=PRODUCE] Mensagem de negocio enviada: businessKey=demo-coa-cod, messageId=ID:..., replyTo=DEV.QUEUE.2
-INFO  [stage=CONSUME] Mensagem de negocio consumida (GET destrutivo): messageId=ID:..., body={"demo":"coa-cod","pedido":42}
-INFO  [stage=COMMIT] Consumo confirmado (commit): COD liberado para a fila de relatorios, messageId=ID:...
+INFO  [stage=CONSUME] Mensagem de negocio consumida (GET destrutivo): body={"demo":"coa-cod","pedido":42}
+INFO  [stage=COMMIT] Consumo confirmado (commit): COD liberado para a fila de relatorios
 INFO  [stage=CLASSIFY] Relatorio classificado: tipo=COA, feedback=259, correlId=ID:...
 INFO  [stage=CORRELATE] Correlacionado a mensagem original: originalMsgId=ID:..., conhecido=true
 INFO  [stage=COA] Confirmacao de chegada (arrival) registrada: correlId=ID:..., originalMsgId=ID:...
@@ -385,6 +397,12 @@ INFO  [stage=COD] Confirmacao de entrega (delivery) registrada: correlId=ID:...,
 INFO  [stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, ...
 INFO  [demo=COA/COD] [resultado=PASS] Fluxo validado: COA(feedback=259)=true, COD(feedback=260)=true, correlId==messageId=true ...
 ```
+
+> **Note — the `[stage=CONSUME]`/`[stage=COMMIT]` lines carry no `messageId`.** Since the ADR-0008 messaging seam, the
+> business consumer receives only the decoded body through `ReceivePort.receiveWithinUnitOfWork` — not the consumed
+> message's id — so those two lines cannot bind `messageId`/`correlationId` into the MDC. Correlation stays end-to-end:
+> `[stage=PRODUCE]` logs the assigned `messageId`, and every report line (`CLASSIFY`/`CORRELATE`/`COA`/`COD`/`RECONCILE`)
+> carries `correlId == originalMsgId` under the default `MQRO_COPY_MSG_ID_TO_CORREL_ID` propagation. See ADR-0008.
 
 ---
 

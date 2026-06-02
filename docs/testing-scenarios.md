@@ -69,23 +69,25 @@ IT-07 reproduces deterministically.
 - Queues `DEV.QUEUE.1` (business) and `DEV.QUEUE.2` (report) pre-created by the dev image.
 - Connection via channel `DEV.ADMIN.SVRCONN` as user `admin` (full context authority).
 
+**How it drives the broker (ADR-0008 / #58):** the test no longer hand-builds an `MQConnectionFactory` or
+reimplements JMS. It starts the `MQContainer`, runs a Micronaut `ApplicationContext` configured with the admin
+channel + the container's dynamic host/port (and with `messaging.adapter` left unset, so the **production** pooled-JMS
+adapters wire — not the in-memory fakes), and `getBean`s the production `BusinessMessageProducer` /
+`BusinessMessageConsumer` / `ReportMessageConsumer`. Every JMS operation runs inside the production seam adapters; the
+prior raw-JMS duplication was deleted (ADR-0008 AC4).
+
 **Step-by-step flow:**
 
-1. **Produce** — a persistent `TextMessage` (`{"pedido":42}`) is sent to `DEV.QUEUE.1` with:
-   - `JMSReplyTo = DEV.QUEUE.2`
-   - `JMS_IBM_REPORT_COA = MQRO_COA` (256)
-   - `JMS_IBM_REPORT_COD = MQRO_COD` (2048)
-   - Delivery mode `PERSISTENT`
+1. **Produce** — `producer.send("pedido-42", "{\"pedido\":42}")` builds a persistent `OutboundMessage` with COA+COD
+   report options and `JMSReplyTo = DEV.QUEUE.2` (the adapter sets `MQRO_COA`/`MQRO_COD`, `PERSISTENT`, and the
+   `queue:///` URI). The returned `JMSMessageID` is captured as `originalMessageId`.
 
-   The `JMSMessageID` assigned after the `send()` is captured as `originalMessageId`.
+2. **Consume** — `businessConsumer.receiveOne(15_000L)` destructively consumes from `DEV.QUEUE.1` inside the transacted
+   unit-of-work (`ReceivePort.receiveWithinUnitOfWork`); the commit on normal return releases the COD.
 
-2. **Consume** — a `SESSION_TRANSACTED` context destructively receives from `DEV.QUEUE.1`
-   within a 15-second timeout, then calls `ctx.commit()`. The commit releases the COD.
-
-3. **Collect reports** — a polling loop on `DEV.QUEUE.2` runs for up to 30 seconds. Each
-   received report is checked for `JMS_IBM_FEEDBACK` (259 = COA, 260 = COD) and for
-   `JMSCorrelationID == originalMessageId`. The loop exits early when both `coaSeen` and
-   `codSeen` are `true`.
+3. **Collect reports** — a polling loop (up to 30 s) calls `reportConsumer.receiveOneReport(5_000L)`; each returned
+   `DeliveryEvent` is checked for `feedbackCode()` (259 = COA, 260 = COD) and `correlationId() == originalMessageId`.
+   The loop exits early when both `coaSeen` and `codSeen` are `true`.
 
 **Key assertions:**
 - `originalMessageId` is not null after the send.
@@ -102,9 +104,9 @@ IT-07 reproduces deterministically.
 - Section 5.2(d) — the `+passid` / admin authority gotcha (why this test uses `admin`; corrected from `+setall`).
 
 **Issue #19 extension — recovered MQMD fields:**
-The same test now also enables MQMD read on its own report-queue consumer
-(`queue:///DEV.QUEUE.2?mdReadEnabled=true`) and, for **each** arriving COA and COD, asserts the six
-recovered MQMD values via `ReportDescriptor.from(report, type)`:
+The production receive adapter enables MQMD read (`queue:///DEV.QUEUE.2?mdReadEnabled=true`) and decodes the six
+recovered MQMD values into the `ReportEnvelope`; the IT asserts them off the resulting `DeliveryEvent` accessors, for
+**each** arriving COA and COD:
 - **Strict** — `correlationIdBytes` non-empty (== original `MsgId` bytes under default propagation);
   `reportTypeChar == 'A'` for the COA / `'D'` for the COD; `putTimestampUtc` non-null and plausibly
   recent (within a ±10-minute window); `messageIdBytes` non-null (read-enabled).
@@ -133,19 +135,21 @@ key `(correlation_id, feedback)` is unchanged; the six columns are purely additi
 
 **Why deterministic (no broker, single Postgres):**
 Same harness as the issue-#40 persistence IT — one `GenericContainer` `postgres:16-alpine`, `default`
-(writer) and `reader` pointing at the same instance, the report driven by a Mockito-mocked `Message`.
-The six MQMD getters are stubbed with fixed fixtures so the persisted hex/timestamp/char values are
-exactly asserted (no QMgr non-determinism).
+(writer) and `reader` pointing at the same instance, the report driven as a decoded `ReportEnvelope`
+(ADR-0008 — the seam delivers decoded envelopes, so no `javax.jms.Message` mock is needed; the `ReceivePort`
+is a no-op mock because `handleReport(envelope)` is called directly). The envelope carries a **full**
+`ReportDescriptor` with fixed MQMD fixtures so the persisted hex/timestamp/char values are exactly asserted
+(no QMgr non-determinism).
 
 **Pre-conditions:**
 - Docker available; `postgres:16-alpine` reachable.
 - `default` + `reader` datasources configured to the same container.
 
 **Step-by-step flow:**
-1. Stub a report `Message` (feedback 259, then 260) with `JMS_IBM_MQMD_ApplIdentityData`,
-   `JMS_IBM_MQMD_AccountingToken` (32 bytes), `getJMSCorrelationIDAsBytes()`, `JMS_IBM_MQMD_MsgId`,
-   `JMS_IBM_MQMD_PutDate = "20260531"`, `JMS_IBM_MQMD_PutTime = "13300050"`.
-2. `handleReport(coa)` then `handleReport(cod)`.
+1. Build a full `ReportEnvelope` (feedback 259, then 260) whose `ReportDescriptor` carries the six MQMD
+   fixtures — `applIdentityData`, `accountingToken` (32 bytes), `correlationIdBytes`, `messageIdBytes`,
+   `putTimestampUtc` (parsed from `PutDate "20260531"` + `PutTime "13300050"`), and `reportTypeChar`.
+2. `reportConsumer.handleReport(coa)` then `handleReport(cod)` — each taking a decoded `ReportEnvelope`.
 3. Read both rows back via the `reader` repository (immediately consistent — single instance).
 
 **Key assertions:**
@@ -832,22 +836,24 @@ generates 5 individual cases at runtime (259, 260, 258, 275, 276), accounting fo
 
 **What it proves:** the in-memory correlation store correctly registers pending messages,
 resolves them by `MessageId`, and applies COA/COD flag updates atomically and idempotently.
-`ReportMessageConsumer.handleReport()` is exercised with synthetic (Mockito-mocked)
-`javax.jms.Message` objects to verify the full correlation path without a broker.
+`ReportMessageConsumer.handleReport()` is exercised with synthetic decoded `ReportEnvelope` objects
+(`ReportEnvelope.synthetic(...)`) — the ADR-0008 seam already delivers decoded envelopes, so no
+`javax.jms.Message` mock is needed — to verify the full correlation path without a broker.
 
 | Method | Assertion |
 |---|---|
 | `registerAndFind` | `register()` stores a `PendingMessage`; `findByMessageId()` returns it by the registered key; `pendingCount() == 1`. |
 | `findUnknown` | `findByMessageId(null)` and `findByMessageId("ID:naoexiste")` (an unregistered id) both return `Optional.empty()`. |
 | `markFlags` | `markCoaReceived()` sets `coaReceived=true` and leaves `codReceived=false`; marking COA a second time is idempotent; `markCodReceived()` then makes `isFullyConfirmed() == true`. |
-| `handleCoaReport` | A mocked `Message` with `JMSCorrelationID == originalMessageId` and `JMS_IBM_FEEDBACK == 259` produces a `DeliveryEvent(COA, 259, …)`; `coaReceived` is set; `codReceived` remains false. |
-| `handleCodReportRemovesWhenFullyConfirmed` | A mocked COD report (feedback 260) arriving after COA produces `DeliveryEvent(COD, 260, …)` and causes the fully-confirmed entry to be removed from the store (`findByMessageId → empty`, `pendingCount == 0`). |
-| `handleOrphanReport` | A mocked report whose `CorrelationId` is not in the store (feedback 2053, `MQRC_Q_FULL`) produces `DeliveryEvent(EXCEPTION, 2053, …)` with `originalMessageId` falling back to the `correlationId` itself. |
+| `handleCoaReport` | A synthetic `ReportEnvelope` with `correlationId == originalMessageId` and feedback `259` produces a `DeliveryEvent(COA, 259, …)`; `coaReceived` is set; `codReceived` remains false. |
+| `handleCodReportRemovesWhenFullyConfirmed` | A synthetic COD envelope (feedback 260) arriving after COA produces `DeliveryEvent(COD, 260, …)` and causes the fully-confirmed entry to be removed from the store (`findByMessageId → empty`, `pendingCount == 0`). |
+| `handleOrphanReport` | A synthetic envelope whose `correlationId` is not in the store (feedback 2053, `MQRC_Q_FULL`) produces `DeliveryEvent(EXCEPTION, 2053, …)` with `originalMessageId` falling back to the `correlationId` itself. |
 
-**Note (issue #19):** these mocks stub only `getJMSCorrelationID()` + `getIntProperty(JMS_IBM_FEEDBACK)`.
-The MQMD extraction added in #19 is fully null-safe, so `handleReport()` still does not throw and the new
-`DeliveryEvent` MQMD fields are simply `null` here (the derived `reportTypeChar` still resolves from the
-classified type). This is the invariant locked by UT-05.
+**Note (issue #19):** `ReportEnvelope.synthetic(...)` carries only the feedback code, the `correlationId`, and
+the derived `reportTypeChar` — its `ReportDescriptor`'s five byte[]/timestamp MQMD fields are `null`. The MQMD
+extraction is fully null-safe, so `handleReport()` still does not throw and the new `DeliveryEvent` MQMD fields
+are simply `null` here (the `reportTypeChar` still resolves from the classified type). This is the invariant
+locked by UT-05.
 
 ---
 
@@ -912,6 +918,125 @@ is not enabled — the invariant that keeps the already-acked report path safe a
 | `throwingGetterIsSwallowed` | A getter that throws `JMSException` is treated as absent (`null`), never propagated. |
 | `recoversAllSixWhenPresent` | With all six getters stubbed, `applIdentityData`, `accountingToken` (+`accountingTokenHex == "010203ff"`), `correlationIdBytes`, `messageIdBytes`, `putTimestampUtc == 2026-05-31T13:30:00.500`, `reportTypeChar == 'A'` are all recovered. |
 | `hexStringFallbackForBytesProperty` | A `byte[]` MQMD property arriving as a hex `String` (`"0a0b0c"`) is defensively decoded to bytes. |
+
+---
+
+### UT-06 — `CorrelationStore.recordReport` contract: idempotency + ordering matrix, BOTH adapters
+
+**Tier:** Compact (InMemory arm, surefire) + Rich (Jdbc arm, failsafe + Postgres Testcontainer)
+
+**Test files (a shared contract run against BOTH adapters — NOT a shared code path):**
+- Shared base: `ibmmq-jms-guide/src/test/java/com/example/ibmmq/correlation/CorrelationStoreContract.java`
+- InMemory arm (surefire `*Test`): `ibmmq-jms-guide/src/test/java/com/example/ibmmq/correlation/InMemoryCorrelationStoreContractTest.java`
+- Jdbc arm (failsafe `*IT`, Postgres Testcontainer): `ibmmq-jms-guide/src/test/java/com/example/ibmmq/correlation/JdbcCorrelationStoreContractIT.java`
+
+**Classes under test:**
+- `com.example.ibmmq.correlation.CorrelationStore` (the `default recordReport(correlationId, ReportType)` method)
+- `com.example.ibmmq.correlation.InMemoryCorrelationStore` and `com.example.ibmmq.correlation.JdbcCorrelationStore` (the two adapters' differing primitives)
+
+**What it proves (issue #26):** `recordReport` collapses the consumer's former per-branch two-step
+(`markCoaReceived`/`markCodReceived` then `removeIfFullyConfirmed`) into ONE composed call that returns a
+`ReconcileResult { Outcome, PendingMessage }`. Because it is a `default` method on the interface (NOT
+overridden in either adapter, ADR-0005-safe), the SAME idempotency + ordering invariants must hold on top
+of either adapter's primitives (InMemory `compute`/`computeIfPresent`; Jdbc UPSERT…RETURNING + conditional
+DELETE). The shared base pins the matrix below; each arm binds `newStore()` to a fresh store. The Jdbc arm
+is an `*IT` (it needs a real Postgres) and runs only under `mvn verify`; the InMemory arm is unit-green
+under `mvn test`.
+
+| Method | Assertion |
+|---|---|
+| `coaThenCod` | COA on a known message → `RECORDED` (pair incomplete, row stays); the following COD → `COMPLETED` (this call removed the fully-confirmed row). |
+| `codBeforeCoa` | Out-of-order: COD first → `RECORDED`; the COA then completes the pair → `COMPLETED` (order-independent reconciliation). |
+| `duplicateCoaIsIdempotent` | A second COA (at-least-once redelivery) stays `RECORDED`, no double-count; the row remains `coa=true, cod=false`. |
+| `duplicateCodAfterCompletion` | The COD that closes the pair is `COMPLETED`; a repeated COD after the row was removed has no prior registration → `ORPHAN` (with `pending == null`). |
+| `orphanReportHasNoPrior` | A COA for an unregistered correlation id → `ORPHAN` with `pending == null`; the upsert `mark` still creates a stub (mirrors both adapters). |
+| `reportAfterPairCompleted` | After COA+COD complete and the row is removed, a redelivered COA re-creates an orphan stub → `ORPHAN` (the orphan-on-redelivery known limitation). |
+| `rejectsNonCoaCodTypes` | `recordReport` with `EXCEPTION`/`EXPIRATION` throws `IllegalArgumentException` (loud-fail on misuse — `recordReport` is only ever called for COA/COD). |
+
+**Consumer-side ORPHAN surfacing** (locked in `LoggingFlowTest.ReportStages`):
+`orphanCoaReportLogsOrphanStageAndIncrementsCounter` proves an orphan COA in `ReportMessageConsumer`
+emits a `[stage=ORPHAN]` WARN, increments the in-process orphan-rate counter
+(`getOrphanReportCount() == 1`), and still returns a `DeliveryEvent` (behaviour preserved for known AND
+orphan reports). The `[stage=RECONCILE]` line on a `COMPLETED` outcome is unchanged
+(`codReportLogsDeliveryAndReconcileStages`).
+
+---
+
+### UT-07 — Messaging-seam port fidelity: COA-on-put / COD-on-commit / rollback-no-COD (broker-free)
+
+**Tier:** Compact
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/messaging/InMemorySeamFlowTest.java`
+
+**Classes under test (ADR-0008 seam):**
+- `com.example.ibmmq.messaging.InMemorySendPort` / `InMemoryReceivePort` / `InMemoryBroker`
+- `OutboundMessage`, `ReportEnvelope` (decoded domain envelopes)
+
+**What it proves:** the in-memory fake reproduces the IBM MQ COA/COD semantics the seam must preserve, driving the
+**ports directly** — no broker, no production entry point. It is the broker-free fidelity anchor; the `mvn verify`
+ITs (IT-01) remain the source of truth that bounds the fake.
+
+| Method | Assertion |
+|---|---|
+| `sendAssignsMessageIdWithIdPrefix` | `sendPort.send(OutboundMessage.persistentWithCoaCod(...))` returns a `messageId` that `startsWith("ID:")`. |
+| `coaIsAvailableOnArrivalBeforeConsume` | a `receiveReport` BEFORE any consume returns the COA (`feedbackCode == MQFB_COA` 259) with `correlationId == messageId`. |
+| `codIsReleasedOnlyAfterCommit` | after a committed `receiveWithinUnitOfWork` (handler returns normally), `receiveReport` returns the COD (`MQFB_COD` 260, same `correlationId`). |
+| `rollbackYieldsNoCod` | a `receiveWithinUnitOfWork` whose handler throws rolls back: no COD is produced (only the COA remains) and the business message returns to the queue. |
+
+**Guide cross-references:** ADR-0008 (seam contract); §2.4 (`MQRO_COPY_MSG_ID_TO_CORREL_ID`); §2.6 (COD released on commit).
+
+---
+
+### UT-08 — Role-based connection-factory topology + DI resolution (ADR-0006, broker-free)
+
+**Tier:** Compact
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/messaging/RoleBasedConnectionFactoryTopologyTest.java`
+
+**Classes under test:**
+- `com.example.ibmmq.config.MqConnectionFactoryFactory` (the two role-based factory beans)
+- the seam adapters + the three production entry points (DI resolution)
+
+**What it proves:** the ADR-0006 factory topology wires correctly and the still-unqualified entry-point injections
+resolve via `@Primary`, without opening any socket (factory construction is lazy — `createContext` is never called, so
+`ApplicationContext.run(...)` is broker-free).
+
+| Method | Assertion |
+|---|---|
+| (PRODUCER bean) | `getBean(JmsPoolConnectionFactory, @Named(PRODUCER))` resolves the pooled producer factory. |
+| (CONSUMER bean) | `getBean(MQConnectionFactory, @Named(CONSUMER))` resolves the dedicated non-pooled consumer factory; a distinct instance from the producer. |
+| (`@Primary` tie-break) | the unqualified `getBean(ConnectionFactory.class)` resolves to the **producer** factory (proves `@Primary` — RED without it: `NonUniqueBeanException`). |
+| (entry points resolve) | `getBean(BusinessMessageProducer / BusinessMessageConsumer / ReportMessageConsumer)` all resolve with no `NonUniqueBeanException`. |
+| (adapters wire) | in a non-`fake` context the production `PooledJmsSendAdapter` / `PooledJmsReceiveAdapter` resolve their `@Named` factories — the only unit-level proof of the slice-2 wiring (it would otherwise surface only in the broker-bound IT). |
+
+**Guide cross-references:** ADR-0006 (role-based factories); `research-output/pooled-jms-factory-tuning.md` (sizing: `maxSessionsPerConnection ≤ SHARECNV`).
+
+---
+
+### UT-09 — End-to-end COA/COD cycle through the production beans + in-memory fakes (broker-free)
+
+**Tier:** Compact
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/messaging/BrokerFreeCoaCodFlowTest.java`
+
+**Classes under test:** the three **production** entry points (`BusinessMessageProducer` / `BusinessMessageConsumer` /
+`ReportMessageConsumer`) wired to the in-memory fakes through the ports, plus a real `InMemoryCorrelationStore` and
+`ReportFeedbackRouter`.
+
+**What it proves:** the full produce → consume → receive-report → reconcile → remove cycle runs end-to-end through the
+**real** production modules with no broker — the middle ground between the single-bean unit mocks and the
+`MQContainer`-backed ITs. Fidelity is bounded by IT-01 driving the same modules against a real broker.
+
+| Method | Assertion |
+|---|---|
+| `fullCycleProducesCoaAndCodAndReconciles` | produce → consume (commit) → receive COA(259) + COD(260), both with `correlId == messageId` → reconciliation drains `pendingCount` to 0. |
+| `codReleasedOnlyAfterCommit` | before the consume commit only the COA is on the report queue; the COD appears only after `receiveOne` commits. |
+| `rollbackYieldsNoCod` | a unit-of-work that throws rolls back: only the COA exists, no COD, and the message returns to the business queue. |
+
+**Guide cross-references:** ADR-0008 (seam); §2.6 (timing × transaction). Companion to IT-01 (same flow, real broker).
 
 ---
 

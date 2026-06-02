@@ -66,6 +66,32 @@ import java.util.Optional;
  * row before {@code register} commits, register re-inserts a flagless orphan; see
  * {@code deploy/k3s/README.md} "Known limitations &amp; follow-ups".</p>
  *
+ * <p><b>Known reconciliation limitations (best-effort ledger, by design):</b> two further residual cases
+ * are accepted rather than swept, because {@code pending_message} is a best-effort reconciliation ledger
+ * while {@code delivery_report} (ADR-0005) is the durable audit of what was confirmed. The higher-level
+ * {@link CorrelationStore#recordReport} composes the primitives below and classifies each recorded report
+ * as a {@link ReconcileResult.Outcome} — {@code RECORDED} (known, pair incomplete), {@code COMPLETED}
+ * (this call removed the fully-confirmed row), or {@code ORPHAN} (no prior registration) — which is how
+ * the two residual cases are surfaced rather than swept:</p>
+ * <ul>
+ *   <li><b>Orphan-on-redelivery.</b> After COA+COD complete and the row is removed, an at-least-once
+ *       REDELIVERED report re-creates a single-flag stub (the upsert mark), which never completes and so
+ *       lingers in {@code pendingCount()}. Narrow trigger (a report is delivered to one consumer; only a
+ *       genuine QM redelivery or a crash in the ack window re-fires it). {@code recordReport} sees no
+ *       prior row and returns {@link ReconcileResult.Outcome#ORPHAN}, which the consumer surfaces as a
+ *       {@code [stage=ORPHAN]} WARN + an orphan-rate counter (no Micrometer in this module). Not swept.</li>
+ *   <li><b>COA-only that never completes.</b> A message that receives a COA but never a COD (never
+ *       consumed, or expired) keeps a {@code coa_received=true, cod_received=false} row. Each COA there is
+ *       a {@code RECORDED} outcome (a KNOWN message whose pair is incomplete — NOT an {@code ORPHAN}), so it
+ *       is not counted as an orphan. This non-zero {@code pendingCount()} is CORRECT information — it
+ *       reflects genuinely-undelivered messages — so a TTL sweep is deliberately NOT added (it would mask
+ *       the signal).</li>
+ * </ul>
+ * <p>Both cases apply equally to {@link InMemoryCorrelationStore}; the mirror semantics are intentional —
+ * and because {@code recordReport} is a {@code default} method on {@link CorrelationStore} that composes
+ * the primitives (it is NOT overridden here), the {@code Outcome} classification is identical on both
+ * adapters.</p>
+ *
  * <p><b>Bean gating:</b> active only when {@code correlation.store=jdbc} (set by the harness
  * ConfigMap). The complementary {@link InMemoryCorrelationStore} loads otherwise, so exactly one
  * {@link CorrelationStore} bean exists in any configuration. Requires a {@link DataSource} bean,

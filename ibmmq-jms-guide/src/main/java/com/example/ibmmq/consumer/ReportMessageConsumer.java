@@ -2,13 +2,15 @@ package com.example.ibmmq.consumer;
 
 import com.example.ibmmq.config.MqProperties;
 import com.example.ibmmq.correlation.CorrelationStore;
+import com.example.ibmmq.correlation.ReconcileResult;
+import com.example.ibmmq.messaging.ReceivePort;
+import com.example.ibmmq.messaging.ReportEnvelope;
 import com.example.ibmmq.model.DeliveryEvent;
 import com.example.ibmmq.model.PendingMessage;
 import com.example.ibmmq.model.ReportType;
 import com.example.ibmmq.persistence.DeliveryReportWriteRepository;
 import com.example.ibmmq.report.ReportDescriptor;
 import com.example.ibmmq.report.ReportFeedbackRouter;
-import com.ibm.msg.client.wmq.WMQConstants;
 import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
@@ -18,31 +20,32 @@ import org.slf4j.MDC;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Optional;
-
-import javax.jms.JMSConsumer;
-import javax.jms.ConnectionFactory;
-import javax.jms.JMSContext;
-import javax.jms.Message;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Le a fila de relatorios (JMSReplyTo) e processa os relatorios de entrega COA/COD/etc.
  *
- * <p><b>Como classificar:</b> lemos o codigo de feedback do MQMD via a propriedade JMS
- * {@code JMS_IBM_Feedback} ({@code WMQConstants.JMS_IBM_FEEDBACK}). Esta e a propriedade canonica e
- * <em>sempre populada</em> para relatorios — diferente de {@code JMS_IBM_MQMD_Feedback}, que so e
- * preenchida quando {@code WMQ_MQMD_READ_ENABLED=true} no destino. (Ambas existem em
- * {@code JmsConstants} 9.4.5.0; usamos a primeira propositalmente.)</p>
+ * <p><b>Como classificar:</b> o codigo de feedback do MQMD ja foi lido (da propriedade canonica
+ * {@code JMS_IBM_Feedback}) pelo adapter de recebimento e chega no {@link ReportEnvelope#feedbackCode()}.
+ * Esta propriedade e canonica e <em>sempre populada</em> para relatorios — diferente de
+ * {@code JMS_IBM_MQMD_Feedback}, que so e preenchida quando {@code WMQ_MQMD_READ_ENABLED=true} no destino.</p>
  *
  * <p><b>Como correlacionar:</b> com o default {@code MQRO_COPY_MSG_ID_TO_CORREL_ID}, o relatorio
  * chega com {@code JMSCorrelationID == MessageId} da mensagem original. Buscamos a pendencia por esse
  * id no {@link CorrelationStore}.</p>
+ *
+ * <p><b>Seam (ADR-0008):</b> este entry point nao abre mais um {@code JMSContext} proprio — delega ao
+ * {@link ReceivePort#receiveReport}, que faz toda a extracao MQMD ({@code JMS_IBM_Feedback},
+ * {@code getJMSCorrelationID}, os seis valores MQMD do #19) e entrega um {@link ReportEnvelope}
+ * decodificado. Nenhum {@code javax.jms.Message} chega aqui; a classificacao e a reconciliacao operam
+ * puramente sobre o envelope.</p>
  */
 @Singleton
 public class ReportMessageConsumer {
 
     private static final Logger LOG = LoggerFactory.getLogger(ReportMessageConsumer.class);
 
-    private final ConnectionFactory connectionFactory;
+    private final ReceivePort receivePort;
     private final MqProperties props;
     private final CorrelationStore correlationStore;
     private final ReportFeedbackRouter feedbackRouter;
@@ -52,12 +55,19 @@ public class ReportMessageConsumer {
     // simply skipped and the consumer keeps working. Present in the k3s harness and the persistence IT.
     private final DeliveryReportWriteRepository auditRepository;
 
-    public ReportMessageConsumer(ConnectionFactory connectionFactory,
+    // Orphan-rate metric (issue #26): an in-process counter of COA/COD reports recorded for a
+    // correlation id with no prior registration (an at-least-once redelivery after the pair already
+    // completed, or a report this process never registered). No Micrometer dependency in this module,
+    // so we follow the harness AtomicLong pattern (PublisherHarnessRunner) + a [stage=ORPHAN] WARN line;
+    // a production build would back this with a Micrometer counter. Read via getOrphanReportCount().
+    private final AtomicLong orphanReportCount = new AtomicLong();
+
+    public ReportMessageConsumer(ReceivePort receivePort,
                                  MqProperties props,
                                  CorrelationStore correlationStore,
                                  ReportFeedbackRouter feedbackRouter,
                                  @Nullable DeliveryReportWriteRepository auditRepository) {
-        this.connectionFactory = connectionFactory;
+        this.receivePort = receivePort;
         this.props = props;
         this.correlationStore = correlationStore;
         this.feedbackRouter = feedbackRouter;
@@ -71,44 +81,37 @@ public class ReportMessageConsumer {
      * @return o {@link DeliveryEvent} derivado, ou {@code null} se o timeout expirar sem relatorio.
      */
     public DeliveryEvent receiveOneReport(long timeoutMillis) {
-        try (JMSContext context = connectionFactory.createContext(JMSContext.AUTO_ACKNOWLEDGE)) {
-
-            // Enable MQMD read on the consume destination via the URI form (issue #19): the
-            // JMS_IBM_MQMD_* properties (ApplIdentityData, AccountingToken, MsgId, PutDate/PutTime) are
-            // populated ONLY when mdReadEnabled=true on the report destination — there is no setter on the
-            // ConnectionFactory. The URI property is preferred over an MQDestination cast because it
-            // survives the JmsPoolConnectionFactory wrapper (no provider cast). The canonical
-            // JMS_IBM_Feedback used for classification needs no read-enable.
-            JMSConsumer consumer = context.createConsumer(
-                    context.createQueue("queue:///" + props.getReportQueue() + "?mdReadEnabled=true"));
-
-            Message report = consumer.receive(timeoutMillis);
-            if (report == null) {
-                LOG.debug("Nenhum relatorio dentro do timeout ({} ms)", timeoutMillis);
-                return null;
-            }
-
-            return handleReport(report);
+        // The ReceivePort adapter owns the JMSContext lifecycle, the queue:///...?mdReadEnabled=true
+        // URI form (issue #19, so the JMS_IBM_MQMD_* values are populated), and the extraction of the
+        // feedback code, correlation id, body, and the six MQMD values into a ReportEnvelope.
+        ReportEnvelope env = receivePort.receiveReport(props.getReportQueue(), timeoutMillis);
+        if (env == null) {
+            LOG.debug("Nenhum relatorio dentro do timeout ({} ms)", timeoutMillis);
+            return null;
         }
+        return handleReport(env);
     }
 
     /**
-     * Processa um unico relatorio JMS. Exposto separadamente para testabilidade (pode ser chamado
-     * com um {@code Message} mockado).
+     * Processa um unico relatorio decodificado. Exposto separadamente para testabilidade (pode ser
+     * chamado com um {@link ReportEnvelope} sintetico, sem broker).
      */
-    public DeliveryEvent handleReport(Message report) {
+    public DeliveryEvent handleReport(ReportEnvelope env) {
         try {
-            // Le o codigo de feedback do MQMD via a propriedade canonica JMS_IBM_Feedback.
-            int feedback = report.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK);
-            String correlationId = report.getJMSCorrelationID();
+            // The feedback code was read from the canonical JMS_IBM_Feedback by the adapter; here we
+            // read it (and the correlation id) off the decoded envelope.
+            int feedback = env.feedbackCode();
+            String correlationId = env.correlationId();
 
+            // Classify from the feedback code (NOT from the descriptor char): an exception report (e.g.
+            // MQRC_*) classifies to EXCEPTION here even though its descriptor char is the sentinel.
             ReportType type = feedbackRouter.classify(feedback);
 
-            // Issue #19: recover the six MQMD values from the report's OWN descriptor (verdict (R)-all).
-            // Fully null-safe and non-throwing — when mdReadEnabled is off (e.g. unit tests with a bare
-            // mock) every MQMD getter returns null, so the descriptor degrades gracefully and the
-            // already-acked report path is never aborted.
-            ReportDescriptor descriptor = ReportDescriptor.from(report, type);
+            // Issue #19: the six MQMD values were recovered from the report's OWN descriptor by the
+            // adapter (verdict (R)-all) and travel on the envelope. When mdReadEnabled is off (or a
+            // synthetic envelope is used in unit tests) the byte[]/timestamp fields are null, so the
+            // descriptor degrades gracefully and the already-acked report path is never aborted.
+            ReportDescriptor descriptor = env.descriptor();
 
             // Correlaciona de volta a mensagem original (CorrelationId == MessageId original).
             Optional<PendingMessage> pending = correlationStore.findByMessageId(correlationId);
@@ -138,23 +141,23 @@ public class ReportMessageConsumer {
                 switch (type) {
                     case COA -> {
                         // COA = Confirmation On Arrival: a mensagem CHEGOU na fila de destino.
-                        correlationStore.markCoaReceived(correlationId);
                         LOG.info("[stage=COA] Confirmacao de chegada (arrival) registrada: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
                         // Append-only audit row (writer datasource). Best-effort: a persist failure must NOT
                         // break the reconciliation path that follows (the report is already acked).
                         persistAudit(type, feedback, correlationId, originalMessageId, observedAt, sentAt, descriptor);
-                        // Reconcilia tambem aqui: sob competing consumers, o COD pode ter sido processado
-                        // ANTES do COA em outro pod — entao e o COA que completa o par. Independente de ordem.
-                        reconcileIfComplete(correlationId, originalMessageId);
+                        // One higher-level call: mark COA + order-independent reconcile in a single step
+                        // (CorrelationStore.recordReport composes the primitives). Under competing consumers
+                        // the COD may have been processed FIRST on another pod, so the COA can complete the
+                        // pair — recordReport handles that ordering and surfaces the outcome.
+                        recordAndSurface(type, correlationId, originalMessageId);
                     }
                     case COD -> {
                         // COD = Confirmation On Delivery: a mensagem foi CONSUMIDA destrutivamente.
-                        correlationStore.markCodReceived(correlationId);
                         LOG.info("[stage=COD] Confirmacao de entrega (delivery) registrada: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
                         persistAudit(type, feedback, correlationId, originalMessageId, observedAt, sentAt, descriptor);
-                        reconcileIfComplete(correlationId, originalMessageId);
+                        recordAndSurface(type, correlationId, originalMessageId);
                     }
                     case EXPIRATION, NAN, EXCEPTION ->
                             LOG.warn("[stage=PROBLEM] Relatorio de problema: tipo={}, feedback={}, correlId={}",
@@ -191,18 +194,51 @@ public class ReportMessageConsumer {
     }
 
     /**
-     * Reconciliacao independente de ordem: qualquer relatorio (COA ou COD) que complete o par remove a
-     * pendencia atomicamente. Seguro sob competing report-consumers em pods distintos — exatamente uma
-     * chamada remove (ver {@link CorrelationStore#removeIfFullyConfirmed}). Isto faz o
-     * {@code pendingCount()} drenar a zero mesmo quando COA e COD chegam fora de ordem em pods
-     * diferentes, sem depender de um sweep manual de operador.
+     * Records one COA/COD report through {@link CorrelationStore#recordReport} (mark + order-independent
+     * reconcile in a single composed step) and surfaces the {@link ReconcileResult.Outcome} for logging
+     * and the orphan-rate metric:
+     *
+     * <ul>
+     *   <li>{@code COMPLETED} &rarr; the report completed the COA+COD pair and THIS call removed the row
+     *       — emit the {@code [stage=RECONCILE]} line (with {@code pendingCount()}) exactly as before.
+     *       Safe under competing report-consumers: exactly one call removes the row (the rest are
+     *       no-ops), so the line is emitted once per fully-reconciled message;</li>
+     *   <li>{@code ORPHAN} &rarr; the report had no prior registration (orphan-on-redelivery, or a report
+     *       this process never registered) — emit a {@code [stage=ORPHAN]} WARN and bump the orphan-rate
+     *       counter. Not swept (see the known-limitations ledger);</li>
+     *   <li>{@code RECORDED} &rarr; a known message whose pair is not yet complete — no extra line
+     *       (the {@code [stage=COA]}/{@code [stage=COD]} line already narrated the mark).</li>
+     * </ul>
+     *
+     * <p>This keeps {@code pendingCount()} draining to zero cluster-wide for fully-confirmed messages
+     * with NO operator sweep, while orphans are surfaced rather than silently lingering.</p>
      */
-    private void reconcileIfComplete(String correlationId, String originalMessageId) {
-        if (correlationStore.removeIfFullyConfirmed(correlationId)) {
-            LOG.info("[stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, "
+    private void recordAndSurface(ReportType type, String correlationId, String originalMessageId) {
+        ReconcileResult result = correlationStore.recordReport(correlationId, type);
+        switch (result.outcome()) {
+            case COMPLETED -> LOG.info(
+                    "[stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, "
                             + "originalMsgId={}, pendentesRestantes={}",
                     originalMessageId, correlationStore.pendingCount());
+            case ORPHAN -> {
+                long total = orphanReportCount.incrementAndGet();
+                LOG.warn("[stage=ORPHAN] Orphan {} report (no prior registration): correlId={}, "
+                                + "orphanReportCount={}, pendingCount={}",
+                        type, correlationId, total, correlationStore.pendingCount());
+            }
+            case RECORDED -> { /* Known message, pair not yet complete — already narrated by COA/COD line. */ }
         }
+    }
+
+    /**
+     * Current count of orphan COA/COD reports recorded by this consumer instance — the orphan-rate
+     * metric backing the {@code [stage=ORPHAN]} WARN. In-process counter (no Micrometer in this module),
+     * following the harness {@code AtomicLong} pattern; exposed for tests and any harness/JMX surface.
+     *
+     * @return the number of {@link ReconcileResult.Outcome#ORPHAN} outcomes observed so far.
+     */
+    public long getOrphanReportCount() {
+        return orphanReportCount.get();
     }
 
     /**

@@ -29,16 +29,6 @@ public record PendingMessage(
         return new PendingMessage(messageId, businessKey, payload, Instant.now(), false, false);
     }
 
-    /** Retorna uma copia marcando o COA como recebido (records sao imutaveis). */
-    public PendingMessage withCoaReceived() {
-        return new PendingMessage(messageId, businessKey, payload, sentAt, true, codReceived);
-    }
-
-    /** Retorna uma copia marcando o COD como recebido. */
-    public PendingMessage withCodReceived() {
-        return new PendingMessage(messageId, businessKey, payload, sentAt, coaReceived, true);
-    }
-
     /** Entrega totalmente confirmada quando COA e COD foram recebidos. */
     public boolean isFullyConfirmed() {
         return coaReceived && codReceived;
