@@ -143,13 +143,13 @@ exactly asserted (no QMgr non-determinism).
 
 **Step-by-step flow:**
 1. Stub a report `Message` (feedback 259, then 260) with `JMS_IBM_MQMD_ApplIdentityData`,
-   `JMS_IBM_MQMD_AccountingToken` (24 bytes), `getJMSCorrelationIDAsBytes()`, `JMS_IBM_MQMD_MsgId`,
+   `JMS_IBM_MQMD_AccountingToken` (32 bytes), `getJMSCorrelationIDAsBytes()`, `JMS_IBM_MQMD_MsgId`,
    `JMS_IBM_MQMD_PutDate = "20260531"`, `JMS_IBM_MQMD_PutTime = "13300050"`.
 2. `handleReport(coa)` then `handleReport(cod)`.
 3. Read both rows back via the `reader` repository (immediately consistent — single instance).
 
 **Key assertions:**
-- Both rows carry the same `appl_identity_data`, `accounting_token_hex` (48 hex chars), the two byte[]
+- Both rows carry the same `appl_identity_data`, `accounting_token_hex` (64 hex chars), the two byte[]
   hex columns, and `put_timestamp_utc == 2026-05-31T13:30:00.500` (UTC wall-clock — no zone leakage).
 - `report_type_char == "A"` on the COA row and `"D"` on the COD row.
 

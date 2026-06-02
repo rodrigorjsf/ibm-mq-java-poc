@@ -62,7 +62,7 @@ public record DeliveryReportRecord(
         /** Report's own ApplIdentityData (QMgr-set; may be blank/null). */
         @Nullable @MappedProperty("appl_identity_data") String applIdentityData,
 
-        /** Report's own AccountingToken as lowercase hex (24 bytes => 48 hex chars; may be null). */
+        /** Report's own AccountingToken as lowercase hex (32 bytes => 64 hex chars; may be null). */
         @Nullable @MappedProperty("accounting_token_hex") String accountingTokenHex,
 
         /** Report's CorrelId bytes == original MsgId under default propagation, as hex (may be null). */

@@ -62,12 +62,15 @@ ibm-mq:
 ```
 
 > **Why admin?** — The queue manager generates a COA/COD report via a
-> PUT-with-context to the `JMSReplyTo` queue, which requires context authority
-> (`+setall`). The low-privilege `app` user lacks it: the report PUT fails with
-> `MQRC_NOT_AUTHORIZED (2035)` and the report lands on the DLQ silently. The
-> `admin` user has full authority. In production, grant the minimal authority:
-> `SET AUTHREC ... AUTHADD(PUT, SETALL)` for the application principal instead
-> of using `admin`.
+> PUT-with-context to the `JMSReplyTo` queue: it *passes* the original message's
+> identity context into the report, so it requires **pass-identity-context**
+> authority (`+passid`) — **not** merely `+setall`. The low-privilege `app` user
+> lacks it: the report PUT fails with `MQRC_NOT_AUTHORIZED (2035)`
+> (`AMQ8077W ... passid`) and the report lands on the DLQ silently. The `admin`
+> user already holds the full context set. In production, grant the application
+> principal the full context authority instead of using `admin`:
+> `SET AUTHREC ... AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)` — verified live
+> on k3s, where `+put +setall` alone still failed on `passid` (see section 7.1).
 
 Note: `application-demo.yml` does NOT override `business-queue` or
 `report-queue`, so the demo still uses **`DEV.QUEUE.1`** (business) and
@@ -587,8 +590,10 @@ Key queues for this project:
 `coaSeen=false` or `codSeen=false` in the FAIL line; `DEV.QUEUE.2` depth is 0
 after the demo; `DEV.DEAD.LETTER.QUEUE` depth is non-zero.
 
-**Root cause:** the `app` user lacks context authority (`+setall`). The queue
-manager's report PUT fails with `MQRC_NOT_AUTHORIZED (2035)` and the report is
+**Root cause:** the `app` user lacks **pass-identity-context** authority
+(`+passid`) — `+setall` alone is insufficient. The queue manager's report PUT
+(a PUT-with-context that passes the original message's identity context) fails
+with `MQRC_NOT_AUTHORIZED (2035)` (`AMQ8077W ... passid`) and the report is
 routed to the DLQ instead of the report queue.
 
 **Fix:** ensure the demo uses the `admin` channel override by activating the
@@ -596,12 +601,14 @@ routed to the DLQ instead of the report queue.
 from `application-demo.yml`). Use the exact command in section 4.2 — in
 particular, pass `-Dmicronaut.environments=demo` **inside** `-Dmn.jvmArgs`.
 
-**In production:** grant the application principal the minimum required
-authority instead of using `admin`:
+**In production:** grant the application principal the full context authority
+instead of using `admin` — `+setall` alone is insufficient (the QMgr passes the
+original message's identity context into the report, so it needs `+passid`;
+verified live on k3s where `+put +setall` still failed on `passid`):
 
 ```mqsc
 SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) +
-    PRINCIPAL('appuser') AUTHADD(PUT, SETALL)
+    PRINCIPAL('appuser') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)
 ```
 
 ### 7.2 JVM native-access warning on JDK 25

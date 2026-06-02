@@ -29,7 +29,7 @@ import java.time.LocalDateTime;
  * @param originalMessageId MessageId da mensagem de negocio correlacionada (se conhecido no store).
  * @param occurredAt   instante em que o evento foi processado pelo consumidor de relatorios.
  * @param applIdentityData   ApplIdentityData do PROPRIO relatorio (definido pelo QMgr; pode ser nulo/branco).
- * @param accountingToken    AccountingToken do PROPRIO relatorio (24 bytes; pode ser nulo).
+ * @param accountingToken    AccountingToken do PROPRIO relatorio (32 bytes; pode ser nulo).
  * @param correlationIdBytes CorrelId em bytes == MsgId original sob a propagacao default (pode ser nulo).
  * @param messageIdBytes     MsgId do PROPRIO relatorio em bytes (pode ser nulo se o read nao estiver habilitado).
  * @param putTimestampUtc    put-time do relatorio como relogio-de-parede UTC (pode ser nulo).

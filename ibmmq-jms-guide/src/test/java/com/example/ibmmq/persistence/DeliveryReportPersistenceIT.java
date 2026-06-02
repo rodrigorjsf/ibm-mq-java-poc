@@ -174,13 +174,14 @@ class DeliveryReportPersistenceIT {
     private static final String APPL_IDENTITY = "APP.IDENTITY.40";
     private static final byte[] ACCOUNTING_TOKEN = new byte[]{
             0x16, 0x01, 0x05, 0x15, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
-            0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11}; // 24 bytes
+            0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11,
+            0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19}; // 32 bytes (MQ_ACCOUNTING_TOKEN_LENGTH)
     private static final byte[] CORREL_ID_BYTES = new byte[]{(byte) 0x41, (byte) 0x4d, 0x51, 0x20};
     private static final byte[] MSG_ID_BYTES = new byte[]{(byte) 0xab, (byte) 0xcd, (byte) 0xef, 0x01};
     private static final String PUT_DATE = "20260531";
     private static final String PUT_TIME = "13300050"; // 13:30:00.500 UTC
 
-    private static final String ACCOUNTING_TOKEN_HEX = "160105150000000102030405060708090a0b0c0d0e0f1011";
+    private static final String ACCOUNTING_TOKEN_HEX = "160105150000000102030405060708090a0b0c0d0e0f10111213141516171819";
 
     private static Message reportWithFeedback(int feedback) throws Exception {
         Message report = mock(Message.class);
@@ -233,9 +234,9 @@ class DeliveryReportPersistenceIT {
             assertThat(row.applIdentityData())
                     .as("appl_identity_data recuperado").isEqualTo(APPL_IDENTITY);
             assertThat(row.accountingTokenHex())
-                    .as("accounting_token_hex recuperado (24 bytes => 48 hex chars)")
+                    .as("accounting_token_hex recuperado (32 bytes => 64 hex chars)")
                     .isEqualTo(ACCOUNTING_TOKEN_HEX)
-                    .hasSize(48);
+                    .hasSize(64);
             assertThat(row.correlationIdBytesHex())
                     .as("correlation_id_bytes_hex recuperado").isEqualTo("414d5120");
             assertThat(row.messageIdBytesHex())
