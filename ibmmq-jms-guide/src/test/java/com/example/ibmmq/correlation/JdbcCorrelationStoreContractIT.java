@@ -62,6 +62,10 @@ class JdbcCorrelationStoreContractIT extends CorrelationStoreContract {
         String jdbcUrl = "jdbc:postgresql://" + postgres.getHost() + ":"
                 + postgres.getMappedPort(POSTGRES_PORT) + "/correlation";
         ctx = ApplicationContext.run(Map.ofEntries(
+                // Pin a valid ibm-mq.password so the context boots under the eager @Context validation of
+                // MqProperties (issue #27 / ADR-0011): the bean is validated at startup and would otherwise
+                // refuse to boot when IBM_MQ_PASSWORD is exported empty (user=app + blank password).
+                Map.entry("ibm-mq.password", "passw0rd"),
                 // Activates JdbcCorrelationStore (the shared, Postgres-backed reconciliation ledger).
                 Map.entry("correlation.store", "jdbc"),
                 // Writer/primary = `default` (the bare DataSource the store injects resolves here).
