@@ -387,8 +387,8 @@ is what you will see verbatim.
 ```
 INFO  [stage=BANNER] Iniciando a demo COA/COD ponta-a-ponta (produce -> consume -> COA/COD) contra o broker local.
 INFO  [stage=PRODUCE] Mensagem de negocio enviada: businessKey=demo-coa-cod, messageId=ID:..., replyTo=DEV.QUEUE.2
-INFO  [stage=CONSUME] Mensagem de negocio consumida (GET destrutivo): messageId=ID:..., body={"demo":"coa-cod","pedido":42}
-INFO  [stage=COMMIT] Consumo confirmado (commit): COD liberado para a fila de relatorios, messageId=ID:...
+INFO  [stage=CONSUME] Mensagem de negocio consumida (GET destrutivo): body={"demo":"coa-cod","pedido":42}
+INFO  [stage=COMMIT] Consumo confirmado (commit): COD liberado para a fila de relatorios
 INFO  [stage=CLASSIFY] Relatorio classificado: tipo=COA, feedback=259, correlId=ID:...
 INFO  [stage=CORRELATE] Correlacionado a mensagem original: originalMsgId=ID:..., conhecido=true
 INFO  [stage=COA] Confirmacao de chegada (arrival) registrada: correlId=ID:..., originalMsgId=ID:...
@@ -397,6 +397,12 @@ INFO  [stage=COD] Confirmacao de entrega (delivery) registrada: correlId=ID:...,
 INFO  [stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, ...
 INFO  [demo=COA/COD] [resultado=PASS] Fluxo validado: COA(feedback=259)=true, COD(feedback=260)=true, correlId==messageId=true ...
 ```
+
+> **Note — the `[stage=CONSUME]`/`[stage=COMMIT]` lines carry no `messageId`.** Since the ADR-0008 messaging seam, the
+> business consumer receives only the decoded body through `ReceivePort.receiveWithinUnitOfWork` — not the consumed
+> message's id — so those two lines cannot bind `messageId`/`correlationId` into the MDC. Correlation stays end-to-end:
+> `[stage=PRODUCE]` logs the assigned `messageId`, and every report line (`CLASSIFY`/`CORRELATE`/`COA`/`COD`/`RECONCILE`)
+> carries `correlId == originalMsgId` under the default `MQRO_COPY_MSG_ID_TO_CORREL_ID` propagation. See ADR-0008.
 
 ---
 
