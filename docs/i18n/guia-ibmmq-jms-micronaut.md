@@ -830,13 +830,20 @@ public DeliveryEvent handleReport(Message report) {
         String originalMessageId = pending.map(PendingMessage::messageId).orElse(correlationId);
 
         switch (type) {
-            case COA -> correlationStore.markCoaReceived(correlationId);
-            case COD -> {
-                correlationStore.markCodReceived(correlationId);
-                // COA+COD confirmados: entrega completa, remove a pendência.
-                correlationStore.findByMessageId(correlationId)
-                        .filter(PendingMessage::isFullyConfirmed)
-                        .ifPresent(p -> correlationStore.remove(correlationId));
+            // Uma única chamada de alto nível por branch: CorrelationStore.recordReport(correlationId, type)
+            // compõe mark* + removeIfFullyConfirmed e devolve um ReconcileResult {outcome, pending}.
+            // Independente de ordem: qualquer um (COA/COD) que complete o par reconcilia (issue #26).
+            case COA, COD -> {
+                ReconcileResult result = correlationStore.recordReport(correlationId, type);
+                switch (result.outcome()) {
+                    case COMPLETED -> LOG.info("[stage=RECONCILE] Delivery complete (COA+COD): reconciled, "
+                            + "pendingRemaining={}", correlationStore.pendingCount());
+                    // ORPHAN = um COA/COD sem registro prévio (orphan-on-redelivery, ou nunca registrado
+                    // aqui): superficializado como WARN + um contador de taxa de órfãos, NÃO varrido.
+                    case ORPHAN -> LOG.warn("[stage=ORPHAN] Orphan {} report (no prior registration): "
+                            + "correlId={}, orphanReportCount={}", type, correlationId, orphanReportCount.incrementAndGet());
+                    case RECORDED -> { /* Mensagem conhecida, par ainda não completo. */ }
+                }
             }
             case EXPIRATION, NAN, EXCEPTION -> LOG.warn("Relatorio de problema: tipo={}, feedback={}, correlId={}",
                     type, feedback, correlationId);
@@ -848,6 +855,15 @@ public DeliveryEvent handleReport(Message report) {
     }
 }
 ```
+
+> A reconciliação no nível do store agora vive atrás de um único método: `CorrelationStore.recordReport`
+é um método `default` na interface que compõe os primitivos existentes (`findByMessageId`, `markCoa/
+CodReceived`, `removeIfFullyConfirmed`) e devolve um `ReconcileResult { Outcome outcome, PendingMessage
+pending }` com `Outcome ∈ {RECORDED, COMPLETED, ORPHAN}`. Por ser um método `default`, tanto o adaptador
+in-memory quanto o JDBC herdam a mesma lógica de reconciliação sobre os seus próprios primitivos — o store
+JDBC **não** é reescrito (seguro ao ADR-0005). O consumer deriva `originalMessageId`/`sentAt` para o
+`DeliveryEvent` a partir do `findByMessageId` pré-switch, e analisa o `outcome` apenas para logging + a
+métrica de taxa de órfãos.
 
 > ⚠️ **Atenção — `JMS_IBM_Feedback` vs. `JMS_IBM_MQMD_Feedback`.** Use `WMQConstants.JMS_IBM_FEEDBACK`: é a propriedade
 **canônica e sempre populada** para relatórios. A `JMS_IBM_MQMD_Feedback` só vem preenchida quando

@@ -915,6 +915,47 @@ is not enabled — the invariant that keeps the already-acked report path safe a
 
 ---
 
+### UT-06 — `CorrelationStore.recordReport` contract: idempotency + ordering matrix, BOTH adapters
+
+**Tier:** Compact (InMemory arm, surefire) + Rich (Jdbc arm, failsafe + Postgres Testcontainer)
+
+**Test files (a shared contract run against BOTH adapters — NOT a shared code path):**
+- Shared base: `ibmmq-jms-guide/src/test/java/com/example/ibmmq/correlation/CorrelationStoreContract.java`
+- InMemory arm (surefire `*Test`): `ibmmq-jms-guide/src/test/java/com/example/ibmmq/correlation/InMemoryCorrelationStoreContractTest.java`
+- Jdbc arm (failsafe `*IT`, Postgres Testcontainer): `ibmmq-jms-guide/src/test/java/com/example/ibmmq/correlation/JdbcCorrelationStoreContractIT.java`
+
+**Classes under test:**
+- `com.example.ibmmq.correlation.CorrelationStore` (the `default recordReport(correlationId, ReportType)` method)
+- `com.example.ibmmq.correlation.InMemoryCorrelationStore` and `com.example.ibmmq.correlation.JdbcCorrelationStore` (the two adapters' differing primitives)
+
+**What it proves (issue #26):** `recordReport` collapses the consumer's former per-branch two-step
+(`markCoaReceived`/`markCodReceived` then `removeIfFullyConfirmed`) into ONE composed call that returns a
+`ReconcileResult { Outcome, PendingMessage }`. Because it is a `default` method on the interface (NOT
+overridden in either adapter, ADR-0005-safe), the SAME idempotency + ordering invariants must hold on top
+of either adapter's primitives (InMemory `compute`/`computeIfPresent`; Jdbc UPSERT…RETURNING + conditional
+DELETE). The shared base pins the matrix below; each arm binds `newStore()` to a fresh store. The Jdbc arm
+is an `*IT` (it needs a real Postgres) and runs only under `mvn verify`; the InMemory arm is unit-green
+under `mvn test`.
+
+| Method | Assertion |
+|---|---|
+| `coaThenCod` | COA on a known message → `RECORDED` (pair incomplete, row stays); the following COD → `COMPLETED` (this call removed the fully-confirmed row). |
+| `codBeforeCoa` | Out-of-order: COD first → `RECORDED`; the COA then completes the pair → `COMPLETED` (order-independent reconciliation). |
+| `duplicateCoaIsIdempotent` | A second COA (at-least-once redelivery) stays `RECORDED`, no double-count; the row remains `coa=true, cod=false`. |
+| `duplicateCodAfterCompletion` | The COD that closes the pair is `COMPLETED`; a repeated COD after the row was removed has no prior registration → `ORPHAN` (with `pending == null`). |
+| `orphanReportHasNoPrior` | A COA for an unregistered correlation id → `ORPHAN` with `pending == null`; the upsert `mark` still creates a stub (mirrors both adapters). |
+| `reportAfterPairCompleted` | After COA+COD complete and the row is removed, a redelivered COA re-creates an orphan stub → `ORPHAN` (the orphan-on-redelivery known limitation). |
+| `rejectsNonCoaCodTypes` | `recordReport` with `EXCEPTION`/`EXPIRATION` throws `IllegalArgumentException` (loud-fail on misuse — `recordReport` is only ever called for COA/COD). |
+
+**Consumer-side ORPHAN surfacing** (locked in `LoggingFlowTest.ReportStages`):
+`orphanCoaReportLogsOrphanStageAndIncrementsCounter` proves an orphan COA in `ReportMessageConsumer`
+emits a `[stage=ORPHAN]` WARN, increments the in-process orphan-rate counter
+(`getOrphanReportCount() == 1`), and still returns a `DeliveryEvent` (behaviour preserved for known AND
+orphan reports). The `[stage=RECONCILE]` line on a `COMPLETED` outcome is unchanged
+(`codReportLogsDeliveryAndReconcileStages`).
+
+---
+
 ## Load / volumetry scenarios (k3d harness profile, #21)
 
 These are **not** JUnit tests — they run the live **k3d harness** via the dedicated load profile

@@ -268,6 +268,39 @@ class LoggingFlowTest {
         }
 
         @Test
+        @DisplayName("Relatorio COA orfao (sem registro previo) narra [stage=ORPHAN] WARN, incrementa o contador e ainda gera evento")
+        void orphanCoaReportLogsOrphanStageAndIncrementsCounter() throws Exception {
+            // Sem register: o COA chega para um CorrelationId que este consumer nunca registrou
+            // (orphan-on-redelivery, ou um relatorio que este processo nunca registrou).
+            InMemoryCorrelationStore store = new InMemoryCorrelationStore();
+
+            Message coaReport = mock(Message.class);
+            when(coaReport.getJMSCorrelationID()).thenReturn(MSG_ID);
+            when(coaReport.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).thenReturn(259); // MQFB_COA
+
+            ListAppender<ILoggingEvent> appender = attachCapturingAppender(ReportMessageConsumer.class);
+            ReportMessageConsumer consumer = reportConsumer(store);
+
+            // Issue #26: um relatorio orfao ainda gera um DeliveryEvent (comportamento preservado para
+            // conhecidos E orfaos).
+            var event = consumer.handleReport(coaReport);
+            assertThat(event).as("relatorio orfao ainda gera DeliveryEvent").isNotNull();
+            assertThat(event.reportType()).isEqualTo(com.example.ibmmq.model.ReportType.COA);
+
+            // O outcome ORPHAN e superficializado: WARN [stage=ORPHAN] + contador de taxa de orfaos.
+            ILoggingEvent orphan = eventWithStage(appender, "[stage=ORPHAN]");
+            assertThat(orphan).as("linha [stage=ORPHAN] (WARN) emitida para um COA sem registro previo").isNotNull();
+            assertThat(orphan.getLevel()).isEqualTo(Level.WARN);
+            assertThat(orphan.getMDCPropertyMap())
+                    .containsEntry("messageId", MSG_ID)
+                    .containsEntry("correlationId", MSG_ID);
+
+            assertThat(consumer.getOrphanReportCount())
+                    .as("o contador de relatorios orfaos e incrementado exatamente uma vez")
+                    .isEqualTo(1L);
+        }
+
+        @Test
         @DisplayName("MDC e limpo apos handleReport (sem vazamento entre relatorios)")
         void mdcClearedAfterHandleReport() throws Exception {
             InMemoryCorrelationStore store = new InMemoryCorrelationStore();
