@@ -110,6 +110,18 @@ image defaults (`DEV.*`), not these `APP.*` objects.
 | `DATASOURCES_READER_URL` | Reader/replica JDBC URL (audit read-model queries only) | unset |
 | `DATASOURCES_READER_USERNAME` / `DATASOURCES_READER_PASSWORD` | Reader credentials | unset |
 
+> **`${VAR:default}` set-empty vs unset footgun (dev/test).** The `passw0rd` default for
+> `IBM_MQ_PASSWORD` / `MQ_ADMIN_PASSWORD` comes from the bindings
+> `password: ${IBM_MQ_PASSWORD:passw0rd}` (and `${MQ_ADMIN_PASSWORD:passw0rd}` in the demo
+> profile), which apply the default **only when the variable is UNSET**. Exporting it
+> **empty** (`export IBM_MQ_PASSWORD=`) resolves to a **blank** password, not the default.
+> Combined with a non-blank `ibm-mq.user` (`app` / `admin`), the blank credential currently
+> fails at connect with `MQRC_NOT_AUTHORIZED (2035)`; once the fail-fast config validation
+> lands (issue #27 / ADR-0011, see `research-output/micronaut-config-validation-startup.md`)
+> it will instead refuse to **boot**. In k8s/prod the password is always set to a concrete
+> value via Secret (`deploy/k3s/10-secrets.yaml`), so this footgun is dev/test-only — leave
+> the variable **unset** (not empty) to use the default.
+
 > The committed `application.yml` defines **no** `datasources` block on purpose — a bare run (and the
 > unit-test `ApplicationContext`) stays inert with no HikariCP pool. The datasources are supplied by the
 > environment (the `docker-compose.yml` Postgres pair below, or the k3s harness ConfigMap/Secret).
