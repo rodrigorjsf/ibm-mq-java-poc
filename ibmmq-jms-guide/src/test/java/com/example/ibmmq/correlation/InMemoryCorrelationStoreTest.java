@@ -2,17 +2,16 @@ package com.example.ibmmq.correlation;
 
 import com.example.ibmmq.config.MqProperties;
 import com.example.ibmmq.consumer.ReportMessageConsumer;
+import com.example.ibmmq.messaging.ReceivePort;
+import com.example.ibmmq.messaging.ReportEnvelope;
 import com.example.ibmmq.model.DeliveryEvent;
 import com.example.ibmmq.model.PendingMessage;
 import com.example.ibmmq.model.ReportType;
 import com.example.ibmmq.report.ReportFeedbackRouter;
-import com.ibm.msg.client.wmq.WMQConstants;
+import com.ibm.mq.constants.MQConstants;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-
-import javax.jms.ConnectionFactory;
-import javax.jms.Message;
 
 import java.util.Optional;
 
@@ -20,12 +19,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Testes unitarios (sem broker) da logica de correlacao MessageId<->CorrelationId e do roteamento
- * de feedback no {@link ReportMessageConsumer}. Mockito e usado para fabricar relatorios JMS
- * ({@link Message}) sinteticos — onde realmente agrega valor.
+ * de feedback no {@link ReportMessageConsumer}. Os relatorios sao fabricados como {@link ReportEnvelope}
+ * sinteticos ({@link ReportEnvelope#synthetic}) — o seam (ADR-0008) ja entrega envelopes decodificados,
+ * nunca um {@code javax.jms.Message}.
  */
 class InMemoryCorrelationStoreTest {
 
@@ -38,13 +37,13 @@ class InMemoryCorrelationStoreTest {
     void setUp() {
         store = new InMemoryCorrelationStore();
 
-        // O consumer de relatorios so usa store + router em handleReport(); CF/props nao sao
-        // exercitados nesse caminho, entao mockamos o CF e usamos props default.
-        ConnectionFactory cf = mock(ConnectionFactory.class);
+        // O consumer de relatorios so usa store + router em handleReport(); a ReceivePort/props nao sao
+        // exercitadas nesse caminho, entao mockamos a porta e usamos props default.
+        ReceivePort receivePort = mock(ReceivePort.class);
         MqProperties props = new MqProperties();
         // auditRepository=null: este teste unitario nao tem datasource, entao a persistencia de auditoria
         // (delivery_report) fica inerte — o consumer skipa o persist quando o repo e nulo.
-        reportConsumer = new ReportMessageConsumer(cf, props, store, new ReportFeedbackRouter(), null);
+        reportConsumer = new ReportMessageConsumer(receivePort, props, store, new ReportFeedbackRouter(), null);
     }
 
     @Test
@@ -84,13 +83,12 @@ class InMemoryCorrelationStoreTest {
 
     @Test
     @DisplayName("Relatorio COA: correlaciona CorrelationId->MessageId e marca COA recebido")
-    void handleCoaReport() throws Exception {
+    void handleCoaReport() {
         store.register(PendingMessage.newlySent(ORIGINAL_MSG_ID, "pedido-3", "{}"));
 
-        Message coaReport = mock(Message.class);
         // Default MQRO_COPY_MSG_ID_TO_CORREL_ID: o relatorio chega com CorrelationId == MessageId original.
-        when(coaReport.getJMSCorrelationID()).thenReturn(ORIGINAL_MSG_ID);
-        when(coaReport.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).thenReturn(259); // MQFB_COA
+        ReportEnvelope coaReport = ReportEnvelope.synthetic(
+                MQConstants.MQFB_COA, ORIGINAL_MSG_ID, "", ReportType.COA);
 
         DeliveryEvent event = reportConsumer.handleReport(coaReport);
 
@@ -104,13 +102,12 @@ class InMemoryCorrelationStoreTest {
 
     @Test
     @DisplayName("Relatorio COD apos COA: marca COD e remove a pendencia (entrega completa)")
-    void handleCodReportRemovesWhenFullyConfirmed() throws Exception {
+    void handleCodReportRemovesWhenFullyConfirmed() {
         store.register(PendingMessage.newlySent(ORIGINAL_MSG_ID, "pedido-4", "{}"));
         store.markCoaReceived(ORIGINAL_MSG_ID); // COA ja recebido antes
 
-        Message codReport = mock(Message.class);
-        when(codReport.getJMSCorrelationID()).thenReturn(ORIGINAL_MSG_ID);
-        when(codReport.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).thenReturn(260); // MQFB_COD
+        ReportEnvelope codReport = ReportEnvelope.synthetic(
+                MQConstants.MQFB_COD, ORIGINAL_MSG_ID, "", ReportType.COD);
 
         DeliveryEvent event = reportConsumer.handleReport(codReport);
 
@@ -123,10 +120,10 @@ class InMemoryCorrelationStoreTest {
 
     @Test
     @DisplayName("Relatorio de feedback desconhecido (CorrelationId orfao) ainda gera evento")
-    void handleOrphanReport() throws Exception {
-        Message report = mock(Message.class);
-        when(report.getJMSCorrelationID()).thenReturn("ID:orfao");
-        when(report.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).thenReturn(2053); // MQRC_Q_FULL
+    void handleOrphanReport() {
+        // feedback 2053 (MQRC_Q_FULL) classifica como EXCEPTION via o feedbackRouter — o arg de tipo do
+        // synthetic() so define o char do descriptor, nunca a classificacao (que vem do feedback).
+        ReportEnvelope report = ReportEnvelope.synthetic(2053, "ID:orfao", "", null);
 
         DeliveryEvent event = reportConsumer.handleReport(report);
 

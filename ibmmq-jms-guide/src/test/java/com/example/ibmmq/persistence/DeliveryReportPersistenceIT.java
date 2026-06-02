@@ -3,10 +3,13 @@ package com.example.ibmmq.persistence;
 import com.example.ibmmq.config.MqProperties;
 import com.example.ibmmq.consumer.ReportMessageConsumer;
 import com.example.ibmmq.correlation.CorrelationStore;
+import com.example.ibmmq.messaging.ReceivePort;
+import com.example.ibmmq.messaging.ReportEnvelope;
 import com.example.ibmmq.model.PendingMessage;
 import com.example.ibmmq.model.ReportType;
+import com.example.ibmmq.report.MqmdTimestamps;
+import com.example.ibmmq.report.ReportDescriptor;
 import com.example.ibmmq.report.ReportFeedbackRouter;
-import com.ibm.msg.client.wmq.WMQConstants;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.data.connection.jdbc.advice.DelegatingDataSource;
 import org.junit.jupiter.api.AfterAll;
@@ -18,8 +21,6 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 
-import javax.jms.ConnectionFactory;
-import javax.jms.Message;
 import javax.sql.DataSource;
 
 import java.sql.Connection;
@@ -34,7 +35,6 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
  * Teste de integracao DETERMINISTICO (requer Docker; SEM broker) da persistencia append-only do
@@ -144,8 +144,10 @@ class DeliveryReportPersistenceIT {
         CorrelationStore store = context.getBean(CorrelationStore.class);
         store.register(PendingMessage.newlySent(CORREL_ID, "pedido-40", "{}"));
 
+        // A ReceivePort nao e exercitada por handleReport(envelope) — o IT dirige o consumer diretamente
+        // com um ReportEnvelope decodificado (sem broker), entao um mock da porta basta.
         reportConsumer = new ReportMessageConsumer(
-                mock(ConnectionFactory.class), new MqProperties(), store,
+                mock(ReceivePort.class), new MqProperties(), store,
                 new ReportFeedbackRouter(), writeRepository);
     }
 
@@ -183,24 +185,27 @@ class DeliveryReportPersistenceIT {
 
     private static final String ACCOUNTING_TOKEN_HEX = "160105150000000102030405060708090a0b0c0d0e0f10111213141516171819";
 
-    private static Message reportWithFeedback(int feedback) throws Exception {
-        Message report = mock(Message.class);
-        when(report.getJMSCorrelationID()).thenReturn(CORREL_ID);
-        when(report.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).thenReturn(feedback);
-        // Issue #19: stub the six MQMD getters so extraction recovers non-null values (mdReadEnabled is
-        // not exercised here — this IT drives handleReport directly with a mocked Message).
-        when(report.getStringProperty(WMQConstants.JMS_IBM_MQMD_APPLIDENTITYDATA)).thenReturn(APPL_IDENTITY);
-        when(report.getObjectProperty(WMQConstants.JMS_IBM_MQMD_ACCOUNTINGTOKEN)).thenReturn(ACCOUNTING_TOKEN);
-        when(report.getJMSCorrelationIDAsBytes()).thenReturn(CORREL_ID_BYTES);
-        when(report.getObjectProperty(WMQConstants.JMS_IBM_MQMD_MSGID)).thenReturn(MSG_ID_BYTES);
-        when(report.getStringProperty(WMQConstants.JMS_IBM_MQMD_PUTDATE)).thenReturn(PUT_DATE);
-        when(report.getStringProperty(WMQConstants.JMS_IBM_MQMD_PUTTIME)).thenReturn(PUT_TIME);
-        return report;
+    private static final ReportFeedbackRouter ROUTER = new ReportFeedbackRouter();
+
+    /**
+     * Builds a FULL {@link ReportEnvelope} (NOT {@link ReportEnvelope#synthetic}, which would null five of
+     * the six MQMD fields) carrying all six recovered #19 values, exactly as the production
+     * {@code PooledJmsReceiveAdapter} would extract them under {@code mdReadEnabled=true}. The report-type
+     * char is DERIVED from the feedback (259 -> COA -> 'A', 260 -> COD -> 'D') so the persisted
+     * {@code report_type_char} assertion holds; {@code putTimestampUtc} is parsed by {@link MqmdTimestamps}
+     * (the same path production uses) so it equals the asserted {@code 2026-05-31T13:30:00.500}.
+     */
+    private static ReportEnvelope reportWithFeedback(int feedback) {
+        char reportTypeChar = ROUTER.classify(feedback).toDomainChar();
+        LocalDateTime putTimestampUtc = MqmdTimestamps.parse(PUT_DATE, PUT_TIME);
+        ReportDescriptor descriptor = new ReportDescriptor(
+                APPL_IDENTITY, ACCOUNTING_TOKEN, CORREL_ID_BYTES, MSG_ID_BYTES, putTimestampUtc, reportTypeChar);
+        return new ReportEnvelope(feedback, CORREL_ID, "", descriptor);
     }
 
     @Test
     @DisplayName("COA e COD persistem UMA linha de auditoria cada (uma por relatorio recebido) — AC3")
-    void coaAndCodEachPersistOneAuditRow() throws Exception {
+    void coaAndCodEachPersistOneAuditRow() {
         reportConsumer.handleReport(reportWithFeedback(259)); // MQFB_COA
         reportConsumer.handleReport(reportWithFeedback(260)); // MQFB_COD
 
@@ -222,7 +227,7 @@ class DeliveryReportPersistenceIT {
 
     @Test
     @DisplayName("COA e COD persistem ADITIVAMENTE os seis campos MQMD recuperados (issue #19) — AC5")
-    void coaAndCodPersistRecoveredMqmdFields() throws Exception {
+    void coaAndCodPersistRecoveredMqmdFields() {
         reportConsumer.handleReport(reportWithFeedback(259)); // MQFB_COA
         reportConsumer.handleReport(reportWithFeedback(260)); // MQFB_COD
 
@@ -257,8 +262,8 @@ class DeliveryReportPersistenceIT {
 
     @Test
     @DisplayName("Redelivery do MESMO relatorio NAO cria duplicata e NAO lanca (idempotente) — AC4")
-    void redeliveryOfSameReportIsIdempotentAndDoesNotThrow() throws Exception {
-        Message coa = reportWithFeedback(259); // MQFB_COA
+    void redeliveryOfSameReportIsIdempotentAndDoesNotThrow() {
+        ReportEnvelope coa = reportWithFeedback(259); // MQFB_COA
 
         // Primeira entrega: persiste uma linha.
         reportConsumer.handleReport(coa);
