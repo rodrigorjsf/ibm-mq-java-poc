@@ -56,6 +56,14 @@ import java.sql.SQLException;
  * ({@code datasources.default.url} present — same gate as {@link DeliveryReportWriteRepository}), so a
  * bare unit-test {@code ApplicationContext} (no datasources) never tries to create the table.</p>
  */
+// @Singleton (lazy). Nothing injects this schema bean directly (consumers inject the repository, not the
+// schema), so a plain lazy @Singleton would NEVER instantiate in production — its @PostConstruct
+// ensureSchema() would never run and `delivery_report` would never be created (every audit INSERT then
+// fails "relation does not exist"; the ITs masked this by calling context.getBean(...) explicitly). It is
+// therefore instantiated via an explicit @Nullable injection into ReportMessageConsumer (issue #21), which
+// triggers ensureSchema() at report-consumer startup where the `default` datasource is live. (@Context was
+// rejected: it eager-CONNECTS in unit tests that configure a datasource without a live DB, e.g.
+// CorrelationStoreNamedDatasourcesSmokeTest.)
 @Singleton
 @Requires(property = "datasources.default.url")
 public class DeliveryReportSchema {

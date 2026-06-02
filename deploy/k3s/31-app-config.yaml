@@ -44,7 +44,14 @@ data:
   DATASOURCES_DEFAULT_URL: "jdbc:postgresql://postgres.ibmmq-harness.svc.cluster.local:5432/correlation"
   DATASOURCES_DEFAULT_DRIVER_CLASS_NAME: "org.postgresql.Driver"
   DATASOURCES_DEFAULT_USERNAME: "corr"
-  DATASOURCES_READER_URL: "jdbc:postgresql://postgres-replica.ibmmq-harness.svc.cluster.local:5432/correlation"
+  # Single-instance harness stopgap (#21): the reader points at the SAME `postgres` as the writer. A real
+  # streaming-replicated `postgres-replica` StatefulSet is a SEPARATE follow-up (deploy/k3s/README.md +
+  # docs/runbook.md §2.5). The #21 load path never exercises the read-model (register/audit go to the
+  # writer; load-verify reads via psql directly), so a degenerate CQRS reader is sufficient here — replica
+  # lag is simply absent. Pointing it at a non-existent `postgres-replica` host fails the reader HikariCP
+  # pool init (UnknownHostException) and the apps never create the schema, so this MUST resolve to a real
+  # host until the replica StatefulSet lands.
+  DATASOURCES_READER_URL: "jdbc:postgresql://postgres.ibmmq-harness.svc.cluster.local:5432/correlation"
   DATASOURCES_READER_DRIVER_CLASS_NAME: "org.postgresql.Driver"
   DATASOURCES_READER_USERNAME: "corr"
 

@@ -47,7 +47,11 @@ doctor: ## Check required tooling is installed
 
 # ----------------------------- k3d distributed harness -----------------------
 build: ## Build the multi-role app image (publisher/business/report)
-	docker build -t $(IMAGE) -f $(DOCKERFILE) $(BUILD_CTX)
+	# --provenance=false keeps a SINGLE-manifest image. BuildKit's default provenance attestations produce a
+	# manifest LIST, which `k3d image import` (ctr) cannot import — it fails with
+	# "ctr: content digest sha256:... not found" and the app pods then ImagePullBackOff. See
+	# deploy/k3s/README.md (troubleshooting) and ADR-0007.
+	docker build --provenance=false -t $(IMAGE) -f $(DOCKERFILE) $(BUILD_CTX)
 
 pull-deps: ## Pull MQ/Postgres/busybox images locally (so import stays offline)
 	docker pull $(MQ_IMAGE)
@@ -59,8 +63,12 @@ cluster-up: ## Create the k3d cluster (idempotent)
 	  && echo "cluster '$(CLUSTER)' already exists" \
 	  || k3d cluster create $(CLUSTER) --wait --timeout 240s
 
-import: ## Import app + MQ + Postgres + busybox images into the cluster (no registry)
-	k3d image import $(IMAGE) $(MQ_IMAGE) $(PG_IMAGE) $(BB_IMAGE) -c $(CLUSTER)
+import: ## Import app + MQ + Postgres + busybox images into the cluster's k8s.io namespace (no registry)
+	# `k3d image import` can report success yet NOT land a locally-built image in the node's containerd
+	# `k8s.io` namespace on WSL2 (crictl shows nothing → ImagePullBackOff). `docker save | ctr -n k8s.io
+	# images import -` writes straight into the namespace the kubelet reads — reliable. Single server node.
+	docker save $(IMAGE) $(MQ_IMAGE) $(PG_IMAGE) $(BB_IMAGE) \
+	  | docker exec -i k3d-$(CLUSTER)-server-0 ctr -n k8s.io images import -
 
 deploy: ## Apply the k3s manifests (kustomize)
 	$(KUBECTL) apply -k $(K8S_DIR)
