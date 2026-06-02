@@ -102,41 +102,54 @@ by `report_drain / 2` ≈ **~12–15 msg/s** on this box.
 
 ### 4.3 Sustainable baseline run — steady state — **PASS** ✅
 
-Run: `make load LOAD_PUB_REPLICAS=1 LOAD_INTERVAL_MS=150 LOAD_COUNT_PER_POD=1500` then `make load-verify`
-(all checks passed, exit 0).
+Headline run: `make load LOAD_PUB_REPLICAS=2 LOAD_INTERVAL_MS=150 LOAD_COUNT_PER_POD=2000` then
+`make load-verify` — **all checks passed** (exit 0). (An earlier, more conservative run at ~5 msg/s,
+N=1,500, passed identically — zero loss, p99 16/27 ms.)
 
 | Field | Value |
 | --- | --- |
-| Configured | 1 publisher @ 150 ms inter-send, N = 1,500 |
-| Achieved offered rate | **~5 msg/s** over 255 s — steady state, **no backlog** |
-| COA completeness | **1,500 / 1,500** — zero loss ✅ |
-| COD completeness | **1,500 / 1,500** — zero loss ✅ |
+| Configured | 2 publishers @ 150 ms inter-send, N = 4,000 |
+| Achieved offered rate | **~11 msg/s** over 338 s — steady state, **no backlog** |
+| COA completeness | **4,000 / 4,000** — zero loss ✅ |
+| COD completeness | **4,000 / 4,000** — zero loss ✅ |
 | Exactly-once (dup rows) | **0** ✅ |
 | pending residual | **0** — fully reconciled ✅ |
-| COA latency p50 / p95 / p99 | **9 / 13 / 16 ms** ✅ (ceiling 5000) |
-| COD latency p50 / p95 / p99 | **15 / 22 / 27 ms** ✅ (ceiling 15000) |
+| COA latency p50 / p95 / p99 | **5 / 11 / 15 ms** ✅ (ceiling 5000) |
+| COD latency p50 / p95 / p99 | **9 / 19 / 25 ms** ✅ (ceiling 15000) |
 | DLQ CURDEPTH | **0** ✅ |
 | IPPROCS business / report | 3 / 2 — competing consumers ✅ |
-| NULL `sent_at` excluded | 354 / 3,000 rows (~24 %) — see note |
-| Ceilings cleared by | ~310× (COA) / ~555× (COD) margin |
+| NULL `sent_at` excluded | 346 / 8,000 rows (~4 %) — COA-before-register low-tail (see note) |
+| Ceilings cleared by | ~330× (COA) / ~600× (COD) margin |
 
-**Note — NULL `sent_at` is HIGHER at low rate (~24 % here vs 0.9 % under overload §4.2).** Counter-intuitive
-but correct: COA latency is ~10 ms, so at a low, un-backlogged rate the report-consumer picks up the COA
-*before* the publisher's `register()` commits → its `sent_at` is unknown → excluded. Under overload the
-report-consumer is backlogged, so by the time it processes a COA, `register()` has long committed. These are
-near-zero-latency low-tail samples, so excluding them keeps p95/p99 honest (it cannot inflate them). COD
-`sent_at` is essentially always present (COD comes later, after `register()`).
+**Work distribution across replicas (AC3 — "exactly once *across replicas*").** `IPPROCS>1` shows the
+consumers are *connected*; per-replica processing counts show work is genuinely **distributed**, not
+funnelled to one pod:
 
-**Contrast that proves the saturation point:** steady-state **pending=0, DLQ=0, p99≈20 ms** at ~5 msg/s vs
+| Role | Per-pod work | Split |
+| --- | --- | --- |
+| report-consumer (×2) | 1,727 / 1,723 audit rows persisted | ~50 / 50 |
+| business-consumer (×3) | 3,468 / 3,514 / 3,966 commits (CODs) | ~even thirds |
+
+(Per-pod log tallies; the near-even split confirms IBM MQ load-balanced each queue across the
+competing-consumer replicas — the evidence `IPPROCS` alone cannot give.)
+
+**Note — NULL `sent_at` shrinks as rate rises** (~4 % here vs ~12 % at 5 msg/s vs 0.9 % under overload
+§4.2). COA latency is ~5–15 ms, so at a low, un-backlogged rate the report-consumer often picks up the COA
+*before* the publisher's `register()` commits → `sent_at` unknown → excluded; as the rate rises, `register()`
+has committed first more often. These are near-zero-latency low-tail samples, so excluding them keeps
+p95/p99 honest (it cannot inflate them). COD `sent_at` is essentially always present (COD comes later).
+
+**Contrast that proves the saturation point:** steady-state **pending=0, DLQ=0, p99≈20 ms** at ~11 msg/s vs
 **pending=8,837, DLQ=5,000, p99≈100,000 ms** at 63 msg/s (§4.2). Same harness; the only difference is
-whether the offered rate stays under the report-drain capacity.
+whether the offered rate stays under the report-drain capacity. The sustainable ceiling is therefore
+**between ~11 (passes) and 63 (saturates) msg/s — estimated ~12–15 msg/s**.
 
 ## 5. Capacity-planning guidance (for users)
 
-- **Steady-state ceiling on this box:** **validated clean at ~5 msg/s** (zero loss, p99 16/27 ms — §4.3);
-  **saturates by 63 msg/s** (§4.2). The true ceiling lies between — estimated **~12–15 msg/s**,
-  **report-drain-bound** (not producer-, disk-, or network-bound); not bisected further. Drive above it and
-  the report queue backs up to `MAXDEPTH` → dead-letters + ~100 s latency.
+- **Steady-state ceiling on this box:** **validated clean at ~11 msg/s** (zero loss, p99 15/25 ms, work
+  split ~evenly across replicas — §4.3); **saturates by 63 msg/s** (§4.2). The true ceiling lies between —
+  estimated **~12–15 msg/s**, **report-drain-bound** (not producer-, disk-, or network-bound). Drive above
+  it and the report queue backs up to `MAXDEPTH` → dead-letters + ~100 s latency.
 - **The ~167 msg/s (~10k rpm) mandate is ~10× this dev box's as-built capacity.** Closing the gap needs,
   in priority order:
   1. **Eliminate connect-per-operation** — reuse a pooled / long-lived `JMSContext` on the producer *and*
