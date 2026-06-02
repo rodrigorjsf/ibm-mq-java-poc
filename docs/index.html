@@ -1466,13 +1466,20 @@ public DeliveryEvent handleReport(Message report) {
         String originalMessageId = pending.map(PendingMessage::messageId).orElse(correlationId);
 
         switch (type) {
-            case COA -&gt; correlationStore.markCoaReceived(correlationId);
-            case COD -&gt; {
-                correlationStore.markCodReceived(correlationId);
-                // COA+COD confirmados: entrega completa, remove a pendência.
-                correlationStore.findByMessageId(correlationId)
-                        .filter(PendingMessage::isFullyConfirmed)
-                        .ifPresent(p -&gt; correlationStore.remove(correlationId));
+            // Uma única chamada de alto nível por branch: CorrelationStore.recordReport(correlationId, type)
+            // compõe mark* + removeIfFullyConfirmed e devolve um ReconcileResult {outcome, pending}.
+            // Independente de ordem: qualquer um (COA/COD) que complete o par reconcilia (issue #26).
+            case COA, COD -&gt; {
+                ReconcileResult result = correlationStore.recordReport(correlationId, type);
+                switch (result.outcome()) {
+                    case COMPLETED -&gt; LOG.info(&quot;[stage=RECONCILE] Delivery complete (COA+COD): reconciled, &quot;
+                            + &quot;pendingRemaining={}&quot;, correlationStore.pendingCount());
+                    // ORPHAN = um COA/COD sem registro prévio (orphan-on-redelivery, ou nunca registrado
+                    // aqui): superficializado como WARN + um contador de taxa de órfãos, NÃO varrido.
+                    case ORPHAN -&gt; LOG.warn(&quot;[stage=ORPHAN] Orphan {} report (no prior registration): &quot;
+                            + &quot;correlId={}, orphanReportCount={}&quot;, type, correlationId, orphanReportCount.incrementAndGet());
+                    case RECORDED -&gt; { /* Mensagem conhecida, par ainda não completo. */ }
+                }
             }
             case EXPIRATION, NAN, EXCEPTION -&gt; LOG.warn(&quot;Relatorio de problema: tipo={}, feedback={}, correlId={}&quot;,
                     type, feedback, correlationId);
@@ -1484,7 +1491,14 @@ public DeliveryEvent handleReport(Message report) {
     }
 }
 </code></pre></div>
-<div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Atenção — <code>JMS_IBM_Feedback</code> vs. <code>JMS_IBM_MQMD_Feedback</code>.</strong> Use <code>WMQConstants.JMS_IBM_FEEDBACK</code>: é a propriedade
+<blockquote><p>A reconciliação no nível do store agora vive atrás de um único método: <code>CorrelationStore.recordReport</code>
+é um método <code>default</code> na interface que compõe os primitivos existentes (<code>findByMessageId</code>, <code>markCoa/
+CodReceived</code>, <code>removeIfFullyConfirmed</code>) e devolve um <code>ReconcileResult { Outcome outcome, PendingMessage
+pending }</code> com <code>Outcome ∈ {RECORDED, COMPLETED, ORPHAN}</code>. Por ser um método <code>default</code>, tanto o adaptador
+in-memory quanto o JDBC herdam a mesma lógica de reconciliação sobre os seus próprios primitivos — o store
+JDBC <strong>não</strong> é reescrito (seguro ao ADR-0005). O consumer deriva <code>originalMessageId</code>/<code>sentAt</code> para o
+<code>DeliveryEvent</code> a partir do <code>findByMessageId</code> pré-switch, e analisa o <code>outcome</code> apenas para logging + a
+métrica de taxa de órfãos.</p></blockquote><div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Atenção — <code>JMS_IBM_Feedback</code> vs. <code>JMS_IBM_MQMD_Feedback</code>.</strong> Use <code>WMQConstants.JMS_IBM_FEEDBACK</code>: é a propriedade
 <strong>canônica e sempre populada</strong> para relatórios. A <code>JMS_IBM_MQMD_Feedback</code> só vem preenchida quando
 <code>WMQ_MQMD_READ_ENABLED=true</code> no destino. Usar a errada faz o feedback chegar como <code>0</code> e <strong>todo relatório virar <code>UNKNOWN</code></strong>.</p></div></div>
 <p>O roteamento puro (sem dependência de broker — testável em unit) está em <code>ReportFeedbackRouter.classify</code>:</p>
@@ -3147,13 +3161,20 @@ public DeliveryEvent handleReport(Message report) {
         String originalMessageId = pending.map(PendingMessage::messageId).orElse(correlationId);
 
         switch (type) {
-            case COA -&gt; correlationStore.markCoaReceived(correlationId);
-            case COD -&gt; {
-                correlationStore.markCodReceived(correlationId);
-                // COA+COD confirmed: delivery complete, remove the pending entry.
-                correlationStore.findByMessageId(correlationId)
-                        .filter(PendingMessage::isFullyConfirmed)
-                        .ifPresent(p -&gt; correlationStore.remove(correlationId));
+            // One higher-level call per branch: CorrelationStore.recordReport(correlationId, type)
+            // composes mark* + removeIfFullyConfirmed and returns a ReconcileResult {outcome, pending}.
+            // Order-independent: whichever of COA/COD completes the pair reconciles (issue #26).
+            case COA, COD -&gt; {
+                ReconcileResult result = correlationStore.recordReport(correlationId, type);
+                switch (result.outcome()) {
+                    case COMPLETED -&gt; LOG.info(&quot;[stage=RECONCILE] Delivery complete (COA+COD): reconciled, &quot;
+                            + &quot;pendingRemaining={}&quot;, correlationStore.pendingCount());
+                    // ORPHAN = a COA/COD with no prior registration (orphan-on-redelivery, or never
+                    // registered here): surfaced as a WARN + an orphan-rate counter, NOT swept.
+                    case ORPHAN -&gt; LOG.warn(&quot;[stage=ORPHAN] Orphan {} report (no prior registration): &quot;
+                            + &quot;correlId={}, orphanReportCount={}&quot;, type, correlationId, orphanReportCount.incrementAndGet());
+                    case RECORDED -&gt; { /* Known message, pair not yet complete. */ }
+                }
             }
             case EXPIRATION, NAN, EXCEPTION -&gt; LOG.warn(&quot;Relatorio de problema: tipo={}, feedback={}, correlId={}&quot;,
                     type, feedback, correlationId);
@@ -3165,7 +3186,14 @@ public DeliveryEvent handleReport(Message report) {
     }
 }
 </code></pre></div>
-<div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Caution — <code>JMS_IBM_Feedback</code> vs. <code>JMS_IBM_MQMD_Feedback</code>.</strong> Use <code>WMQConstants.JMS_IBM_FEEDBACK</code>: it is the
+<blockquote><p>The store-level reconciliation now lives behind one method: <code>CorrelationStore.recordReport</code> is a
+<code>default</code> method on the interface that composes the existing primitives (<code>findByMessageId</code>, <code>markCoa/
+CodReceived</code>, <code>removeIfFullyConfirmed</code>) and returns a <code>ReconcileResult { Outcome outcome, PendingMessage
+pending }</code> with <code>Outcome ∈ {RECORDED, COMPLETED, ORPHAN}</code>. Because it is a <code>default</code> method, both the
+in-memory and JDBC adapters inherit identical reconciliation logic on top of their own primitives — the
+JDBC store is <strong>not</strong> rewritten (ADR-0005-safe). The consumer derives <code>originalMessageId</code>/<code>sentAt</code> for the
+<code>DeliveryEvent</code> from the pre-switch <code>findByMessageId</code>, and switches on <code>outcome</code> only for logging + the
+orphan-rate metric.</p></blockquote><div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Caution — <code>JMS_IBM_Feedback</code> vs. <code>JMS_IBM_MQMD_Feedback</code>.</strong> Use <code>WMQConstants.JMS_IBM_FEEDBACK</code>: it is the
 <strong>canonical and always-populated</strong> property for reports. <code>JMS_IBM_MQMD_Feedback</code> is only filled in when
 <code>WMQ_MQMD_READ_ENABLED=true</code> on the destination. Using the wrong one makes the feedback arrive as <code>0</code> and <strong>turns every report into <code>UNKNOWN</code></strong>.</p></div></div>
 <p>The pure routing (no broker dependency — unit-testable) lives in <code>ReportFeedbackRouter.classify</code>:</p>
