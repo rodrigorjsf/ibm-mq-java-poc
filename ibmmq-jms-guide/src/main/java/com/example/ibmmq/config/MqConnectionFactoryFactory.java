@@ -4,6 +4,8 @@ import com.ibm.msg.client.wmq.WMQConstants;
 import com.ibm.mq.jms.MQConnectionFactory;
 import io.micronaut.context.annotation.Bean;
 import io.micronaut.context.annotation.Factory;
+import io.micronaut.context.annotation.Primary;
+import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.slf4j.Logger;
@@ -12,16 +14,37 @@ import org.slf4j.LoggerFactory;
 import javax.jms.JMSException;
 
 /**
- * Fabrica Micronaut que produz a {@link javax.jms.ConnectionFactory} JMS usada por toda a aplicacao.
+ * Micronaut factory that produces the TWO role-based JMS connection factories used across the
+ * application (ADR-0006 — role-based connection factories).
  *
- * <p>Estrutura: um {@link MQConnectionFactory} (cliente IBM MQ, modo CLIENT) configurado via
- * {@code WMQConstants}, embrulhado por um {@link JmsPoolConnectionFactory} (pool de conexoes javax).
- * O pool reaproveita conexoes/sessions, essencial em ambientes com muitos {@code createContext}.</p>
+ * <p>Both factories share the same base {@link MQConnectionFactory} (IBM MQ client, CLIENT mode)
+ * built by {@link #buildMqConnectionFactory(MqProperties)}, but they differ in pooling and lifecycle
+ * because the producer and consumer have opposite connection profiles:</p>
  *
- * <p>O bean do pool tem {@code preDestroy="stop"} para fechar as conexoes no shutdown do contexto.</p>
+ * <ul>
+ *   <li><b>Producer</b> ({@link #PRODUCER}) — a {@link JmsPoolConnectionFactory} (pooled). The send
+ *       path opens a short-lived {@code JMSContext} per send, so it benefits from pooling physical
+ *       connections/sessions. {@code @Primary} so the still-unqualified {@code javax.jms.ConnectionFactory}
+ *       injections in the entry points resolve here without a {@code NonUniqueBeanException}. The pool
+ *       bean carries {@code preDestroy="stop"} to close its connections at context shutdown.</li>
+ *   <li><b>Consumer</b> ({@link #CONSUMER}) — the raw, NON-pooled {@link MQConnectionFactory}. The
+ *       consumer adapter holds long-lived {@code JMSContext}s for the pod's life (no per-op churn to
+ *       pool), so pooling adds no value and would only obscure the lifecycle. {@code MQConnectionFactory}
+ *       has no {@code stop()} method, so this bean has NO {@code preDestroy} — shutdown is the adapter's
+ *       own {@code @PreDestroy}.</li>
+ * </ul>
+ *
+ * <p>(The single-queue grandfathered helper JavaDoc below this class stays pt-BR per ADR-0004; new
+ * documentation here is English.)</p>
  */
 @Factory
 public class MqConnectionFactoryFactory {
+
+    /** Qualifier for the pooled producer {@code ConnectionFactory} bean (ADR-0006). */
+    public static final String PRODUCER = "producer";
+
+    /** Qualifier for the dedicated, non-pooled consumer {@code MQConnectionFactory} bean (ADR-0006). */
+    public static final String CONSUMER = "consumer";
 
     private static final Logger LOG = LoggerFactory.getLogger(MqConnectionFactoryFactory.class);
 
@@ -105,25 +128,60 @@ public class MqConnectionFactoryFactory {
     }
 
     /**
-     * Produz a {@link javax.jms.ConnectionFactory} efetivamente injetada — o pool envolvendo o CF do MQ.
+     * Pooled PRODUCER factory (ADR-0006). The send path opens a short-lived {@code JMSContext} per send,
+     * so a pool of physical connections/sessions is the right profile here.
      *
-     * <p>{@code @Bean(preDestroy = "stop")}: ao destruir o contexto, o Micronaut chama
-     * {@link JmsPoolConnectionFactory#stop()}, fechando as conexoes do pool.</p>
+     * <p><b>{@code @Primary}</b> is load-bearing: the three entry points still inject the unqualified
+     * {@code javax.jms.ConnectionFactory}, and with two candidate factories present this is what makes
+     * those injections resolve to the producer instead of throwing {@code NonUniqueBeanException}.</p>
+     *
+     * <p><b>Concrete return type</b> ({@link JmsPoolConnectionFactory}, not the {@code ConnectionFactory}
+     * interface) so Micronaut can see the {@code stop()} method referenced by {@code preDestroy}; the bean
+     * is still injectable as {@code ConnectionFactory}.</p>
+     *
+     * <p><b>Sizing (AC2/AC3).</b> {@code maxConnections=2} per pod: under the project topology the
+     * QMgr-side {@code MAXINST} on the SVRCONN channel must satisfy
+     * {@code maxConnections × replicas ≤ MAXINST} — keep the per-pod connection count small so the
+     * fleet stays within {@code MAXINST} (the replica count is a deployment concern and is NOT hard-coded
+     * here). {@code maxSessionsPerConnection=10} so it stays {@code ≤ SHARECNV} (10): the SVRCONN channel
+     * multiplexes at most {@code SHARECNV} conversations per TCP socket, so requesting more sessions than
+     * that on one connection would exceed what the channel can carry. The previous code never set this and
+     * defaulted to 500, violating the {@code ≤ SHARECNV} bound.</p>
      */
     @Singleton
     @Bean(preDestroy = "stop")
-    public JmsPoolConnectionFactory connectionFactory(MqProperties props) throws JMSException {
-        // Tipo de retorno concreto (nao a interface ConnectionFactory) para que o Micronaut enxergue
-        // o metodo stop() referenciado em preDestroy. O bean continua injetavel como ConnectionFactory.
+    @Named(PRODUCER)
+    @Primary
+    public JmsPoolConnectionFactory producerConnectionFactory(MqProperties props) throws JMSException {
         MQConnectionFactory mqCf = buildMqConnectionFactory(props);
 
         JmsPoolConnectionFactory pool = new JmsPoolConnectionFactory();
-        // setConnectionFactory aceita Object (a interface javax.jms.ConnectionFactory).
+        // setConnectionFactory accepts the javax.jms.ConnectionFactory interface.
         pool.setConnectionFactory(mqCf);
-        // Limita o numero de conexoes fisicas; sessions sao multiplexadas por conexao.
-        pool.setMaxConnections(8);
+        // Physical connections per pod — keep small so maxConnections × replicas ≤ MAXINST.
+        pool.setMaxConnections(2);
+        // Sessions multiplexed per connection — must be ≤ SHARECNV (10) negotiated on the SVRCONN channel.
+        pool.setMaxSessionsPerConnection(10);
 
-        LOG.info("JmsPoolConnectionFactory criado (maxConnections={})", 8);
+        LOG.info("[ADR-0006] Pooled PRODUCER ConnectionFactory created "
+                + "(maxConnections={}, maxSessionsPerConnection={})", 2, 10);
         return pool;
+    }
+
+    /**
+     * Dedicated, NON-pooled CONSUMER factory (ADR-0006). The consumer adapter holds long-lived
+     * {@code JMSContext}s for the pod's life, so there is no per-op connection churn to pool — pooling
+     * would add no value and only obscure the held-context lifecycle.
+     *
+     * <p>Returns the raw {@link MQConnectionFactory} directly: <b>no pool, and no</b>
+     * {@code @Bean(preDestroy = "stop")} — {@code MQConnectionFactory} has no {@code stop()} method, and
+     * shutdown of the held contexts is the consumer adapter's own {@code @PreDestroy}.</p>
+     */
+    @Singleton
+    @Named(CONSUMER)
+    public MQConnectionFactory consumerConnectionFactory(MqProperties props) throws JMSException {
+        MQConnectionFactory mqCf = buildMqConnectionFactory(props);
+        LOG.info("[ADR-0006] Dedicated non-pooled CONSUMER MQConnectionFactory created");
+        return mqCf;
     }
 }
