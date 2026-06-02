@@ -295,10 +295,11 @@ html[data-lang="en"] .lang-pane[data-lang="pt"]{display:none;}
 <li class="nav-h3"><a href="#34-nota-sobre-ccdt" class="nav-link" data-target="34-nota-sobre-ccdt">3.4 Nota sobre CCDT</a></li>
 <li class="nav-h2"><a href="#seção-4--implementação-prática-código-real-compilável" class="nav-link" data-target="seção-4--implementação-prática-código-real-compilável">Seção 4 — Implementação Prática (código real, compilável)</a></li>
 <li class="nav-h3"><a href="#41-bootstrap-micronaut--dependências-e-factory-do-pool" class="nav-link" data-target="41-bootstrap-micronaut--dependências-e-factory-do-pool">4.1 Bootstrap Micronaut — dependências e @Factory do pool</a></li>
-<li class="nav-h3"><a href="#42-producer--habilita-coacod-persiste-e-registra-a-correlação" class="nav-link" data-target="42-producer--habilita-coacod-persiste-e-registra-a-correlação">4.2 Producer — habilita COA/COD, persiste e registra a correlação</a></li>
-<li class="nav-h3"><a href="#43-consumer-de-negócio--o-get-destrutivo-dispara-o-cod" class="nav-link" data-target="43-consumer-de-negócio--o-get-destrutivo-dispara-o-cod">4.3 Consumer de negócio — o GET destrutivo dispara o COD</a></li>
-<li class="nav-h3"><a href="#44-consumer-de-relatórios--lê-o-feedback-classifica-e-correlaciona" class="nav-link" data-target="44-consumer-de-relatórios--lê-o-feedback-classifica-e-correlaciona">4.4 Consumer de relatórios — lê o Feedback, classifica e correlaciona</a></li>
-<li class="nav-h3"><a href="#45-store-de-correlação--em-memória-e-o-caminho-persistente" class="nav-link" data-target="45-store-de-correlação--em-memória-e-o-caminho-persistente">4.5 Store de correlação — em memória e o caminho persistente</a></li>
+<li class="nav-h3"><a href="#42-o-messaging-seam--portas-por-papel-e-envelopes-decodificados" class="nav-link" data-target="42-o-messaging-seam--portas-por-papel-e-envelopes-decodificados">4.2 O messaging seam — portas por papel e envelopes decodificados</a></li>
+<li class="nav-h3"><a href="#43-producer--habilita-coacod-persiste-e-registra-a-correlação" class="nav-link" data-target="43-producer--habilita-coacod-persiste-e-registra-a-correlação">4.3 Producer — habilita COA/COD, persiste e registra a correlação</a></li>
+<li class="nav-h3"><a href="#44-consumer-de-negócio--o-get-destrutivo-dispara-o-cod" class="nav-link" data-target="44-consumer-de-negócio--o-get-destrutivo-dispara-o-cod">4.4 Consumer de negócio — o GET destrutivo dispara o COD</a></li>
+<li class="nav-h3"><a href="#45-consumer-de-relatórios--classifica-o-envelope-decodificado-e-correlaciona" class="nav-link" data-target="45-consumer-de-relatórios--classifica-o-envelope-decodificado-e-correlaciona">4.5 Consumer de relatórios — classifica o envelope decodificado e correlaciona</a></li>
+<li class="nav-h3"><a href="#46-store-de-correlação--em-memória-e-o-caminho-persistente" class="nav-link" data-target="46-store-de-correlação--em-memória-e-o-caminho-persistente">4.6 Store de correlação — em memória e o caminho persistente</a></li>
 <li class="nav-h2"><a href="#seção-5--testes-e-resiliência-ambiente-real" class="nav-link" data-target="seção-5--testes-e-resiliência-ambiente-real">Seção 5 — Testes e Resiliência (ambiente real)</a></li>
 <li class="nav-h3"><a href="#51-estratégia-de-testes-híbrida" class="nav-link" data-target="51-estratégia-de-testes-híbrida">5.1 Estratégia de testes híbrida</a></li>
 <li class="nav-h3"><a href="#52-gotchas-reais-que-encontramos-e-como-corrigir--ouro-para-o-leitor" class="nav-link" data-target="52-gotchas-reais-que-encontramos-e-como-corrigir--ouro-para-o-leitor">5.2 Gotchas reais que encontramos (e como corrigir) — ouro para o leitor</a></li>
@@ -340,10 +341,11 @@ html[data-lang="en"] .lang-pane[data-lang="pt"]{display:none;}
 <li class="nav-h3"><a href="#34-note-on-ccdt" class="nav-link" data-target="34-note-on-ccdt">3.4 Note on CCDT</a></li>
 <li class="nav-h2"><a href="#section-4--practical-implementation-real-compilable-code" class="nav-link" data-target="section-4--practical-implementation-real-compilable-code">Section 4 — Practical Implementation (real, compilable code)</a></li>
 <li class="nav-h3"><a href="#41-micronaut-bootstrap--dependencies-and-the-pool-factory" class="nav-link" data-target="41-micronaut-bootstrap--dependencies-and-the-pool-factory">4.1 Micronaut bootstrap — dependencies and the pool @Factory</a></li>
-<li class="nav-h3"><a href="#42-producer--enables-coacod-persists-and-records-the-correlation" class="nav-link" data-target="42-producer--enables-coacod-persists-and-records-the-correlation">4.2 Producer — enables COA/COD, persists, and records the correlation</a></li>
-<li class="nav-h3"><a href="#43-business-consumer--the-destructive-get-triggers-the-cod" class="nav-link" data-target="43-business-consumer--the-destructive-get-triggers-the-cod">4.3 Business consumer — the destructive GET triggers the COD</a></li>
-<li class="nav-h3"><a href="#44-report-consumer--reads-the-feedback-classifies-and-correlates" class="nav-link" data-target="44-report-consumer--reads-the-feedback-classifies-and-correlates">4.4 Report consumer — reads the Feedback, classifies, and correlates</a></li>
-<li class="nav-h3"><a href="#45-correlation-store--in-memory-and-the-persistent-path" class="nav-link" data-target="45-correlation-store--in-memory-and-the-persistent-path">4.5 Correlation store — in-memory and the persistent path</a></li>
+<li class="nav-h3"><a href="#42-the-messaging-seam--role-based-ports-and-decoded-envelopes" class="nav-link" data-target="42-the-messaging-seam--role-based-ports-and-decoded-envelopes">4.2 The messaging seam — role-based ports and decoded envelopes</a></li>
+<li class="nav-h3"><a href="#43-producer--enables-coacod-persists-and-records-the-correlation" class="nav-link" data-target="43-producer--enables-coacod-persists-and-records-the-correlation">4.3 Producer — enables COA/COD, persists, and records the correlation</a></li>
+<li class="nav-h3"><a href="#44-business-consumer--the-destructive-get-triggers-the-cod" class="nav-link" data-target="44-business-consumer--the-destructive-get-triggers-the-cod">4.4 Business consumer — the destructive GET triggers the COD</a></li>
+<li class="nav-h3"><a href="#45-report-consumer--classifies-the-decoded-envelope-and-correlates" class="nav-link" data-target="45-report-consumer--classifies-the-decoded-envelope-and-correlates">4.5 Report consumer — classifies the decoded envelope and correlates</a></li>
+<li class="nav-h3"><a href="#46-correlation-store--in-memory-and-the-persistent-path" class="nav-link" data-target="46-correlation-store--in-memory-and-the-persistent-path">4.6 Correlation store — in-memory and the persistent path</a></li>
 <li class="nav-h2"><a href="#section-5--testing-and-resilience-real-environment" class="nav-link" data-target="section-5--testing-and-resilience-real-environment">Section 5 — Testing and Resilience (real environment)</a></li>
 <li class="nav-h3"><a href="#51-hybrid-testing-strategy" class="nav-link" data-target="51-hybrid-testing-strategy">5.1 Hybrid testing strategy</a></li>
 <li class="nav-h3"><a href="#52-real-gotchas-we-hit-and-how-to-fix-them--gold-for-the-reader" class="nav-link" data-target="52-real-gotchas-we-hit-and-how-to-fix-them--gold-for-the-reader">5.2 Real gotchas we hit (and how to fix them) — gold for the reader</a></li>
@@ -1217,24 +1219,42 @@ auto-recuperação, até alguém fazer redeploy com o novo host.</p></div></div>
 &lt;scope&gt;compile&lt;/scope&gt;
 &lt;/dependency&gt;
 </code></pre></div>
-<p>A <code>@Factory</code> produz a <code>ConnectionFactory</code> que toda a aplicação injeta: um <code>MQConnectionFactory</code> (cliente IBM MQ) <strong>embrulhado</strong> por um <code>JmsPoolConnectionFactory</code> (pool). O pool reaproveita conexões/sessions — essencial onde se faz
-muitos <code>createContext</code>:</p>
+<p>A <code>@Factory</code> produz as <strong>duas connection factories por papel</strong> da ADR-0006, não um pool único compartilhado — o
+producer e o consumer têm ciclos de vida de conexão opostos (<code>send</code> curto e em rajada vs. uma conexão de consumer
+longeva por pod), e um único pool não consegue ser ajustado para ambos. As duas embrulham o mesmo
+<code>MQConnectionFactory</code> base (cliente IBM MQ, construído na §3.2), mas diferem em pooling e ciclo de vida. A factory
+<code>@Named(PRODUCER)</code> é <code>@Primary</code>, então os entry points que ainda injetam um <code>javax.jms.ConnectionFactory</code>
+não-qualificado resolvem para ela sem um <code>NonUniqueBeanException</code>:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/config/MqConnectionFactoryFactory.java
-@Singleton
-@Bean(preDestroy = &quot;stop&quot;) // ao destruir o contexto, o pool é fechado (stop()).
-public JmsPoolConnectionFactory connectionFactory(MqProperties props) throws JMSException {
-    MQConnectionFactory mqCf = buildMqConnectionFactory(props);
+public static final String PRODUCER = &quot;producer&quot;;
+public static final String CONSUMER = &quot;consumer&quot;;
 
+// Lado PRODUCER — POOLED. O send abre um JMSContext curto por send, então um pool de conexões/sessions
+// físicas é o perfil certo. @Primary faz as injeções de ConnectionFactory ainda não-qualificadas
+// resolverem aqui; preDestroy=&quot;stop&quot; fecha o pool no shutdown.
+@Singleton
+@Bean(preDestroy = &quot;stop&quot;)
+@Named(PRODUCER)
+@Primary
+public JmsPoolConnectionFactory producerConnectionFactory(MqProperties props) throws JMSException {
     JmsPoolConnectionFactory pool = new JmsPoolConnectionFactory();
-    pool.setConnectionFactory(mqCf);     // aceita a interface javax.jms.ConnectionFactory
-    pool.setMaxConnections(8);           // limita conexões físicas; sessions são multiplexadas
-    // maxSessionsPerConnection fica no default do pooled-jms (500) aqui; veja o deep dive
-    // abaixo para quando e como ajustá-lo (mantenha &lt;= o SHARECNV do canal).
+    pool.setConnectionFactory(buildMqConnectionFactory(props)); // o CF base construído na §3.2
+    pool.setMaxConnections(2);            // mantenha maxConnections × réplicas ≤ MAXINST
+    pool.setMaxSessionsPerConnection(10); // ≤ SHARECNV (10) negociado no canal SVRCONN
     return pool;
 }
+
+// Lado CONSUMER — NÃO-poolado. O adapter do consumer segura um JMSContext longevo pela vida do pod
+// (ADR-0006), então não há churn por operação para poolar. Sem preDestroy: MQConnectionFactory não tem
+// stop(); o adapter fecha seus contextos segurados no próprio @PreDestroy.
+@Singleton
+@Named(CONSUMER)
+public MQConnectionFactory consumerConnectionFactory(MqProperties props) throws JMSException {
+    return buildMqConnectionFactory(props);
+}
 </code></pre></div>
-<div class="callout callout-boa-pratica" role="note"><span class="callout-icon" aria-hidden="true">✅</span><div class="callout-body"><p><strong>Boa prática — sempre embrulhar o CF do MQ num pool.</strong> O <code>JmsPoolConnectionFactory</code> reusa conexões físicas e limita
-o número delas (<code>maxConnections</code>). <strong>Impacto:</strong> sob alta concorrência você não abre/fecha sockets TCP a cada mensagem.</p></div></div><div class="callout callout-ma-pratica" role="note"><span class="callout-icon" aria-hidden="true">❌</span><div class="callout-body"><p><strong>Má prática — <code>new MQConnectionFactory()</code> cru e abrir conexão por mensagem.</strong> Cada <code>createContext</code> abre uma conexão
+<div class="callout callout-boa-pratica" role="note"><span class="callout-icon" aria-hidden="true">✅</span><div class="callout-body"><p><strong>Boa prática — poolar o CF do producer (em rajada).</strong> O <code>JmsPoolConnectionFactory</code> reusa conexões físicas e limita
+o número delas (<code>maxConnections</code>). <strong>Impacto:</strong> sob alta concorrência o producer não abre/fecha um socket TCP a cada <code>send</code>. (O consumer longevo é o caso oposto — uma factory dedicada, não-poolada; veja "Um pool ou dois?" abaixo.)</p></div></div><div class="callout callout-ma-pratica" role="note"><span class="callout-icon" aria-hidden="true">❌</span><div class="callout-body"><p><strong>Má prática — <code>new MQConnectionFactory()</code> cru e abrir conexão por mensagem.</strong> Cada <code>createContext</code> abre uma conexão
 TCP nova ao QMgr. <strong>Sintoma observável:</strong> <em>latency</em> alta por causa do handshake repetido, esgotamento de
 sockets/threads, e o QMgr atingindo <code>MAXCHANNELS</code>/<code>MAXINST</code> (recusando conexões). Em pico, o serviço "trava" sem erro
 óbvio.</p></div></div>
@@ -1351,7 +1371,7 @@ sockets/threads, e o QMgr atingindo <code>MAXCHANNELS</code>/<code>MAXINST</code
 </tr>
 </tbody>
 </table></div>
-<p>É por isso que a topologia do mundo real de <strong>uma factory poolada para o publisher + um <code>MQConnectionFactory</code> cru para o consumer</strong> é sólida, não um cheiro — <em>desde que o consumer seja longevo</em>. Uma factory crua, não-poolada, é correta <strong>apenas</strong> para um consumer longevo; pareá-la com um consumer com churn faria um handshake de socket por mensagem. Os dois temas se encontram aqui: os parâmetros de <em>sizing</em> acima governam o pool do producer, enquanto a decisão de <em>topologia</em> governa se o consumer deve estar nesse pool. (Essa topologia role-based está registrada na ADR-0006; sua implementação é rastreada na issue #25.)</p>
+<p>É por isso que a topologia do mundo real de <strong>uma factory poolada para o publisher + um <code>MQConnectionFactory</code> cru para o consumer</strong> é sólida, não um cheiro — <em>desde que o consumer seja longevo</em>. Uma factory crua, não-poolada, é correta <strong>apenas</strong> para um consumer longevo; pareá-la com um consumer com churn faria um handshake de socket por mensagem. Os dois temas se encontram aqui: os parâmetros de <em>sizing</em> acima governam o pool do producer, enquanto a decisão de <em>topologia</em> governa se o consumer deve estar nesse pool. (Essa topologia role-based está registrada na ADR-0006 e é agora o <strong>default cabeado</strong> — as duas factories <code>@Named</code> mostradas na §4.1 acima; implementação rastreada na issue #25.)</p>
 <div class="callout callout-boa-pratica" role="note"><span class="callout-icon" aria-hidden="true">✅</span><div class="callout-body"><p><strong>Boa prática — factories por papel.</strong> Um <code>JmsPoolConnectionFactory</code> para o producer (dimensionado pelas regras acima) e uma factory <strong>dedicada</strong> para o consumer longevo. <strong>Impacto:</strong> cada lado é ajustado ao seu próprio ciclo de vida; a conexão longeva do consumer nunca rouba um slot do pool do producer.</p></div></div><div class="callout callout-ma-pratica" role="note"><span class="callout-icon" aria-hidden="true">❌</span><div class="callout-body"><p><strong>Má prática — um pool único usado cegamente para tudo, <em>com</em> um listener assíncrono nele.</strong> O pool é ajustado para uma carga enquanto serve duas opostas, e um <code>MessageListener</code> prende uma conexão poolada fora do controle do pool. <strong>Sintoma:</strong> um producer que bloqueia intermitentemente no checkout porque um consumer segura conexões pooladas, além dos cuidados de listener que o <code>pooled-jms</code> alerta. (Um pool único compartilhado só é aceitável quando <strong>ambos</strong> os lados fazem churn de contextos curtos e <strong>nenhum</strong> listener assíncrono é usado.)</p></div></div>
 <h4 id="pool-commit-e-idempotência--três-camadas-diferentes">Pool, commit e idempotência — três camadas diferentes</h4>
 <p>Uma confusão frequente é achar que a connection factory afeta de alguma forma o commit ou a idempotência. Não afeta. Esses três vivem em camadas diferentes, e a escolha da factory toca apenas a primeira:</p>
@@ -1383,81 +1403,209 @@ sockets/threads, e o QMgr atingindo <code>MAXCHANNELS</code>/<code>MAXINST</code
 </table></div>
 <p>Então trocar poolada ↔ crua, ou compartilhada ↔ por-papel, tem efeito <strong>zero</strong> sobre a semântica de commit ou a idempotência de entrega. A relação real é <em>inversa</em>: um pool — ou qualquer falha de conexão em volta do commit, como uma conexão invalidada no meio da transação — pode ser uma <strong>fonte</strong> de redelivery; o Correlation store é a <strong>defesa</strong> que torna esse redelivery inofensivo.</p>
 <div class="callout callout-nota" role="note"><span class="callout-icon" aria-hidden="true">ℹ️</span><div class="callout-body"><p><strong>Nota — o pool é uma <em>fonte</em> de duplicata, o store é a <em>defesa</em>.</strong> Não raciocine "o pool me dá exactly-once" — não dá. Exactly-once vem de um consumo transacionado mais um Correlation store idempotente; a factory só decide como conexões e sessions são criadas e reusadas.</p></div></div>
-<h3 id="42-producer--habilita-coacod-persiste-e-registra-a-correlação">4.2 Producer — habilita COA/COD, persiste e registra a correlação</h3>
+<h3 id="42-o-messaging-seam--portas-por-papel-e-envelopes-decodificados">4.2 O messaging seam — portas por papel e envelopes decodificados</h3>
+<p>A ADR-0008 move a fronteira JMS <strong>para fora dos entry points</strong> e para trás de <strong>duas portas por papel</strong>, uma por
+factory da ADR-0006. O producer e os dois consumers param de abrir seu próprio <code>JMSContext</code>; eles trocam
+<strong>envelopes de domínio decodificados</strong> com as portas, e <em>todo</em> o tratamento <code>javax.jms</code> vive dentro dos adapters.
+Dois ganhos: os entry points ficam agnósticos de broker (testáveis sem MQ), e cada porta é ajustada ao ciclo de
+vida da sua factory — <code>send</code> curto e poolado vs. uma conexão de receive longeva e segurada por pod.</p>
+<pre class="mermaid">flowchart LR
+  P[&quot;BusinessMessageProducer&quot;]:::mod
+  BC[&quot;BusinessMessageConsumer&quot;]:::mod
+  RC[&quot;ReportMessageConsumer&lt;br/&gt;classifica + reconcilia&quot;]:::mod
+
+  SP{{&quot;SendPort&lt;br/&gt;send(envelope) → messageId&quot;}}:::port
+  RP{{&quot;ReceivePort&lt;br/&gt;receiveWithinUnitOfWork(dest, timeout, handler)&quot;}}:::port
+
+  PA[&quot;adapter pooled-JMS&lt;br/&gt;(factory de producer poolada)&quot;]:::prod
+  CA[&quot;adapter pooled-JMS&lt;br/&gt;(factory de consumer dedicada e longeva)&quot;]:::prod
+  FAKE[&quot;fake em memória&lt;br/&gt;COA-on-put / COD-on-commit,&lt;br/&gt;CorrelId == MessageId&quot;]:::fake
+
+  P e1@--&gt; SP
+  BC e2@--&gt; RP
+  RC e3@--&gt; RP
+  SP --&gt; PA
+  RP --&gt; CA
+  SP -. testes .-&gt; FAKE
+  RP -. testes .-&gt; FAKE
+
+  e1@{ animate: true }
+  e2@{ animate: true }
+  e3@{ animate: true }
+
+  classDef mod fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+  classDef port fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+  classDef prod fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+  classDef fake fill:#e3d7ef,stroke:#7a5a9a,color:#1f2430;
+</pre>
+<p>A <strong><code>SendPort</code></strong> monta sobre a factory de producer poolada; a <strong><code>ReceivePort</code></strong> monta sobre a factory de consumer
+dedicada e longeva, compartilhada pelo consumer de negócio e pelo consumer de relatórios. Os contratos são
+minúsculos e livres de JMS:</p>
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/{SendPort,ReceivePort}.java
+public interface SendPort {
+    // Devolve o messageId atribuído (o CorrelationId do relatório sob MQRO_COPY_MSG_ID_TO_CORREL_ID).
+    String send(OutboundMessage message);
+}
+
+public interface ReceivePort {
+    // Consumo de negócio numa unidade de trabalho transacionada: commit no retorno normal do handler
+    // (libera o COD), rollback ao lançar (sem COD); null no timeout.
+    String receiveWithinUnitOfWork(String queueName, long timeoutMillis, UnitOfWorkHandler handler);
+    // Recebe relatório sob AUTO_ACKNOWLEDGE; o adapter aplica ?mdReadEnabled=true e decodifica o MQMD.
+    ReportEnvelope receiveReport(String queueName, long timeoutMillis);
+}
+</code></pre></div>
+<p>Os <strong>envelopes decodificados</strong> carregam exatamente o que o domínio precisa — nenhum <code>javax.jms.Message</code> jamais
+cruza o seam:</p>
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/{OutboundMessage,ReportEnvelope}.java
+// Outbound: payload + businessKey + opções de report + replyTo + persistência (nomes de fila SIMPLES; o adapter
+// adiciona o prefixo queue:/// e monta o TextMessage / JMS_IBM_REPORT_* / DeliveryMode).
+public record OutboundMessage(String businessKey, String payload, String destinationQueue,
+        String replyToQueue, boolean requestCoa, boolean requestCod, DeliveryPersistence persistence) { }
+
+// Relatório inbound: o feedback code já extraído, o correlationId, o body, e os seis valores MQMD recuperados
+// (issue #19) — um record totalmente livre de JMS sobre o qual o consumer de relatórios classifica e reconcilia.
+public record ReportEnvelope(int feedbackCode, String correlationId, String body, ReportDescriptor descriptor) { }
+</code></pre></div>
+<p>Cada porta tem <strong>dois adapters</strong>: o de produção <code>PooledJms{Send,Receive}Adapter</code> — as únicas classes que tocam
+<code>javax.jms</code>, cabeadas por default — e um <strong>fake em memória</strong> (<code>InMemory{Send,Receive}Port</code> sobre <code>InMemoryBroker</code>,
+selecionado por <code>messaging.adapter=fake</code>). O fake é o <em>ponto</em> do seam: ele modela a causalidade de relatórios do
+QMgr fielmente — um send enfileira o <strong>COA on put (259)</strong>, um consumo destrutivo commitado enfileira o <strong>COD on
+commit (260)</strong>, um rollback não gera <strong>COD nenhum</strong>, e ambos os relatórios carregam <code>CorrelationId == messageId
+original</code> (espelhando <code>MQRO_COPY_MSG_ID_TO_CORREL_ID</code>). Isso deixa toda a cadeia produzir → consumir →
+receber-relatório → reconciliar rodar como um teste unitário rápido <strong>sem broker</strong>, enquanto o
+<code>CoaCodEndToEndIT</code> (Testcontainers) dirige os <em>mesmos</em> entry points pelos adapters pooled-JMS contra um MQ real —
+então a fidelidade do fake é limitada por um teste de broker real.</p>
+<div class="callout callout-nota" role="note"><span class="callout-icon" aria-hidden="true">ℹ️</span><div class="callout-body"><p><strong>Nota — o seam realoca o JMS; não muda a semântica.</strong> O commit ainda libera o COD; a idempotência ainda
+vem do Correlation store. O que mudou é <em>onde</em> o JMS vive (os adapters) e que os entry points agora falam
+envelopes decodificados. Veja a ADR-0008 (contrato do seam) e a ADR-0006 (factories).</p></div></div>
+<h3 id="43-producer--habilita-coacod-persiste-e-registra-a-correlação">4.3 Producer — habilita COA/COD, persiste e registra a correlação</h3>
+<p>O entry point não abre mais um <code>JMSContext</code> — ele monta um <code>OutboundMessage</code> decodificado e chama a <code>SendPort</code>:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/producer/BusinessMessageProducer.java
 public String send(String businessKey, String jsonPayload) {
-    // try-with-resources: o JMSContext (conexão+sessão) é fechado ao final.
-    // AUTO_ACKNOWLEDGE: cada send é confirmado imediatamente (o COA flui logo após o PUT).
+    // Envelope outbound decodificado: uma mensagem de negócio persistente com COA+COD solicitados, destinada à
+    // fila de relatórios (reply-to). Nenhum javax.jms aqui — o adapter da SendPort é dono de toda construção JMS.
+    OutboundMessage outbound = OutboundMessage.persistentWithCoaCod(
+            businessKey, jsonPayload, props.getBusinessQueue(), props.getReportQueue());
+
+    // A porta devolve o messageId atribuído. O default MQRO_COPY_MSG_ID_TO_CORREL_ID faz esse id virar o
+    // CorrelationId do relatório — então o registramos no CorrelationStore para fechar o ciclo quando ele chegar.
+    String messageId = sendPort.send(outbound);
+    correlationStore.register(PendingMessage.newlySent(messageId, businessKey, jsonPayload));
+    return messageId;
+}
+</code></pre></div>
+<p>Todo o JMS que vivia aqui agora vive no adapter de produção — a única classe do lado do send que toca
+<code>javax.jms</code>, puxando um contexto curto da <strong>factory de producer poolada</strong> (ADR-0006):</p>
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/PooledJmsSendAdapter.java
+@Override
+public String send(OutboundMessage message) {
+    // JMSContext curto da factory de producer POOLED (@Named(PRODUCER)); devolvido ao pool no close.
     try (JMSContext context = connectionFactory.createContext(JMSContext.AUTO_ACKNOWLEDGE)) {
-
-        Queue businessQueue = context.createQueue(&quot;queue:///&quot; + props.getBusinessQueue());
-        Queue reportQueue = context.createQueue(&quot;queue:///&quot; + props.getReportQueue());
-
-        TextMessage message = context.createTextMessage(jsonPayload);
-
-        // JMSReplyTo: PARA ONDE o QMgr enviará COA/COD.
-        message.setJMSReplyTo(reportQueue);
-
+        TextMessage jmsMessage = context.createTextMessage(message.payload());
+        // JMSReplyTo: PARA ONDE o QMgr entrega COA/COD. O adapter adiciona o prefixo queue:///.
+        jmsMessage.setJMSReplyTo(context.createQueue(&quot;queue:///&quot; + message.replyToQueue()));
         // Habilita os relatórios: campo UPPER_SNAKE (WMQConstants), valor inteiro MQRO_* (MQConstants).
-        message.setIntProperty(WMQConstants.JMS_IBM_REPORT_COA, MQConstants.MQRO_COA);
-        message.setIntProperty(WMQConstants.JMS_IBM_REPORT_COD, MQConstants.MQRO_COD);
+        if (message.requestCoa()) jmsMessage.setIntProperty(WMQConstants.JMS_IBM_REPORT_COA, MQConstants.MQRO_COA);
+        if (message.requestCod()) jmsMessage.setIntProperty(WMQConstants.JMS_IBM_REPORT_COD, MQConstants.MQRO_COD);
 
         JMSProducer producer = context.createProducer();
-        // PERSISTENT: a mensagem (e, por herança, os relatórios) sobrevive a restart do QMgr.
-        producer.setDeliveryMode(DeliveryMode.PERSISTENT);
-        producer.send(businessQueue, message);
+        producer.setDeliveryMode(toJmsDeliveryMode(message.persistence())); // PERSISTENT → os relatórios herdam
+        producer.send(context.createQueue(&quot;queue:///&quot; + message.destinationQueue()), jmsMessage);
 
-        // O JMSMessageID só existe após o send. Default MQRO_COPY_MSG_ID_TO_CORREL_ID:
-        // este id vira o CorrelationId dos relatórios.
-        String messageId = message.getJMSMessageID();
-        correlationStore.register(PendingMessage.newlySent(messageId, businessKey, jsonPayload));
-        return messageId;
+        // O JMSMessageID só existe após o send — a chave de correlação dos futuros relatórios COA/COD.
+        return jmsMessage.getJMSMessageID();
     } catch (Exception e) {
-        throw new IllegalStateException(&quot;Falha ao enviar mensagem de negocio: &quot; + businessKey, e);
+        throw new IllegalStateException(&quot;Falha ao enviar mensagem de negocio: &quot; + message.businessKey(), e);
     }
 }
 </code></pre></div>
-<p>Pontos a observar: (1) o <code>JMSReplyTo</code> e as duas propriedades de report; (2) <code>DeliveryMode.PERSISTENT</code>; (3) o registro do
-<code>messageId</code> no <code>CorrelationStore</code> <strong>imediatamente após</strong> o <code>send</code> (antes que o relatório possa chegar).</p>
-<h3 id="43-consumer-de-negócio--o-get-destrutivo-dispara-o-cod">4.3 Consumer de negócio — o GET destrutivo dispara o COD</h3>
+<p>Pontos a observar: (1) o producer monta um <strong><code>OutboundMessage</code> decodificado</strong> e nunca toca <code>javax.jms</code> — o
+<code>JMSReplyTo</code>, as opções <code>JMS_IBM_REPORT_*</code>, o <code>DeliveryMode</code> e a resolução <code>queue:///</code> foram todos para dentro do
+<code>PooledJmsSendAdapter</code> (ADR-0008); (2) o adapter puxa seu contexto curto da <strong>factory de producer poolada</strong>
+(ADR-0006); (3) o <code>messageId</code> que a porta devolve é registrado no <code>CorrelationStore</code> <strong>imediatamente após</strong> o
+<code>send</code> (antes que o relatório possa chegar).</p>
+<h3 id="44-consumer-de-negócio--o-get-destrutivo-dispara-o-cod">4.4 Consumer de negócio — o GET destrutivo dispara o COD</h3>
+<p>O entry point não abre mais um <code>JMSContext</code> nem chama <code>commit()</code> — ele entrega um handler de unidade de trabalho
+à <code>ReceivePort</code>, que é dona do commit/rollback transacionado:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/consumer/BusinessMessageConsumer.java
 public String receiveOne(long timeoutMillis) {
-    // Contexto transacionado: o COD só fica visível na fila de relatórios após o commit.
-    try (JMSContext context = connectionFactory.createContext(JMSContext.SESSION_TRANSACTED)) {
-
-        Queue businessQueue = context.createQueue(&quot;queue:///&quot; + props.getBusinessQueue());
-        JMSConsumer consumer = context.createConsumer(businessQueue);
-
-        // GET destrutivo — remove a mensagem e (dado MQRO_COD na origem) agenda o COD.
-        Message message = consumer.receive(timeoutMillis);
-        if (message == null) {
-            return null; // timeout sem mensagem
-        }
-        String body = (message instanceof TextMessage tm) ? tm.getText() : &quot;(payload nao-texto)&quot;;
-
+    // Unidade de trabalho transacionada de posse da porta: ela commita no retorno normal do handler (liberando
+    // o COD) ou faz rollback ao lançar (a mensagem volta; sem COD). Nunca chamamos commit()/rollback() aqui.
+    String body = receivePort.receiveWithinUnitOfWork(props.getBusinessQueue(), timeoutMillis, consumedBody -&gt; {
+        LOG.info(&quot;[stage=CONSUME] Mensagem de negocio consumida (GET destrutivo): body={}&quot;, consumedBody);
         // ... processamento de negócio aqui ...
-
-        // Commit: confirma o consumo e LIBERA o COD. Em exceção, o rollback devolve a mensagem
-        // (e o COD NÃO é gerado).
-        context.commit();
-        return body;
-    } catch (Exception e) {
-        throw new IllegalStateException(&quot;Falha ao consumir mensagem de negocio&quot;, e);
+        return consumedBody;
+    });
+    if (body == null) {
+        return null; // timeout: nenhuma mensagem na janela (o handler nunca rodou)
     }
+    // A porta commitou no retorno normal do handler — o COD agora está liberado para a fila de relatórios.
+    LOG.info(&quot;[stage=COMMIT] Consumo confirmado (commit): COD liberado para a fila de relatorios&quot;);
+    return body;
 }
+</code></pre></div>
+<p>O adapter de recebimento segura <strong>um contexto <code>SESSION_TRANSACTED</code> longevo pela vida do pod</strong>, puxado da
+<strong>factory de consumer dedicada e não-poolada</strong> (ADR-0006). Ele é criado lazy, reusado entre polls, reconectado
+em falha e fechado no <code>@PreDestroy</code>:</p>
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/PooledJmsReceiveAdapter.java
+@Override
+public String receiveWithinUnitOfWork(String queueName, long timeoutMillis, UnitOfWorkHandler handler) {
+    JMSContext context = businessContext(); // contexto SESSION_TRANSACTED segurado (lazy; @Named(CONSUMER), não-poolado)
+    JMSConsumer consumer = context.createConsumer(context.createQueue(&quot;queue:///&quot; + queueName));
+
+    // GET destrutivo — remove a mensagem e (dado MQRO_COD no original) agenda o COD.
+    Message message = consumer.receive(timeoutMillis);
+    if (message == null) {
+        return null; // timeout — nada a commitar; o contexto segurado fica aberto para o próximo poll.
+    }
+    String body = (message instanceof TextMessage tm) ? tm.getText() : &quot;(payload nao-texto)&quot;;
+    try {
+        String result = handler.handle(body);
+        context.commit();   // confirma o consumo e LIBERA o COD para a fila de relatórios
+        return result;
+    } catch (Exception handlerFailure) {
+        context.rollback(); // a mensagem volta para a fila e o COD NÃO é gerado
+        throw new IllegalStateException(&quot;Unit-of-work handler failed — rolled back&quot;, handlerFailure);
+    }
+    // (uma falha JMS aqui derruba o contexto segurado para que a próxima chamada reconecte.)
+}
+
+@PreDestroy
+void close() { /* fecha os contextos de consumer longevos segurados no shutdown do pod (SIGTERM) */ }
 </code></pre></div>
 <div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Atenção — não há API JMS para "pedir o COD no consumo".</strong> O COD decorre <strong>automaticamente</strong> das opções de report
 já gravadas no MQMD pela mensagem original. O consumidor só precisa fazer o GET destrutivo e <strong>comitar</strong> — o QMgr cuida
-de gerar o COD.</p></div></div>
-<h3 id="44-consumer-de-relatórios--lê-o-feedback-classifica-e-correlaciona">4.4 Consumer de relatórios — lê o Feedback, classifica e correlaciona</h3>
-<p>O coração da reconciliação: ler <code>JMS_IBM_FEEDBACK</code>, classificar com <code>ReportFeedbackRouter</code> e correlacionar
-<code>CorrelationId → MessageId</code> original.</p>
+de gerar o COD.</p></div></div><div class="callout callout-nota" role="note"><span class="callout-icon" aria-hidden="true">ℹ️</span><div class="callout-body"><p><strong>Nota — o caminho de consumo perde o <code>messageId</code> no MDC (ADR-0008).</strong> O handler da unidade de trabalho vê
+apenas o <strong>body</strong> decodificado (<code>handle(String body)</code>), nunca o id da mensagem consumida, então as linhas
+<code>[stage=CONSUME]</code> / <code>[stage=COMMIT]</code> não conseguem vincular <code>messageId</code>/<code>correlationId</code> no MDC como o <code>PRODUCE</code>
+e o caminho de relatórios fazem. A correlação ponta-a-ponta é <strong>preservada</strong>: sob <code>MQRO_COPY_MSG_ID_TO_CORREL_ID</code>
+o <code>correlationId == messageId original</code> do relatório, então uma entrega ainda é grepável do PRODUCE até seu
+COA/COD. Alargar o seam para reexpor o id consumido foi rejeitado (quebraria o contrato da porta e o teste de
+fluxo sem broker); a lacuna limitada de log é o custo aceito.</p></div></div>
+<h3 id="45-consumer-de-relatórios--classifica-o-envelope-decodificado-e-correlaciona">4.5 Consumer de relatórios — classifica o envelope decodificado e correlaciona</h3>
+<p>O coração da reconciliação. O adapter de recebimento já extraiu o relatório para um <code>ReportEnvelope</code>
+decodificado; o consumer então classifica pelo feedback code e correlaciona <code>CorrelationId → MessageId</code> original
+— sem nunca tocar <code>javax.jms</code>. Primeiro, o <code>decode</code> do adapter (o único lugar onde o JMS de um relatório é lido):</p>
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/PooledJmsReceiveAdapter.java
+// receiveReport() aplica a forma de URI queue:///&lt;q&gt;?mdReadEnabled=true (issue #19) para os JMS_IBM_MQMD_*
+// serem populados, e então decodifica o relatório num ReportEnvelope — o ÚNICO lugar onde o JMS de um relatório é lido.
+private ReportEnvelope decode(Message report) throws Exception {
+    int feedback = report.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK);  // canônica, sempre populada
+    String correlationId = report.getJMSCorrelationID();                  // == MsgId original por default
+    ReportType type = feedbackRouter.classify(feedback);
+    ReportDescriptor descriptor = ReportDescriptor.from(report, type);    // os seis valores MQMD (issue #19), null-safe
+    String body = (report instanceof TextMessage tm) ? tm.getText() : null;
+    return new ReportEnvelope(feedback, correlationId, body, descriptor);
+}
+</code></pre></div>
+<p>O consumer então trabalha puramente sobre o envelope — classifica, correlaciona e reconcilia:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/consumer/ReportMessageConsumer.java
-public DeliveryEvent handleReport(Message report) {
+public DeliveryEvent handleReport(ReportEnvelope env) {
     try {
-        // Lê o feedback do MQMD via a propriedade canônica JMS_IBM_Feedback (sempre populada).
-        int feedback = report.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK);
-        String correlationId = report.getJMSCorrelationID();
+        // O adapter já leu o feedback e o correlation id; classificamos e reconciliamos sobre o envelope.
+        int feedback = env.feedbackCode();
+        String correlationId = env.correlationId();
 
         ReportType type = feedbackRouter.classify(feedback);
 
@@ -1519,7 +1667,7 @@ public ReportType classify(int feedbackCode) {
     return ReportType.UNKNOWN;
 }
 </code></pre></div>
-<h3 id="45-store-de-correlação--em-memória-e-o-caminho-persistente">4.5 Store de correlação — em memória e o caminho persistente</h3>
+<h3 id="46-store-de-correlação--em-memória-e-o-caminho-persistente">4.6 Store de correlação — em memória e o caminho persistente</h3>
 <p>O <code>InMemoryCorrelationStore</code> é o default — gated por <code>@Requires(property = "correlation.store", notEquals = "jdbc")</code>, o complemento do gate <code>correlation.store=jdbc</code> do store JDBC, então existe exatamente um bean em qualquer configuração. Usa um <code>ConcurrentHashMap</code> com atualizações atômicas via <code>compute</code>/<code>computeIfPresent</code> (seguro sob concorrência de relatórios):</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/correlation/InMemoryCorrelationStore.java
 @Override
@@ -1560,23 +1708,21 @@ entregas parecem órfãs/incompletas no agregado. <strong>Use um store compartil
 </tbody>
 </table></div>
 <p><strong>Unit (sem broker):</strong> <code>ReportFeedbackRouterTest</code> exercita os valores inteiros exatos (259/260/258/275/276) e os casos
-de borda (271 = <code>MQFB_XMIT_Q_MSG_ERROR</code> <strong>não</strong> vira COA). <code>InMemoryCorrelationStoreTest</code> usa Mockito para fabricar
-<code>Message</code> de report sintéticos e validar a correlação:</p>
+de borda (271 = <code>MQFB_XMIT_Q_MSG_ERROR</code> <strong>não</strong> vira COA). <code>InMemoryCorrelationStoreTest</code> fabrica <code>ReportEnvelope</code>
+sintéticos (<code>ReportEnvelope.synthetic</code>) — o seam (ADR-0008) entrega envelopes decodificados, nunca um
+<code>javax.jms.Message</code> — e valida a correlação:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/test/java/com/example/ibmmq/correlation/InMemoryCorrelationStoreTest.java
-Message coaReport = mock(Message.class);
+store.register(PendingMessage.newlySent(ORIGINAL_MSG_ID, &quot;pedido-3&quot;, &quot;{}&quot;));
 
-// Default MQRO_COPY_MSG_ID_TO_CORREL_ID: o relatório chega com CorrelationId == MessageId original.
-when(coaReport.getJMSCorrelationID()).
-
-thenReturn(ORIGINAL_MSG_ID);
-
-when(coaReport.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).
-
-thenReturn(259); // MQFB_COA
+// O seam (ADR-0008) entrega um ReportEnvelope decodificado — sem precisar de mock de javax.jms.Message.
+// Default MQRO_COPY_MSG_ID_TO_CORREL_ID: o relatório carrega CorrelationId == MessageId original.
+ReportEnvelope coaReport = ReportEnvelope.synthetic(
+        MQConstants.MQFB_COA, ORIGINAL_MSG_ID, &quot;&quot;, ReportType.COA);
 
 DeliveryEvent event = reportConsumer.handleReport(coaReport);
 
 assertEquals(ReportType.COA, event.reportType());
+assertEquals(259, event.feedbackCode());
 </code></pre></div>
 <p><strong>Integração (com broker real):</strong> <code>CoaCodEndToEndIT</code> sobe um IBM MQ via Testcontainers, produz com COA+COD,
 consome+comita e exige que cheguem <strong>ambos</strong> os relatórios, cada um com <code>CorrelationId == MessageId</code> original.</p>
@@ -2912,24 +3058,42 @@ auto-recovery, until someone redeploys with the new host.</p></div></div>
 &lt;scope&gt;compile&lt;/scope&gt;
 &lt;/dependency&gt;
 </code></pre></div>
-<p>The <code>@Factory</code> produces the <code>ConnectionFactory</code> that the whole application injects: an <code>MQConnectionFactory</code> (IBM MQ client) <strong>wrapped</strong> by a <code>JmsPoolConnectionFactory</code> (pool). The pool reuses connections/sessions — essential where you do
-many <code>createContext</code> calls:</p>
+<p>The <code>@Factory</code> produces the <strong>two role-based connection factories</strong> of ADR-0006, not one shared pool — the
+producer and the consumer have opposite connection lifecycles (short-lived bursty <code>send</code> vs. one long-held
+consumer connection per pod), and a single pool cannot be tuned for both. Both wrap the same base
+<code>MQConnectionFactory</code> (IBM MQ client, built in §3.2) but differ in pooling and lifecycle. The <code>@Named(PRODUCER)</code>
+factory is <code>@Primary</code>, so the entry points that still inject an unqualified <code>javax.jms.ConnectionFactory</code>
+resolve to it without a <code>NonUniqueBeanException</code>:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/config/MqConnectionFactoryFactory.java
-@Singleton
-@Bean(preDestroy = &quot;stop&quot;) // when the context is destroyed, the pool is closed (stop()).
-public JmsPoolConnectionFactory connectionFactory(MqProperties props) throws JMSException {
-    MQConnectionFactory mqCf = buildMqConnectionFactory(props);
+public static final String PRODUCER = &quot;producer&quot;;
+public static final String CONSUMER = &quot;consumer&quot;;
 
+// PRODUCER side — POOLED. The send path opens a short-lived JMSContext per send, so a pool of physical
+// connections/sessions is the right profile. @Primary makes the still-unqualified ConnectionFactory
+// injections resolve here; preDestroy=&quot;stop&quot; closes the pool at shutdown.
+@Singleton
+@Bean(preDestroy = &quot;stop&quot;)
+@Named(PRODUCER)
+@Primary
+public JmsPoolConnectionFactory producerConnectionFactory(MqProperties props) throws JMSException {
     JmsPoolConnectionFactory pool = new JmsPoolConnectionFactory();
-    pool.setConnectionFactory(mqCf);     // accepts the javax.jms.ConnectionFactory interface
-    pool.setMaxConnections(8);           // limits physical connections; sessions are multiplexed
-    // maxSessionsPerConnection is left at the pooled-jms default (500) here; see the deep dive
-    // below for when and how to tune it (keep it &lt;= the channel SHARECNV).
+    pool.setConnectionFactory(buildMqConnectionFactory(props)); // the base CF built in §3.2
+    pool.setMaxConnections(2);            // keep maxConnections × replicas ≤ MAXINST
+    pool.setMaxSessionsPerConnection(10); // ≤ SHARECNV (10) negotiated on the SVRCONN channel
     return pool;
 }
+
+// CONSUMER side — NON-pooled. The consumer adapter holds one long-lived JMSContext for the pod's life
+// (ADR-0006), so there is no per-op churn to pool. No preDestroy: MQConnectionFactory has no stop();
+// the adapter closes its held contexts in its own @PreDestroy.
+@Singleton
+@Named(CONSUMER)
+public MQConnectionFactory consumerConnectionFactory(MqProperties props) throws JMSException {
+    return buildMqConnectionFactory(props);
+}
 </code></pre></div>
-<div class="callout callout-boa-pratica" role="note"><span class="callout-icon" aria-hidden="true">✅</span><div class="callout-body"><p><strong>Good practice — always wrap the MQ CF in a pool.</strong> The <code>JmsPoolConnectionFactory</code> reuses physical connections and limits
-their number (<code>maxConnections</code>). <strong>Impact:</strong> under high concurrency you do not open/close a TCP socket per message.</p></div></div><div class="callout callout-ma-pratica" role="note"><span class="callout-icon" aria-hidden="true">❌</span><div class="callout-body"><p><strong>Bad practice — a raw <code>new MQConnectionFactory()</code> and opening a connection per message.</strong> Each <code>createContext</code> opens a new
+<div class="callout callout-boa-pratica" role="note"><span class="callout-icon" aria-hidden="true">✅</span><div class="callout-body"><p><strong>Good practice — pool the bursty producer's CF.</strong> The <code>JmsPoolConnectionFactory</code> reuses physical connections and limits
+their number (<code>maxConnections</code>). <strong>Impact:</strong> under high concurrency the producer does not open/close a TCP socket per <code>send</code>. (The long-lived consumer is the opposite case — a dedicated, non-pooled factory; see "One pool or two?" below.)</p></div></div><div class="callout callout-ma-pratica" role="note"><span class="callout-icon" aria-hidden="true">❌</span><div class="callout-body"><p><strong>Bad practice — a raw <code>new MQConnectionFactory()</code> and opening a connection per message.</strong> Each <code>createContext</code> opens a new
 TCP connection to the QMgr. <strong>Observable symptom:</strong> high <em>latency</em> due to the repeated handshake, socket/thread
 exhaustion, and the QMgr hitting <code>MAXCHANNELS</code>/<code>MAXINST</code> (refusing connections). At peak, the service "hangs" with no
 obvious error.</p></div></div>
@@ -3046,7 +3210,7 @@ obvious error.</p></div></div>
 </tr>
 </tbody>
 </table></div>
-<p>This is why the real-world topology of <strong>a pooled factory for the publisher + a raw <code>MQConnectionFactory</code> for the consumer</strong> is sound, not a smell — <em>provided the consumer is long-lived</em>. A raw, non-pooled factory is correct <strong>only</strong> for a long-lived consumer; pairing it with a churning consumer would handshake a socket per message. The two themes meet here: the <em>sizing</em> knobs above govern the producer's pool, while the <em>topology</em> decision governs whether the consumer should be on that pool at all. (This role-based topology is recorded in ADR-0006; its implementation is tracked in issue #25.)</p>
+<p>This is why the real-world topology of <strong>a pooled factory for the publisher + a raw <code>MQConnectionFactory</code> for the consumer</strong> is sound, not a smell — <em>provided the consumer is long-lived</em>. A raw, non-pooled factory is correct <strong>only</strong> for a long-lived consumer; pairing it with a churning consumer would handshake a socket per message. The two themes meet here: the <em>sizing</em> knobs above govern the producer's pool, while the <em>topology</em> decision governs whether the consumer should be on that pool at all. (This role-based topology is recorded in ADR-0006 and is now the <strong>wired default</strong> — the two <code>@Named</code> factories shown in §4.1 above; implementation tracked in issue #25.)</p>
 <div class="callout callout-boa-pratica" role="note"><span class="callout-icon" aria-hidden="true">✅</span><div class="callout-body"><p><strong>Good practice — role-based factories.</strong> A <code>JmsPoolConnectionFactory</code> for the producer (sized per the rules above) and a <strong>dedicated</strong> factory for the long-lived consumer. <strong>Impact:</strong> each side is tuned to its own lifecycle; the consumer's long-held connection never steals a slot from the producer's pool.</p></div></div><div class="callout callout-ma-pratica" role="note"><span class="callout-icon" aria-hidden="true">❌</span><div class="callout-body"><p><strong>Bad practice — one shared pool used blindly for everything, <em>with</em> an async listener on it.</strong> The pool is tuned for one workload while serving two opposites, and a <code>MessageListener</code> pins a pooled connection outside the pool's control. <strong>Symptom:</strong> a producer that intermittently blocks on checkout because a consumer holds pooled connections, plus the listener caveats <code>pooled-jms</code> warns about. (A single shared pool is acceptable only when <strong>both</strong> sides churn short-lived contexts and <strong>no</strong> async listener is used.)</p></div></div>
 <h4 id="pool-commit-and-idempotency--three-different-layers">Pool, commit, and idempotency — three different layers</h4>
 <p>A frequent conflation is that the connection factory somehow affects commit or idempotency. It does not. These live in three different layers, and the factory choice touches only the first:</p>
@@ -3078,81 +3242,206 @@ obvious error.</p></div></div>
 </table></div>
 <p>So swapping pooled ↔ raw, or shared ↔ per-role factories, has <strong>zero</strong> effect on commit semantics or delivery idempotency. The real relationship is <em>inverse</em>: a pool — or any connection failure around the commit, such as a connection invalidated mid-transaction — can be a <strong>source</strong> of redelivery; the Correlation store is the <strong>defence</strong> that makes that redelivery harmless.</p>
 <div class="callout callout-nota" role="note"><span class="callout-icon" aria-hidden="true">ℹ️</span><div class="callout-body"><p><strong>Note — the pool is a duplicate <em>source</em>, the store is the <em>defence</em>.</strong> Do not reason "the pool gives me exactly-once" — it does not. Exactly-once comes from a transacted consume plus an idempotent Correlation store; the factory only decides how connections and sessions are created and reused.</p></div></div>
-<h3 id="42-producer--enables-coacod-persists-and-records-the-correlation">4.2 Producer — enables COA/COD, persists, and records the correlation</h3>
+<h3 id="42-the-messaging-seam--role-based-ports-and-decoded-envelopes">4.2 The messaging seam — role-based ports and decoded envelopes</h3>
+<p>ADR-0008 moves the JMS boundary <strong>out of the entry points</strong> and behind <strong>two role-based ports</strong>, one per
+ADR-0006 factory. The producer and both consumers stop opening their own <code>JMSContext</code>; they exchange
+<strong>decoded domain envelopes</strong> with the ports, and <em>all</em> <code>javax.jms</code> handling lives inside the adapters. Two
+payoffs: the entry points become broker-agnostic (testable with no MQ), and each port is tuned to its
+factory's lifecycle — short-lived pooled <code>send</code> vs. one long-lived held receive connection per pod.</p>
+<pre class="mermaid">flowchart LR
+  P[&quot;BusinessMessageProducer&quot;]:::mod
+  BC[&quot;BusinessMessageConsumer&quot;]:::mod
+  RC[&quot;ReportMessageConsumer&lt;br/&gt;classify + reconcile&quot;]:::mod
+
+  SP{{&quot;SendPort&lt;br/&gt;send(envelope) → messageId&quot;}}:::port
+  RP{{&quot;ReceivePort&lt;br/&gt;receiveWithinUnitOfWork(dest, timeout, handler)&quot;}}:::port
+
+  PA[&quot;pooled-JMS adapter&lt;br/&gt;(pooled producer factory)&quot;]:::prod
+  CA[&quot;pooled-JMS adapter&lt;br/&gt;(dedicated long-lived consumer factory)&quot;]:::prod
+  FAKE[&quot;in-memory fake&lt;br/&gt;COA-on-put / COD-on-commit,&lt;br/&gt;CorrelId == MessageId&quot;]:::fake
+
+  P e1@--&gt; SP
+  BC e2@--&gt; RP
+  RC e3@--&gt; RP
+  SP --&gt; PA
+  RP --&gt; CA
+  SP -. tests .-&gt; FAKE
+  RP -. tests .-&gt; FAKE
+
+  e1@{ animate: true }
+  e2@{ animate: true }
+  e3@{ animate: true }
+
+  classDef mod fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
+  classDef port fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+  classDef prod fill:#d7e9d2,stroke:#5a8f63,color:#1f2430;
+  classDef fake fill:#e3d7ef,stroke:#7a5a9a,color:#1f2430;
+</pre>
+<p><strong><code>SendPort</code></strong> rides the pooled producer factory; <strong><code>ReceivePort</code></strong> rides the dedicated long-lived consumer
+factory and is shared by the business consumer and the report consumer. The contracts are tiny and JMS-free:</p>
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/{SendPort,ReceivePort}.java
+public interface SendPort {
+    // Returns the assigned messageId (the report's CorrelationId under MQRO_COPY_MSG_ID_TO_CORREL_ID).
+    String send(OutboundMessage message);
+}
+
+public interface ReceivePort {
+    // Business consume in a transacted unit of work: commit on the handler's normal return (releases
+    // the COD), rollback on a throw (no COD); null on timeout.
+    String receiveWithinUnitOfWork(String queueName, long timeoutMillis, UnitOfWorkHandler handler);
+    // Report receive under AUTO_ACKNOWLEDGE; the adapter applies ?mdReadEnabled=true and decodes the MQMD.
+    ReportEnvelope receiveReport(String queueName, long timeoutMillis);
+}
+</code></pre></div>
+<p>The <strong>decoded envelopes</strong> carry exactly what the domain needs — no <code>javax.jms.Message</code> ever crosses the seam:</p>
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/{OutboundMessage,ReportEnvelope}.java
+// Outbound: payload + businessKey + report options + replyTo + persistence (PLAIN queue names; the adapter
+// adds the queue:/// prefix and builds the TextMessage / JMS_IBM_REPORT_* / DeliveryMode).
+public record OutboundMessage(String businessKey, String payload, String destinationQueue,
+        String replyToQueue, boolean requestCoa, boolean requestCod, DeliveryPersistence persistence) { }
+
+// Inbound report: the already-extracted feedback code, correlationId, body, and the six recovered MQMD
+// values (issue #19) — a fully JMS-free record the report consumer classifies and reconciles on.
+public record ReportEnvelope(int feedbackCode, String correlationId, String body, ReportDescriptor descriptor) { }
+</code></pre></div>
+<p>Each port has <strong>two adapters</strong>: the production <code>PooledJms{Send,Receive}Adapter</code> — the only classes that touch
+<code>javax.jms</code>, wired by default — and an <strong>in-memory fake</strong> (<code>InMemory{Send,Receive}Port</code> over <code>InMemoryBroker</code>,
+selected by <code>messaging.adapter=fake</code>). The fake is the <em>point</em> of the seam: it models the QMgr's report
+causality faithfully — a send enqueues the <strong>COA on put (259)</strong>, a committed destructive consume enqueues the
+<strong>COD on commit (260)</strong>, a rollback yields <strong>no COD</strong>, and both reports carry <code>CorrelationId == original
+messageId</code> (mirroring <code>MQRO_COPY_MSG_ID_TO_CORREL_ID</code>). That lets the whole produce → consume → receive-report
+→ reconcile chain run as a fast unit test with <strong>no broker</strong>, while the Testcontainers <code>CoaCodEndToEndIT</code>
+drives the <em>same</em> entry points through the pooled-JMS adapters against a real MQ — so the fake's fidelity is
+bounded by a real-broker test.</p>
+<div class="callout callout-nota" role="note"><span class="callout-icon" aria-hidden="true">ℹ️</span><div class="callout-body"><p><strong>Note — the seam relocates JMS; it does not change semantics.</strong> Commit still releases the COD;
+idempotency still comes from the Correlation store. What changed is <em>where</em> the JMS lives (the adapters) and
+that the entry points now speak decoded envelopes. See ADR-0008 (seam contract) and ADR-0006 (factories).</p></div></div>
+<h3 id="43-producer--enables-coacod-persists-and-records-the-correlation">4.3 Producer — enables COA/COD, persists, and records the correlation</h3>
+<p>The entry point no longer opens a <code>JMSContext</code> — it builds a decoded <code>OutboundMessage</code> and calls <code>SendPort</code>:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/producer/BusinessMessageProducer.java
 public String send(String businessKey, String jsonPayload) {
-    // try-with-resources: the JMSContext (connection+session) is closed at the end.
-    // AUTO_ACKNOWLEDGE: each send is confirmed immediately (the COA flows right after the PUT).
+    // Decoded outbound envelope: a persistent business message with COA+COD requested, bound for the
+    // report (reply-to) queue. No javax.jms here — the SendPort adapter owns all JMS construction.
+    OutboundMessage outbound = OutboundMessage.persistentWithCoaCod(
+            businessKey, jsonPayload, props.getBusinessQueue(), props.getReportQueue());
+
+    // The port returns the assigned messageId. Default MQRO_COPY_MSG_ID_TO_CORREL_ID makes this id the
+    // report's CorrelationId — so we record it in the CorrelationStore to close the loop when it arrives.
+    String messageId = sendPort.send(outbound);
+    correlationStore.register(PendingMessage.newlySent(messageId, businessKey, jsonPayload));
+    return messageId;
+}
+</code></pre></div>
+<p>All the JMS that used to live here now lives in the production adapter — the only class on the send side that
+touches <code>javax.jms</code>, drawing a short-lived context from the <strong>pooled producer factory</strong> (ADR-0006):</p>
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/PooledJmsSendAdapter.java
+@Override
+public String send(OutboundMessage message) {
+    // Short-lived JMSContext from the POOLED producer factory (@Named(PRODUCER)); returned to the pool on close.
     try (JMSContext context = connectionFactory.createContext(JMSContext.AUTO_ACKNOWLEDGE)) {
-
-        Queue businessQueue = context.createQueue(&quot;queue:///&quot; + props.getBusinessQueue());
-        Queue reportQueue = context.createQueue(&quot;queue:///&quot; + props.getReportQueue());
-
-        TextMessage message = context.createTextMessage(jsonPayload);
-
-        // JMSReplyTo: WHERE the QMgr will send COA/COD.
-        message.setJMSReplyTo(reportQueue);
-
-        // Enables the reports: UPPER_SNAKE field (WMQConstants), integer value MQRO_* (MQConstants).
-        message.setIntProperty(WMQConstants.JMS_IBM_REPORT_COA, MQConstants.MQRO_COA);
-        message.setIntProperty(WMQConstants.JMS_IBM_REPORT_COD, MQConstants.MQRO_COD);
+        TextMessage jmsMessage = context.createTextMessage(message.payload());
+        // JMSReplyTo: WHERE the QMgr delivers COA/COD. The adapter adds the queue:/// prefix.
+        jmsMessage.setJMSReplyTo(context.createQueue(&quot;queue:///&quot; + message.replyToQueue()));
+        // Enable the reports: UPPER_SNAKE field (WMQConstants), integer value MQRO_* (MQConstants).
+        if (message.requestCoa()) jmsMessage.setIntProperty(WMQConstants.JMS_IBM_REPORT_COA, MQConstants.MQRO_COA);
+        if (message.requestCod()) jmsMessage.setIntProperty(WMQConstants.JMS_IBM_REPORT_COD, MQConstants.MQRO_COD);
 
         JMSProducer producer = context.createProducer();
-        // PERSISTENT: the message (and, by inheritance, the reports) survives a QMgr restart.
-        producer.setDeliveryMode(DeliveryMode.PERSISTENT);
-        producer.send(businessQueue, message);
+        producer.setDeliveryMode(toJmsDeliveryMode(message.persistence())); // PERSISTENT → reports inherit it
+        producer.send(context.createQueue(&quot;queue:///&quot; + message.destinationQueue()), jmsMessage);
 
-        // The JMSMessageID only exists after the send. Default MQRO_COPY_MSG_ID_TO_CORREL_ID:
-        // this id becomes the CorrelationId of the reports.
-        String messageId = message.getJMSMessageID();
-        correlationStore.register(PendingMessage.newlySent(messageId, businessKey, jsonPayload));
-        return messageId;
+        // The JMSMessageID exists only after the send — the correlation key for the future COA/COD reports.
+        return jmsMessage.getJMSMessageID();
     } catch (Exception e) {
-        throw new IllegalStateException(&quot;Falha ao enviar mensagem de negocio: &quot; + businessKey, e);
+        throw new IllegalStateException(&quot;Falha ao enviar mensagem de negocio: &quot; + message.businessKey(), e);
     }
 }
 </code></pre></div>
-<p>Points to note: (1) the <code>JMSReplyTo</code> and the two report properties; (2) <code>DeliveryMode.PERSISTENT</code>; (3) recording the
-<code>messageId</code> in the <code>CorrelationStore</code> <strong>immediately after</strong> the <code>send</code> (before the report can arrive).</p>
-<h3 id="43-business-consumer--the-destructive-get-triggers-the-cod">4.3 Business consumer — the destructive GET triggers the COD</h3>
+<p>Points to note: (1) the producer builds a <strong>decoded <code>OutboundMessage</code></strong> and never touches <code>javax.jms</code> — the
+<code>JMSReplyTo</code>, the <code>JMS_IBM_REPORT_*</code> options, <code>DeliveryMode</code>, and the <code>queue:///</code> resolution all moved into
+<code>PooledJmsSendAdapter</code> (ADR-0008); (2) the adapter draws its short-lived context from the <strong>pooled producer
+factory</strong> (ADR-0006); (3) the <code>messageId</code> the port returns is recorded in the <code>CorrelationStore</code><strong>immediately after</strong> the <code>send</code> (before the report can arrive).</p>
+<h3 id="44-business-consumer--the-destructive-get-triggers-the-cod">4.4 Business consumer — the destructive GET triggers the COD</h3>
+<p>The entry point no longer opens a <code>JMSContext</code> or calls <code>commit()</code> — it hands a unit-of-work handler to
+<code>ReceivePort</code>, which owns the transacted commit/rollback:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/consumer/BusinessMessageConsumer.java
 public String receiveOne(long timeoutMillis) {
-    // Transacted context: the COD only becomes visible on the report queue after the commit.
-    try (JMSContext context = connectionFactory.createContext(JMSContext.SESSION_TRANSACTED)) {
-
-        Queue businessQueue = context.createQueue(&quot;queue:///&quot; + props.getBusinessQueue());
-        JMSConsumer consumer = context.createConsumer(businessQueue);
-
-        // Destructive GET — removes the message and (given MQRO_COD at the origin) schedules the COD.
-        Message message = consumer.receive(timeoutMillis);
-        if (message == null) {
-            return null; // timeout with no message
-        }
-        String body = (message instanceof TextMessage tm) ? tm.getText() : &quot;(payload nao-texto)&quot;;
-
+    // Transacted unit of work owned by the port: it commits on the handler's normal return (releasing the
+    // COD) or rolls back on a throw (the message returns; no COD). We never call commit()/rollback() here.
+    String body = receivePort.receiveWithinUnitOfWork(props.getBusinessQueue(), timeoutMillis, consumedBody -&gt; {
+        LOG.info(&quot;[stage=CONSUME] Business message consumed (destructive GET): body={}&quot;, consumedBody);
         // ... business processing here ...
-
-        // Commit: confirms the consumption and RELEASES the COD. On an exception, the rollback returns the message
-        // (and the COD is NOT generated).
-        context.commit();
-        return body;
-    } catch (Exception e) {
-        throw new IllegalStateException(&quot;Falha ao consumir mensagem de negocio&quot;, e);
+        return consumedBody;
+    });
+    if (body == null) {
+        return null; // timeout: no message in the window (the handler never ran)
     }
+    // The port committed on the handler's normal return — the COD is now released to the report queue.
+    LOG.info(&quot;[stage=COMMIT] Consume committed: COD released to the report queue&quot;);
+    return body;
 }
+</code></pre></div>
+<p>The receive adapter holds <strong>one long-lived <code>SESSION_TRANSACTED</code> context for the pod's life</strong>, drawn from the
+<strong>dedicated, non-pooled consumer factory</strong> (ADR-0006). It is created lazily, reused across polls, reconnected
+on failure, and closed in <code>@PreDestroy</code>:</p>
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/PooledJmsReceiveAdapter.java
+@Override
+public String receiveWithinUnitOfWork(String queueName, long timeoutMillis, UnitOfWorkHandler handler) {
+    JMSContext context = businessContext(); // held SESSION_TRANSACTED context (lazy; @Named(CONSUMER), non-pooled)
+    JMSConsumer consumer = context.createConsumer(context.createQueue(&quot;queue:///&quot; + queueName));
+
+    // Destructive GET — removes the message and (given MQRO_COD on the original) schedules the COD.
+    Message message = consumer.receive(timeoutMillis);
+    if (message == null) {
+        return null; // timeout — nothing to commit; the held context stays open for the next poll.
+    }
+    String body = (message instanceof TextMessage tm) ? tm.getText() : &quot;(payload nao-texto)&quot;;
+    try {
+        String result = handler.handle(body);
+        context.commit();   // confirms the consume and RELEASES the COD to the report queue
+        return result;
+    } catch (Exception handlerFailure) {
+        context.rollback(); // the message returns to the queue and the COD is NOT generated
+        throw new IllegalStateException(&quot;Unit-of-work handler failed — rolled back&quot;, handlerFailure);
+    }
+    // (a JMS failure here drops the held context so the next call reconnects.)
+}
+
+@PreDestroy
+void close() { /* closes the long-lived held consumer contexts at pod shutdown (SIGTERM) */ }
 </code></pre></div>
 <div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Caution — there is no JMS API to "request the COD at consumption time."</strong> The COD follows <strong>automatically</strong> from the report options
 already written into the MQMD by the original message. The consumer only needs to do the destructive GET and <strong>commit</strong> — the QMgr takes care
-of generating the COD.</p></div></div>
-<h3 id="44-report-consumer--reads-the-feedback-classifies-and-correlates">4.4 Report consumer — reads the Feedback, classifies, and correlates</h3>
-<p>The heart of reconciliation: read <code>JMS_IBM_FEEDBACK</code>, classify with <code>ReportFeedbackRouter</code>, and correlate
-<code>CorrelationId → MessageId</code> of the original.</p>
+of generating the COD.</p></div></div><div class="callout callout-nota" role="note"><span class="callout-icon" aria-hidden="true">ℹ️</span><div class="callout-body"><p><strong>Note — the consume path loses <code>messageId</code> in the MDC (ADR-0008).</strong> The unit-of-work handler sees only
+the decoded <strong>body</strong> (<code>handle(String body)</code>), never the consumed message's id, so the <code>[stage=CONSUME]</code> /
+<code>[stage=COMMIT]</code> lines cannot bind <code>messageId</code>/<code>correlationId</code> in the MDC the way <code>PRODUCE</code> and the report
+path do. End-to-end correlation is <strong>preserved</strong>: under <code>MQRO_COPY_MSG_ID_TO_CORREL_ID</code> the report's
+<code>correlationId == original messageId</code>, so a delivery is still greppable from PRODUCE through its COA/COD.
+Widening the seam to re-surface the consumed id was rejected (it would break the port contract and the
+broker-free flow test); the bounded log gap is the accepted cost.</p></div></div>
+<h3 id="45-report-consumer--classifies-the-decoded-envelope-and-correlates">4.5 Report consumer — classifies the decoded envelope and correlates</h3>
+<p>The heart of reconciliation. The receive adapter has already extracted the report into a decoded
+<code>ReportEnvelope</code>; the consumer then classifies by feedback code and correlates <code>CorrelationId → MessageId</code> of
+the original — never touching <code>javax.jms</code>. First, the adapter's <code>decode</code> (the only place a report's JMS is read):</p>
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/PooledJmsReceiveAdapter.java
+// receiveReport() applies the queue:///&lt;q&gt;?mdReadEnabled=true URI form (issue #19) so the JMS_IBM_MQMD_*
+// values are populated, then decodes the report into a ReportEnvelope — the ONLY place a report's JMS is read.
+private ReportEnvelope decode(Message report) throws Exception {
+    int feedback = report.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK);  // canonical, always populated
+    String correlationId = report.getJMSCorrelationID();                  // == original MsgId by default
+    ReportType type = feedbackRouter.classify(feedback);
+    ReportDescriptor descriptor = ReportDescriptor.from(report, type);    // the six MQMD values (issue #19), null-safe
+    String body = (report instanceof TextMessage tm) ? tm.getText() : null;
+    return new ReportEnvelope(feedback, correlationId, body, descriptor);
+}
+</code></pre></div>
+<p>The consumer then works purely on the envelope — classify, correlate, and reconcile:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/consumer/ReportMessageConsumer.java
-public DeliveryEvent handleReport(Message report) {
+public DeliveryEvent handleReport(ReportEnvelope env) {
     try {
-        // Reads the MQMD feedback via the canonical property JMS_IBM_Feedback (always populated).
-        int feedback = report.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK);
-        String correlationId = report.getJMSCorrelationID();
+        // The adapter already read the feedback and correlation id; we classify and reconcile off the envelope.
+        int feedback = env.feedbackCode();
+        String correlationId = env.correlationId();
 
         ReportType type = feedbackRouter.classify(feedback);
 
@@ -3214,7 +3503,7 @@ public ReportType classify(int feedbackCode) {
     return ReportType.UNKNOWN;
 }
 </code></pre></div>
-<h3 id="45-correlation-store--in-memory-and-the-persistent-path">4.5 Correlation store — in-memory and the persistent path</h3>
+<h3 id="46-correlation-store--in-memory-and-the-persistent-path">4.6 Correlation store — in-memory and the persistent path</h3>
 <p>The <code>InMemoryCorrelationStore</code> is the default — gated by <code>@Requires(property = "correlation.store", notEquals = "jdbc")</code>, the complement of the JDBC store's <code>correlation.store=jdbc</code> gate, so exactly one bean exists in any configuration. It uses a <code>ConcurrentHashMap</code> with atomic updates via <code>compute</code>/<code>computeIfPresent</code> (safe under report concurrency):</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/main/java/com/example/ibmmq/correlation/InMemoryCorrelationStore.java
 @Override
@@ -3255,23 +3544,21 @@ deliveries look orphaned/incomplete in aggregate. <strong>Use a shared store</st
 </tbody>
 </table></div>
 <p><strong>Unit (no broker):</strong> <code>ReportFeedbackRouterTest</code> exercises the exact integer values (259/260/258/275/276) and the edge
-cases (271 = <code>MQFB_XMIT_Q_MSG_ERROR</code> does <strong>not</strong> become COA). <code>InMemoryCorrelationStoreTest</code> uses Mockito to fabricate
-synthetic report <code>Message</code>s and validate the correlation:</p>
+cases (271 = <code>MQFB_XMIT_Q_MSG_ERROR</code> does <strong>not</strong> become COA). <code>InMemoryCorrelationStoreTest</code> fabricates synthetic
+<code>ReportEnvelope</code>s (<code>ReportEnvelope.synthetic</code>) — the seam (ADR-0008) delivers decoded envelopes, never a
+<code>javax.jms.Message</code> — and validates the correlation:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// ibmmq-jms-guide/src/test/java/com/example/ibmmq/correlation/InMemoryCorrelationStoreTest.java
-Message coaReport = mock(Message.class);
+store.register(PendingMessage.newlySent(ORIGINAL_MSG_ID, &quot;pedido-3&quot;, &quot;{}&quot;));
 
-// Default MQRO_COPY_MSG_ID_TO_CORREL_ID: the report arrives with CorrelationId == original MessageId.
-when(coaReport.getJMSCorrelationID()).
-
-thenReturn(ORIGINAL_MSG_ID);
-
-when(coaReport.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).
-
-thenReturn(259); // MQFB_COA
+// The seam (ADR-0008) delivers a decoded ReportEnvelope — no javax.jms.Message mock needed.
+// Default MQRO_COPY_MSG_ID_TO_CORREL_ID: the report carries CorrelationId == original MessageId.
+ReportEnvelope coaReport = ReportEnvelope.synthetic(
+        MQConstants.MQFB_COA, ORIGINAL_MSG_ID, &quot;&quot;, ReportType.COA);
 
 DeliveryEvent event = reportConsumer.handleReport(coaReport);
 
 assertEquals(ReportType.COA, event.reportType());
+assertEquals(259, event.feedbackCode());
 </code></pre></div>
 <p><strong>Integration (with a real broker):</strong> <code>CoaCodEndToEndIT</code> brings up an IBM MQ via Testcontainers, produces with COA+COD,
 consumes+commits, and requires that <strong>both</strong> reports arrive, each with <code>CorrelationId == MessageId</code> of the original.
