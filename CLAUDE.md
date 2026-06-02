@@ -46,39 +46,29 @@ Detail lives in the linked ADRs/docs; these are the binding directives.
 - **Distributed harness (ADR-0003):** the distributed environment is realized as a **local k3s** harness (IBM MQ + Java publisher/consumer microservices, consumer at N replicas = competing consumers); `floci` is a *local AWS emulator* (NOT real EKS, no IBM MQ), used only for optional AWS peripherals. Real EKS, if ever, is a separate documented reference architecture.
 - **Glossary & roadmap:** `CONTEXT.md` is the domain glossary (terms only); `docs/project-status.md` tracks what's built + the ordered next steps.
 
-## Validated facts (full detail: `research-output/phase-a-fact-sheet.md`)
+## Validated facts — source of truth: `research-output/phase-a-fact-sheet.md`
 
-Constant values below were extracted from the **authentic `com.ibm.mq.allclient:9.4.5.0` jar bytecode** (sha1 verified) and cross-checked against IBM docs.
+Stack coordinates, MQ report/feedback constant names, MQCSP/TLS/`SET CHLAUTH` notes, and the dev container image + defaults are **sha1-verified** in the fact sheet — **check it first to avoid re-research.** Glance-level: client `com.ibm.mq.allclient:9.4.5.0` / `pooled-jms 2.0.9` / `micronaut-platform 4.9.4` (`4.9.9` does **not** exist); `MQRO_*`/`MQFB_*` live in `CMQC`/`MQConstants`, **not** `WMQConstants`; `MQFB_COA=259`, `MQFB_COD=260`, read via `WMQConstants.JMS_IBM_FEEDBACK`; container `icr.io/ibm-messaging/mq:9.4.5.0-r2` (no bare `9.4.5.0` tag).
 
-- **Client:** `com.ibm.mq:com.ibm.mq.allclient:9.4.5.0` — `javax.jms` / JMS 2.0 (depends on `javax.jms:javax.jms-api:2.0.1`). Jakarta sibling: `com.ibm.mq.jakarta.client`.
-- **Pool:** `org.messaginghub:pooled-jms:2.0.9` — javax line (1.x and 2.x are javax; **3.x is jakarta**). Class `org.messaginghub.pooled.jms.JmsPoolConnectionFactory`. **Tuning & topology:** `maxConnections`/`maxSessionsPerConnection` semantics, ~10k-rpm sizing (`maxConnections × replicas ≤ MAXINST`; `maxSessionsPerConnection ≤ SHARECNV`), the silent-hang default (`blockIfSessionPoolIsFull=true`/timeout `-1`), and the **role-based producer-vs-consumer factory** decision live in `research-output/pooled-jms-factory-tuning.md` + **`docs/adr/0006-role-based-connection-factories.md`** (guide §4.1; code rewrite tracked in #25).
-- **Micronaut:** platform BOM `io.micronaut.platform:micronaut-platform:4.9.4` — **`4.9.9` does NOT exist** (BOM line stops at 4.9.4). Plugin `io.micronaut.maven:micronaut-maven-plugin:4.11.6`.
-- **Report constants:** `MQRO_*` and `MQFB_*` live in `com.ibm.mq.constants.CMQC` / `MQConstants` (**NOT** `WMQConstants`). JMS report request props are `WMQConstants.JMS_IBM_REPORT_*` (field UPPER_SNAKE; String value mixed-case, e.g. `"JMS_IBM_Report_COA"`).
-- **Feedback codes:** `MQFB_COA=259`, `MQFB_COD=260`, `MQFB_EXPIRATION=258`, `MQFB_PAN=275`, `MQFB_NAN=276`. Exception reports carry an `MQRC_*` in the Feedback field (there is no `MQFB_EXCEPTION`). Read via `WMQConstants.JMS_IBM_FEEDBACK` (canonical, always-populated; `JMS_IBM_MQMD_FEEDBACK` only with `WMQ_MQMD_READ_ENABLED=true`).
-- **MQMD field recovery (issue #19):** recover six report MQMD values from the report's OWN descriptor (verdict (R)-all — no producer change, no `WITH_FULL_DATA`); enable read via the `queue:///<q>?mdReadEnabled=true` URI form; `byte[]` props come back via `getObjectProperty` (persisted as hex); GMT `PutDate`+`PutTime` → UTC with explicit `ZoneOffset.UTC` (no JVM-default-zone leakage). Canonical home: **`research-output/phase-f-mqmd-field-recovery.md`**.
-- **Report semantics:** default id propagation `MQRO_COPY_MSG_ID_TO_CORREL_ID` (=0) → original MessageId becomes the report's CorrelationId. Report messages **INHERIT persistence from the original** (a persistent original yields a persistent COD/COA by default — the brief's "non-persistent by default" assumption was refuted).
-- **MQCSP auth:** `WMQConstants.USER_AUTHENTICATION_MQCSP` (no `WMQ_` prefix), boolean. TLS: do **not** set the removed `com.ibm.mq.cfg.useIBMCipherMappings` (gone since MQ 9.4.0); avoid `TLS_RSA_*` ciphers (disabled on Java 25). MQSC verb is `SET CHLAUTH` (not `DEFINE`).
-- **Container:** `icr.io/ibm-messaging/mq:9.4.5.0-r2` (MQ Advanced for Developers, `LICENSE=accept`); dev defaults `DEV.QUEUE.1/2/3`, `DEV.DEAD.LETTER.QUEUE`, channels `DEV.APP.SVRCONN`/`DEV.ADMIN.SVRCONN`, users `app`/`admin`, listener 1414, console 9443. There is no bare `9.4.5.0` tag (tags are `-rN`).
+- **Report semantics:** default id propagation `MQRO_COPY_MSG_ID_TO_CORREL_ID` makes the original MessageId the report's CorrelationId. Reports **inherit persistence from the original** (the brief's "non-persistent by default" assumption was refuted).
+- **Pool tuning & topology:** `maxConnections`/`maxSessionsPerConnection` semantics, ~10k-rpm sizing (`maxConnections × replicas ≤ MAXINST`; `maxSessionsPerConnection ≤ SHARECNV`), the silent-hang default (`blockIfSessionPoolIsFull=true`/timeout `-1`), and the **role-based producer-vs-consumer factory** decision: `research-output/pooled-jms-factory-tuning.md` + `docs/adr/0006-role-based-connection-factories.md` (guide §4.1; code rewrite tracked in #25).
+- **MQMD field recovery (#19):** recover six report MQMD values from the report's OWN descriptor (no producer change, no `WITH_FULL_DATA`); enable via the `queue:///<q>?mdReadEnabled=true` URI form; `byte[]` props via `getObjectProperty` (hex); GMT `PutDate`+`PutTime` → UTC with explicit `ZoneOffset.UTC`. Canonical home: `research-output/phase-f-mqmd-field-recovery.md`.
 
-## Local toolchain & environment quirks
+## Distributed-harness gotcha — report-PUT authority (2035)
 
-- **JDK:** Amazon Corretto **25** at `~/.local/jdk25` (`JAVA_HOME`). **Maven** 3.9.9 at `~/.local/maven-current`. Helper: `source ~/.local/ibmmq-env.sh`.
-- **Java target — production = Java 25.** `ibmmq-jms-guide/pom.xml` sets **`maven.compiler.release=25`** (Amazon Corretto 25). This supersedes the locked brief's P1 (Java 21) by user decision (2026-05-31); rationale recorded in **`docs/adr/0001-java-25-runtime.md`**. Java 25 is an LTS, documented for MQ 9.4.x; run with `--enable-native-access=ALL-UNNAMED` and avoid `TLS_RSA_*` (disabled in Java 25). Repo-wide prose was aligned 21→25 in this pass.
-- Run/test with JVM arg **`--enable-native-access=ALL-UNNAMED`** (silences the MQ client native-access warning on JDK 25; already wired into surefire/failsafe `argLine`).
-- **Testcontainers stack:** core **`org.testcontainers:testcontainers:2.0.5`** + official IBM module **`com.ibm.mq:mq-java-testcontainer:2.0.3`** (class `com.ibm.mq.testcontainers.MQContainer`, extends `GenericContainer`; the module 2.0.3 pulls core 2.0.3 transitively — core 2.0.5 is declared directly to override it). IT uses manual lifecycle (`@BeforeAll`/`@AfterAll`), so the `org.testcontainers:junit-jupiter` module is NOT needed.
-- **Docker connectivity (root cause + real fix):** on Docker Desktop / engine 29.x (API 1.54, min 1.40), the **docker-java bundled in Testcontainers 1.20.x is incompatible** with the Docker Desktop socket proxy → daemon returns **HTTP 400** → "Could not find a valid Docker environment". `DOCKER_API_VERSION=1.44` did **NOT** fix this; the real fix was **migrating to Testcontainers 2.0.5** (modern docker-java 3.7.1). (`/var/run/docker.sock` is healthy — `curl /info` returns 200.) The `DOCKER_API_VERSION=1.44` env in the failsafe plugin is kept as harmless belt-and-suspenders.
-- **commons-codec pin:** `docker-java-transport-zerodep:3.7.1` (via TC 2.0.5) references `org.apache.commons.codec.Charsets`, removed in commons-codec 1.17+. Pin **`commons-codec:commons-codec:1.16.1`** (test scope) or the container fails to start with `NoClassDefFoundError`.
+Build/test toolchain & environment quirks (JDK 25 / Maven / mise, native-access, Testcontainers stack, the Docker-socket HTTP 400 fix, the `commons-codec` pin, sandbox) now live in **`ibmmq-jms-guide/CLAUDE.md`**.
+
 - **Report-PUT authority gotcha (2035) — CORRECTED on live k3s:** for the QMgr to generate+deliver a COA/COD report it does a PUT-with-context onto the ReplyToQ. The authority it actually requires is **`+passid` (pass identity context)** — **not** `+setall` as previously assumed here. Verified live on a k3d cluster: with `app` granted only `+put +setall`, the report PUT still failed `AMQ8077W: ... requested permissions are unauthorized: passid` → `MQRC_NOT_AUTHORIZED (2035)` → every report silently dead-letters (report queue stays empty, COA/COD never recorded). The QMgr *passes* the original message's context into the report, so grant the full context set: `SET AUTHREC ... AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)` (see `deploy/k3s/30-mq-config.yaml`; `dspmqaut -m QM1 -n DEV.QUEUE.2 -t q -p app` confirms the effective authority). The Testcontainers IT never caught this because it connects as **`admin`/`mqm`** (`DEV.ADMIN.SVRCONN`), which already holds all context authorities. With the corrected grant the end-to-end COA(259)+COD(260) flow and cluster-wide exactly-once reconciliation were validated live (CorrelId == original MessageId).
-- **Sandbox:** when running the IT through a Claude Bash tool, disable the sandbox so the forked JVM can reach `/var/run/docker.sock`.
 
 ## Applied Learning
 
 - Agents fail silently on wrong paths. Always verify hardcoded paths.
 - Before a new project artifact: check if the existing one can be extended or merged.
+- orchestrate slice issues don't auto-close (umbrella branch); PostToolUse hook auto-closes on slice-merge.
 
-## Project layout
+## Entry points & layout
 
-- `ibmmq-jms-guide/` — runnable Micronaut Maven project (COA/COD end-to-end demo; `mvn test` for unit, `mvn verify` for the Testcontainers IT).
-- `research-output/` — validated fact sheets + raw research JSON (source of truth).
-- `research-prompt-ibmmq-jms-micronaut.md` — the locked research brief driving this work.
-- Markdown guide + standalone HTML doc — primary deliverables (generated by the pipeline).
+- **Distributed k3s harness (ADR-0003)** — root `Makefile`: `make up` (provision the whole k3d harness), `make verify` (AC1/AC2 evidence: competing consumers, dead-letter depth, reconciliation), `make doctor`, `make console` (MQ web console), `make down`. Manifests in `deploy/k3s/` (+ its README). Single-broker dev env: `make compose-up`.
+- **`ibmmq-jms-guide/`** — runnable Micronaut module (`mvn test` unit / `mvn verify` IT); module specifics in `ibmmq-jms-guide/CLAUDE.md`.
+- **`research-output/`** — validated fact sheets + raw research JSON (source of truth); **`research-prompt-ibmmq-jms-micronaut.md`** — the locked research brief.
+- Primary deliverables: the Markdown guide + standalone HTML doc (pipeline-generated).
