@@ -115,6 +115,11 @@ class DeliveryReportPersistenceIT {
         // deste IT e a persistencia append-only, nao a reconciliacao — que tem cobertura propria).
         String jdbcUrl = jdbcUrl();
         context = ApplicationContext.run(Map.ofEntries(
+                // Pin a valid ibm-mq.password so the context boots under the eager @Context validation of
+                // MqProperties (issue #27 / ADR-0011); this IT exercises persistence, not MQ, but the
+                // MqProperties bean is still validated at startup and would otherwise refuse to boot when
+                // IBM_MQ_PASSWORD is exported empty (user=app + blank password trips the credential rule).
+                Map.entry("ibm-mq.password", "passw0rd"),
                 Map.entry("datasources.default.url", jdbcUrl),
                 Map.entry("datasources.default.driver-class-name", "org.postgresql.Driver"),
                 Map.entry("datasources.default.username", "corr"),

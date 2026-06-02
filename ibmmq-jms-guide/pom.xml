@@ -28,6 +28,12 @@
              da versao literal (espelha o micronaut-inject-java, que ja fixa ${micronaut.version}). A
              dependencia de runtime micronaut-data-jdbc continua sem versao (o BOM a gere). -->
         <micronaut.data.version>4.13.5</micronaut.data.version>
+        <!-- Versao do Micronaut Validation alinhada pelo BOM micronaut-platform 4.9.4 (que define
+             micronaut.validation.version = 4.10.0). Fixada explicitamente porque os annotationProcessorPaths
+             do maven-compiler-plugin NAO resolvem versoes geridas por <dependencyManagement> — o path do
+             micronaut-validation-processor precisa da versao literal (espelha o micronaut-data-processor
+             acima). A dependencia de runtime micronaut-validation continua sem versao (o BOM a gere). -->
+        <micronaut.validation.version>4.10.0</micronaut.validation.version>
 
         <!-- Cliente IBM MQ javax.jms / JMS 2.0. -->
         <ibm.mq.version>9.4.5.0</ibm.mq.version>
@@ -88,6 +94,16 @@
         <dependency>
             <groupId>io.micronaut</groupId>
             <artifactId>micronaut-runtime</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <!-- Bean validation (Micronaut Validation / jakarta.validation). Enables @Validated +
+             @Min/@Max/@NotBlank on MqProperties so misconfiguration is rejected FAIL-FAST at context
+             startup (issue #27 / ADR-0011), not deferred to connect time. Version is aligned by the
+             micronaut-platform BOM (resolves to micronaut.validation.version). The matching
+             annotation processor sits on the maven-compiler-plugin annotationProcessorPaths below. -->
+        <dependency>
+            <groupId>io.micronaut.validation</groupId>
+            <artifactId>micronaut-validation</artifactId>
             <scope>compile</scope>
         </dependency>
 
@@ -283,6 +299,17 @@
                             <groupId>io.micronaut.data</groupId>
                             <artifactId>micronaut-data-processor</artifactId>
                             <version>${micronaut.data.version}</version>
+                        </path>
+                        <!-- Micronaut Validation: gera os metadados de bean-validation (@Validated +
+                             @Min/@Max/@NotBlank em MqProperties) em tempo de compilacao, habilitando a
+                             validacao FAIL-FAST no startup do contexto (issue #27 / ADR-0011). Coexiste com
+                             os processadores acima — AMBOS sao necessarios. Apenas build-time: NAO vira
+                             dependencia de runtime. A versao e literal porque os annotationProcessorPaths
+                             nao herdam o <dependencyManagement> do BOM (mesmo motivo do data-processor). -->
+                        <path>
+                            <groupId>io.micronaut.validation</groupId>
+                            <artifactId>micronaut-validation-processor</artifactId>
+                            <version>${micronaut.validation.version}</version>
                         </path>
                     </annotationProcessorPaths>
                 </configuration>
