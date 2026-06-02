@@ -4,10 +4,18 @@ import com.example.ibmmq.config.MqProperties;
 import com.example.ibmmq.consumer.BusinessMessageConsumer;
 import com.example.ibmmq.consumer.ReportMessageConsumer;
 import com.example.ibmmq.correlation.InMemoryCorrelationStore;
+import com.example.ibmmq.messaging.InMemoryBroker;
+import com.example.ibmmq.messaging.InMemoryReceivePort;
+import com.example.ibmmq.messaging.InMemorySendPort;
+import com.example.ibmmq.messaging.OutboundMessage;
+import com.example.ibmmq.messaging.ReceivePort;
+import com.example.ibmmq.messaging.ReportEnvelope;
+import com.example.ibmmq.messaging.SendPort;
 import com.example.ibmmq.model.PendingMessage;
+import com.example.ibmmq.model.ReportType;
 import com.example.ibmmq.producer.BusinessMessageProducer;
 import com.example.ibmmq.report.ReportFeedbackRouter;
-import com.ibm.msg.client.wmq.WMQConstants;
+import com.ibm.mq.constants.MQConstants;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -18,36 +26,34 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
-import javax.jms.ConnectionFactory;
-import javax.jms.JMSConsumer;
-import javax.jms.JMSContext;
-import javax.jms.JMSProducer;
-import javax.jms.Message;
-import javax.jms.Queue;
-import javax.jms.TextMessage;
-
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Testes unitarios (sem broker) do logging narrado e do MDC ao longo do ciclo de vida COA/COD.
+ * Testes unitarios (sem broker) do logging narrado e do MDC ao longo do ciclo de vida COA/COD,
+ * exercitando os tres entry points de PRODUCAO ligados ao seam (ADR-0008) — {@link SendPort}/
+ * {@link ReceivePort} via os fakes in-memory (ou um mock onde isso simplifica a assercao).
  *
- * <p>Valida os tres pilares do slice:
+ * <p>Valida os pilares do slice:
  * <ol>
  *   <li>cada etapa do ciclo (PRODUCE, CONSUME+COMMIT, COA, COD, CLASSIFY/CORRELATE/RECONCILE) emite
  *       uma linha INFO legivel com uma tag {@code [stage=...]} visivel;</li>
  *   <li>{@code messageId} e {@code correlationId} estao vinculados via MDC e aparecem em CADA linha
- *       relacionada — de forma que um unico id rastreia o fluxo inteiro;</li>
+ *       <b>do lado de PRODUCE e dos relatorios</b> — de forma que um unico id rastreia o fluxo;</li>
  *   <li>o MDC e limpo apos cada metodo (verificado lendo o snapshot por-evento, nunca o thread-local
  *       apos o retorno).</li>
  * </ol>
+ *
+ * <p><b>Nota de observabilidade (ADR-0008, intencional):</b> o seam de recebimento expoe apenas o CORPO
+ * da mensagem consumida (assinatura {@code handle(String body)}), NAO o messageId consumido. Por isso
+ * as linhas {@code [stage=CONSUME]}/{@code [stage=COMMIT]} nao podem mais vincular messageId/correlationId
+ * no MDC — uma consequencia aceita do seam travado. As assercoes de MDC para essas duas linhas foram
+ * removidas; as tags de etapa e o corpo permanecem assertados.</p>
  *
  * <p><b>Captura de log:</b> usamos um {@link ListAppender} que FORCA a captura preguicosa do MDC
  * dentro de {@code append()} (chamando {@code getMDCPropertyMap()} enquanto o MDC ainda esta
@@ -110,23 +116,16 @@ class LoggingFlowTest {
     class ProduceStage {
 
         @Test
-        @DisplayName("send vincula messageId=correlationId=JMSMessageID e narra a etapa de producao")
-        void produceLogsStageAndBindsMdc() throws Exception {
-            ConnectionFactory cf = mock(ConnectionFactory.class);
-            JMSContext ctx = mock(JMSContext.class);
-            TextMessage message = mock(TextMessage.class);
-            JMSProducer producer = mock(JMSProducer.class);
-            Queue queue = mock(Queue.class);
-
-            when(cf.createContext(JMSContext.AUTO_ACKNOWLEDGE)).thenReturn(ctx);
-            when(ctx.createQueue(anyString())).thenReturn(queue);
-            when(ctx.createTextMessage(anyString())).thenReturn(message);
-            when(ctx.createProducer()).thenReturn(producer);
-            when(message.getJMSMessageID()).thenReturn(MSG_ID);
+        @DisplayName("send vincula messageId=correlationId=messageId-do-seam e narra a etapa de producao")
+        void produceLogsStageAndBindsMdc() {
+            // O messageId ainda volta do seam para o produtor (SendPort.send retorna o id), entao o MDC
+            // de PRODUCE permanece valido. Um mock de SendPort com o id fixo mantem as assercoes verbatim.
+            SendPort sendPort = mock(SendPort.class);
+            when(sendPort.send(any(OutboundMessage.class))).thenReturn(MSG_ID);
 
             InMemoryCorrelationStore store = new InMemoryCorrelationStore();
             BusinessMessageProducer beanProducer =
-                    new BusinessMessageProducer(cf, new MqProperties(), store);
+                    new BusinessMessageProducer(sendPort, new MqProperties(), store);
 
             ListAppender<ILoggingEvent> appender = attachCapturingAppender(BusinessMessageProducer.class);
 
@@ -150,45 +149,38 @@ class LoggingFlowTest {
     class ConsumeStage {
 
         @Test
-        @DisplayName("receiveOne narra consumo e commit com messageId/correlationId no MDC e comita")
-        void consumeLogsConsumeAndCommitStages() throws Exception {
-            ConnectionFactory cf = mock(ConnectionFactory.class);
-            JMSContext ctx = mock(JMSContext.class);
-            JMSConsumer consumer = mock(JMSConsumer.class);
-            TextMessage message = mock(TextMessage.class);
-            Queue queue = mock(Queue.class);
+        @DisplayName("receiveOne narra consumo e commit (seam) e retorna o corpo; sem MDC de id nessas linhas")
+        void consumeLogsConsumeAndCommitStages() {
+            // Pre-semeia uma mensagem de negocio no broker in-memory via o send port pareado, depois
+            // consome via o receive port real. Observabilidade (ADR-0008): o seam expoe apenas o corpo,
+            // nao o messageId consumido — por isso CONSUME/COMMIT NAO vinculam id no MDC.
+            InMemoryBroker broker = new InMemoryBroker();
+            SendPort sendPort = new InMemorySendPort(broker);
+            ReceivePort receivePort = new InMemoryReceivePort(broker);
 
-            when(cf.createContext(JMSContext.SESSION_TRANSACTED)).thenReturn(ctx);
-            when(ctx.createQueue(anyString())).thenReturn(queue);
-            when(ctx.createConsumer(queue)).thenReturn(consumer);
-            when(consumer.receive(anyLong())).thenReturn(message);
-            when(message.getJMSMessageID()).thenReturn(MSG_ID);
-            when(message.getText()).thenReturn("{\"k\":\"v\"}");
+            MqProperties props = new MqProperties();
+            sendPort.send(OutboundMessage.persistentWithCoaCod(
+                    "pedido-1", "{\"k\":\"v\"}", props.getBusinessQueue(), props.getReportQueue()));
 
-            BusinessMessageConsumer beanConsumer =
-                    new BusinessMessageConsumer(cf, new MqProperties());
+            BusinessMessageConsumer beanConsumer = new BusinessMessageConsumer(receivePort, props);
 
             ListAppender<ILoggingEvent> appender = attachCapturingAppender(BusinessMessageConsumer.class);
 
             String body = beanConsumer.receiveOne(1_000L);
 
+            // O retorno nao-nulo + a linha [stage=COMMIT] sao a evidencia de que o commit (na UoW do
+            // seam) ocorreu — o COD so e liberado apos esse commit.
             assertThat(body).isEqualTo("{\"k\":\"v\"}");
-            // O COD so e liberado apos o commit — verificamos que o consumo foi de fato confirmado.
-            verify(ctx).commit();
 
             ILoggingEvent consumeEvent = eventWithStage(appender, "[stage=CONSUME]");
             assertThat(consumeEvent).as("linha [stage=CONSUME] emitida").isNotNull();
             assertThat(consumeEvent.getFormattedMessage())
                     .contains("Mensagem de negocio consumida")
-                    .contains(MSG_ID);
-            assertThat(consumeEvent.getMDCPropertyMap()).containsEntry("messageId", MSG_ID);
-            assertThat(consumeEvent.getMDCPropertyMap()).containsEntry("correlationId", MSG_ID);
+                    .contains("{\"k\":\"v\"}");
 
             ILoggingEvent commitEvent = eventWithStage(appender, "[stage=COMMIT]");
             assertThat(commitEvent).as("linha [stage=COMMIT] emitida").isNotNull();
             assertThat(commitEvent.getFormattedMessage()).contains("Consumo confirmado");
-            assertThat(commitEvent.getMDCPropertyMap()).containsEntry("messageId", MSG_ID);
-            assertThat(commitEvent.getMDCPropertyMap()).containsEntry("correlationId", MSG_ID);
         }
     }
 
@@ -198,19 +190,20 @@ class LoggingFlowTest {
 
         private ReportMessageConsumer reportConsumer(InMemoryCorrelationStore store) {
             // auditRepository=null: sem datasource neste teste de log; a persistencia de auditoria fica inerte.
+            // A ReceivePort nao e exercitada por handleReport(envelope), entao um mock basta.
             return new ReportMessageConsumer(
-                    mock(ConnectionFactory.class), new MqProperties(), store, new ReportFeedbackRouter(), null);
+                    mock(ReceivePort.class), new MqProperties(), store, new ReportFeedbackRouter(), null);
         }
 
         @Test
         @DisplayName("Relatorio COA narra [stage=CLASSIFY], [stage=CORRELATE] e [stage=COA] (arrival)")
-        void coaReportLogsArrivalStages() throws Exception {
+        void coaReportLogsArrivalStages() {
             InMemoryCorrelationStore store = new InMemoryCorrelationStore();
             store.register(PendingMessage.newlySent(MSG_ID, "pedido-2", "{}"));
 
-            Message coaReport = mock(Message.class);
-            when(coaReport.getJMSCorrelationID()).thenReturn(MSG_ID);
-            when(coaReport.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).thenReturn(259); // MQFB_COA
+            // Default MQRO_COPY_MSG_ID_TO_CORREL_ID: o relatorio chega com correlationId == MessageId original.
+            ReportEnvelope coaReport = ReportEnvelope.synthetic(
+                    MQConstants.MQFB_COA, MSG_ID, "", ReportType.COA);
 
             ListAppender<ILoggingEvent> appender = attachCapturingAppender(ReportMessageConsumer.class);
 
@@ -237,14 +230,13 @@ class LoggingFlowTest {
 
         @Test
         @DisplayName("Relatorio COD apos COA narra [stage=COD] (delivery) e [stage=RECONCILE]")
-        void codReportLogsDeliveryAndReconcileStages() throws Exception {
+        void codReportLogsDeliveryAndReconcileStages() {
             InMemoryCorrelationStore store = new InMemoryCorrelationStore();
             store.register(PendingMessage.newlySent(MSG_ID, "pedido-3", "{}"));
             store.markCoaReceived(MSG_ID); // COA ja recebido — COD completa a entrega.
 
-            Message codReport = mock(Message.class);
-            when(codReport.getJMSCorrelationID()).thenReturn(MSG_ID);
-            when(codReport.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).thenReturn(260); // MQFB_COD
+            ReportEnvelope codReport = ReportEnvelope.synthetic(
+                    MQConstants.MQFB_COD, MSG_ID, "", ReportType.COD);
 
             ListAppender<ILoggingEvent> appender = attachCapturingAppender(ReportMessageConsumer.class);
 
@@ -269,14 +261,13 @@ class LoggingFlowTest {
 
         @Test
         @DisplayName("Relatorio COA orfao (sem registro previo) narra [stage=ORPHAN] WARN, incrementa o contador e ainda gera evento")
-        void orphanCoaReportLogsOrphanStageAndIncrementsCounter() throws Exception {
+        void orphanCoaReportLogsOrphanStageAndIncrementsCounter() {
             // Sem register: o COA chega para um CorrelationId que este consumer nunca registrou
             // (orphan-on-redelivery, ou um relatorio que este processo nunca registrou).
             InMemoryCorrelationStore store = new InMemoryCorrelationStore();
 
-            Message coaReport = mock(Message.class);
-            when(coaReport.getJMSCorrelationID()).thenReturn(MSG_ID);
-            when(coaReport.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).thenReturn(259); // MQFB_COA
+            ReportEnvelope coaReport = ReportEnvelope.synthetic(
+                    MQConstants.MQFB_COA, MSG_ID, "", ReportType.COA);
 
             ListAppender<ILoggingEvent> appender = attachCapturingAppender(ReportMessageConsumer.class);
             ReportMessageConsumer consumer = reportConsumer(store);
@@ -285,7 +276,7 @@ class LoggingFlowTest {
             // conhecidos E orfaos).
             var event = consumer.handleReport(coaReport);
             assertThat(event).as("relatorio orfao ainda gera DeliveryEvent").isNotNull();
-            assertThat(event.reportType()).isEqualTo(com.example.ibmmq.model.ReportType.COA);
+            assertThat(event.reportType()).isEqualTo(ReportType.COA);
 
             // O outcome ORPHAN e superficializado: WARN [stage=ORPHAN] + contador de taxa de orfaos.
             ILoggingEvent orphan = eventWithStage(appender, "[stage=ORPHAN]");
@@ -302,13 +293,12 @@ class LoggingFlowTest {
 
         @Test
         @DisplayName("MDC e limpo apos handleReport (sem vazamento entre relatorios)")
-        void mdcClearedAfterHandleReport() throws Exception {
+        void mdcClearedAfterHandleReport() {
             InMemoryCorrelationStore store = new InMemoryCorrelationStore();
             store.register(PendingMessage.newlySent(MSG_ID, "pedido-4", "{}"));
 
-            Message coaReport = mock(Message.class);
-            when(coaReport.getJMSCorrelationID()).thenReturn(MSG_ID);
-            when(coaReport.getIntProperty(WMQConstants.JMS_IBM_FEEDBACK)).thenReturn(259);
+            ReportEnvelope coaReport = ReportEnvelope.synthetic(
+                    MQConstants.MQFB_COA, MSG_ID, "", ReportType.COA);
 
             reportConsumer(store).handleReport(coaReport);
 

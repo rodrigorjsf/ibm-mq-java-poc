@@ -75,9 +75,9 @@ class RoleBasedConnectionFactoryTopologyTest {
     @DisplayName("(4) os tres pontos de entrada ainda resolvem (sem NonUniqueBeanException)")
     void entryPointsStillWireWithoutAmbiguity() {
         try (ApplicationContext ctx = ApplicationContext.run(Map.of("messaging.adapter", "fake"))) {
-            // Os tres pontos de entrada mantem a injecao nao-qualificada de javax.jms.ConnectionFactory
-            // (o rewire para as ports e a fatia 3 / #57). @Primary no produtor mantem essa injecao
-            // nao-ambigua mesmo com as duas factories presentes.
+            // Os tres pontos de entrada agora injetam as ports do seam (SendPort/ReceivePort), ja
+            // religadas na fatia 3 / #57. @Primary no produtor mantem a resolucao da factory de produtor
+            // nao-ambigua mesmo com as duas factories @Named presentes (usada pelo PooledJmsSendAdapter).
             assertThatCode(() -> {
                 assertThat(ctx.getBean(BusinessMessageProducer.class)).isNotNull();
                 assertThat(ctx.getBean(BusinessMessageConsumer.class)).isNotNull();
