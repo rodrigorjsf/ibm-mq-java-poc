@@ -155,6 +155,45 @@ whether the offered rate stays under the report-drain capacity.
   per-pod report-drain) / 2`. With connect-per-operation, per-pod drain ≈ 12–15/s on a shared vCPU; with
   pooling it rises substantially (re-measure after #25).
 
+### 5.1 Environment limitations — what this harness CANNOT show
+
+The local single-node k3d box (§1) is for **correctness + latency-baseline + capacity characterization
+only**. It deliberately does **not** represent a production deployment, and it cannot exercise:
+
+- **Real throughput.** 4 vCPU shared by MQ + Postgres + every JVM caps the end-to-end pipeline at
+  ~12–15 msg/s (report-drain-bound) — **~10× below the ~167 msg/s (~10k rpm) mandate**. That ceiling is a
+  hardware + connect-per-operation artifact, not the application's intrinsic limit.
+- **Inter-node network.** All pods share one node (loopback) → no real pod↔pod / pod↔broker latency, no
+  cross-AZ hops, no TLS-at-scale overhead.
+- **Cross-node scheduling, failure & rolling deploys.** One node → no pod eviction/reschedule, no node
+  failure, no rolling-deploy reconnect storms, no anti-affinity.
+- **Real CQRS replica lag.** The reader datasource points at the same single Postgres (no streaming replica
+  deployed, ADR-0007) → the audit read-model's replica-lag behavior is NOT exercised.
+- **MQ HA.** Single QMgr — no multi-instance / native-HA failover.
+- **Clock skew.** Cross-pod latency is valid ONLY because one kernel clock is shared; a real cluster needs
+  NTP before the numbers mean anything (§6).
+- **SLA-grade measurement.** WSL2 shares CPU with the Windows host → noisy; every number is a relative
+  parameter, never an SLA.
+
+### 5.2 Recommended environment to test the REAL ~167 msg/s (~10k rpm) volumetry
+
+To validate the standing mandate, move off the laptop to a **multi-node Kubernetes cluster** and change
+both the infrastructure and one application prerequisite:
+
+| Area | Recommendation |
+| --- | --- |
+| **Cluster** | Managed multi-node k8s (EKS / GKE / AKS) or self-managed — ≥ 3 worker nodes, several vCPU each; spread roles via node pools / anti-affinity; NTP-synced. |
+| **App prerequisite (blocking)** | **Connection pooling first (#25).** Without reusing a pooled / long-lived `JMSContext` on producer AND consumers, throughput stays connection-bound regardless of cluster size — this is the single change that must land before 167 msg/s is reachable. |
+| **IBM MQ** | Dedicated node(s) or Amazon MQ; raise report-queue `MAXDEPTH` well above peak in-flight depth; size logs/buffers; consider multi-instance / native HA. Channel `MAXINST` / `SHARECNV` sized for pooled-connections × replicas. |
+| **Postgres** | Managed primary + a REAL streaming read replica (the CQRS reader); `max_connections` ≥ (writer pool + reader pool) × all replicas. |
+| **Replicas** | Scale `business-consumer` and `report-consumer` so aggregate drain ≥ the offered rate (report drain must clear ~334 reports/s at 167 msg/s); recompute the HikariCP pool math in `deploy/k3s/31-app-config.yaml`. |
+| **Observability** | p50/p95/p99 latency dashboards; queue-depth + DLQ-depth alerts; pool-saturation + reconnect metrics. |
+| **Run** | `make load` (adapted to the cluster) at **167 msg/s sustained for ≥ 10 min**; re-establish the baseline AND the pre-declared ceilings THERE — the local numbers do not transfer. |
+
+> **Bottom line for users:** this repo proves the COA/COD correctness, exactly-once, and audit-latency
+> *behavior*; it does **not** prove the *throughput* target on a laptop. Reproduce the ~167 msg/s volumetry
+> on the cluster above (with pooling) before trusting any capacity SLA.
+
 ## 6. Caveats (must accompany any baseline number)
 
 1. **Single-node clock validity.** `sent_at` (publisher pod) and `observed_at` (report-consumer pod) are
