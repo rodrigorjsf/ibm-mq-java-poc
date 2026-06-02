@@ -117,6 +117,15 @@ flowchart LR
   raw-JMS duplication is deleted, with COA(259)+COD(260) and `CorrelId == MessageId` still asserted.
 - **Correctness is unchanged.** The seam relocates JMS handling and the unit-of-work expression; it does not change
   commit semantics or idempotency. The Correlation store remains the delivery-idempotency defence.
+- **Observability consequence — the consume-path `messageId` leaves the MDC.** The unit-of-work seam crosses only
+  the decoded body (`UnitOfWorkHandler.handle(String body)`), never the consumed message's id, so
+  `BusinessMessageConsumer` can no longer bind `messageId`/`correlationId` into the MDC for its `[stage=CONSUME]` and
+  `[stage=COMMIT]` log lines. The producer keeps its id (`SendPort.send` returns it) and the report path keeps its ids
+  (the `ReportEnvelope` carries `correlationId`). End-to-end correlation is preserved: under the default
+  `MQRO_COPY_MSG_ID_TO_CORREL_ID` the report's `correlationId == original messageId`, so a delivery is still traceable
+  from PRODUCE through the COA/COD reports. Widening the seam to re-surface the consumed id was rejected — it would
+  break the port contract and the broker-free flow test; the bounded log gap is the accepted cost. `docs/runbook.md`'s
+  stage walkthrough reflects this (the CONSUME/COMMIT lines log the body, not the id).
 - **No `CONTEXT.md` change.** `SendPort` / `ReceivePort` / "messaging seam" are architecture (port/adapter) vocabulary,
   not domain language; `CONTEXT.md` stays a glossary devoid of implementation detail. The seam vocabulary lives here
   and in the issue.
