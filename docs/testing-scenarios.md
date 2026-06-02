@@ -53,12 +53,14 @@ container lifecycle is managed manually with `@BeforeAll`/`@AfterAll`.
 
 **Why this test connects as `admin` (not `app`):**
 The Queue Manager performs a PUT-with-context when delivering a COA/COD to the `ReplyToQ`.
-This requires context authority (`+setall`), which the low-privilege `app` user of the IBM
-MQ developer image does not have. If the test connected as `app`, the report PUT would fail
-with `MQRC_NOT_AUTHORIZED` (2035) and the reports would be silently routed to the DLQ,
-leaving the report queue empty. The `admin` user holds full authority. In production, the
-minimum fix is `SET AUTHREC ... AUTHADD(PUT, SETALL)` for the application principal (see
-Section 5.2(d) of the guide).
+This requires pass-identity context authority (`+passid`), which the low-privilege `app` user of the IBM
+MQ developer image does not have (it holds only `put`+`browse` on `DEV.QUEUE.2`). If the test connected as
+`app`, the report PUT would fail with `MQRC_NOT_AUTHORIZED` (2035) and the reports would be silently routed
+to the DLQ, leaving the report queue empty. The `admin` user holds full authority. The live-verified fix
+(see `CLAUDE.md`, "Report-PUT authority gotcha (2035) — CORRECTED on live k3s") is
+`SET AUTHREC ... AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)` for the application principal — `+passid` is
+the authority `app` is missing (NOT `+setall`, the prior stale assumption). This is the exact gotcha that
+IT-07 reproduces deterministically.
 
 **Pre-conditions:**
 - Docker available on the test host.
@@ -97,7 +99,7 @@ Section 5.2(d) of the guide).
 - Section 2.6 — timing × transaction: why `commit()` releases the COD.
 - Section 2.7 — report persistence inheritance (persistent original → persistent reports).
 - Section 5.1 — hybrid testing strategy and Testcontainers setup.
-- Section 5.2(d) — the `+SETALL` / admin authority gotcha (why this test uses `admin`).
+- Section 5.2(d) — the `+passid` / admin authority gotcha (why this test uses `admin`; corrected from `+setall`).
 
 **Issue #19 extension — recovered MQMD fields:**
 The same test now also enables MQMD read on its own report-queue consumer
@@ -107,7 +109,7 @@ recovered MQMD values via `ReportDescriptor.from(report, type)`:
   `reportTypeChar == 'A'` for the COA / `'D'` for the COD; `putTimestampUtc` non-null and plausibly
   recent (within a ±10-minute window); `messageIdBytes` non-null (read-enabled).
 - **Tolerant** — `applIdentityData` non-null (may be blank, QMgr-set); `accountingToken` non-null and
-  exactly 24 bytes (`MQ_ACCOUNTING_TOKEN_LENGTH`, may be the QMgr default token).
+  exactly 32 bytes (`MQ_ACCOUNTING_TOKEN_LENGTH` = MQBYTE32; NOT 24, which is the MsgId/CorrelId length).
 
 The original CorrelId == MsgId / both-reports-arrive assertions are unchanged (extended, not replaced).
 
@@ -154,6 +156,633 @@ exactly asserted (no QMgr non-determinism).
 **Guide cross-references:**
 - Section 2.4 / 2.7 — id propagation and report descriptor.
 - `research-output/phase-f-mqmd-field-recovery.md` — the (R)-all verdict + property keys + GMT→UTC rule.
+
+---
+
+### IT-03 — Report persistence inheritance (persistent original → persistent COA + COD)
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/ScenarioMatrixIT.java`
+
+**Nested class / method:** `PersistenceInheritance#persistentOriginalYieldsPersistentReports`
+
+**What it proves (issue #20, Group A):**
+A **PERSISTENT** original sent with `MQRO_COA` + `MQRO_COD` produces a COA and a COD that **both** report
+`getJMSDeliveryMode() == DeliveryMode.PERSISTENT`. Reports **inherit** the original's persistence — this is
+a validated fact that **refutes** the research brief's "reports are non-persistent by default" assumption.
+
+**Why this lives in the shared-container matrix:**
+`ScenarioMatrixIT` owns a single `static MQContainer` (`@BeforeAll`/`@AfterAll`); the three `@Nested`
+scenarios share it (container boot is ~30-60 s — never one per scenario). A `@BeforeEach` drains
+`DEV.QUEUE.1` and `DEV.QUEUE.2` so scenarios are order-independent (JUnit 5 does not order nested classes).
+
+**Pre-conditions:**
+- Docker available; `icr.io/ibm-messaging/mq:9.4.5.0-r2` reachable.
+- Queues `DEV.QUEUE.1` (business) and `DEV.QUEUE.2` (report).
+- Connection via `DEV.ADMIN.SVRCONN` as `admin` (full context authority for report generation).
+
+**Step-by-step flow:**
+1. Produce a PERSISTENT `TextMessage` to `DEV.QUEUE.1` with `JMSReplyTo = DEV.QUEUE.2`,
+   `JMS_IBM_REPORT_COA = MQRO_COA`, `JMS_IBM_REPORT_COD = MQRO_COD`.
+2. Destructively receive the original under a `SESSION_TRANSACTED` context and `commit()` (releases the COD).
+3. Poll `DEV.QUEUE.2` (`?mdReadEnabled=true`) up to 30 s, classifying each report by `JMS_IBM_FEEDBACK`
+   (259 = COA, 260 = COD) and capturing each report's `getJMSDeliveryMode()`.
+
+**Key assertions (AssertJ):**
+- A COA (259) and a COD (260) both arrive within the window.
+- The COA's delivery mode is `PERSISTENT`.
+- The COD's delivery mode is `PERSISTENT`.
+
+**Guide cross-references:**
+- Section 2.7 — report persistence inheritance.
+- Section 5.2(d) — the admin/context-authority gotcha.
+- `research-output/phase-g-report-options-and-scenarios.md` — Group A matrix.
+
+---
+
+### IT-04 — Syncpoint COA/COD timing (COA at PUT, COD only after the transacted commit)
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/ScenarioMatrixIT.java`
+
+**Nested class / method:** `SyncpointCoaCodTiming#codOnlyAppearsAfterTransactedCommit`
+
+**What it proves (issue #20, Group A):**
+The COA is generated at **PUT** time, the COD only after the consumer's **transacted commit**. Before the
+original is consumed the report queue holds a COA (feedback 259) but **no** COD (260); after a
+`SESSION_TRANSACTED` destructive get + `commit()`, a COD (260) appears.
+
+**Why bounded polling (not a fixed sleep):**
+Determinism for the default gate. The test polls with short receive timeouts until the COA arrives, then a
+short additional sweep confirms no COD exists yet (the original is still on `DEV.QUEUE.1`, never consumed,
+so no COD can have been generated). After the commit it polls again for the COD. No `Thread.sleep`.
+
+**Pre-conditions:** same as IT-03 (shared container, admin connection, `DEV.QUEUE.1`/`DEV.QUEUE.2`).
+
+**Step-by-step flow:**
+1. Produce a PERSISTENT original with `MQRO_COA` + `MQRO_COD` and `JMSReplyTo = DEV.QUEUE.2`.
+2. **Before** consuming: poll `DEV.QUEUE.2` until the COA arrives; a short sweep asserts no COD has appeared.
+3. Destructively receive the original under a `SESSION_TRANSACTED` context and `commit()`.
+4. **After** the commit: poll `DEV.QUEUE.2` until a COD (260) arrives.
+
+**Key assertions (AssertJ):**
+- A COA (259) is present **before** the original is consumed.
+- **No** COD (260) exists before the transacted commit.
+- A COD (260) appears **after** the commit.
+
+**Guide cross-references:**
+- Section 2.6 — timing × transaction (why `commit()` releases the COD).
+- `research-output/phase-g-report-options-and-scenarios.md` — Group A matrix.
+
+---
+
+### IT-05 — COD with full data (the report body carries the original payload)
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/ScenarioMatrixIT.java`
+
+**Nested class / method:** `WithDataPayload#codWithFullDataCarriesOriginalPayload`
+
+**What it proves (issue #20, Group A):**
+Requesting `MQRO_COD_WITH_FULL_DATA` (verified bytecode value **14336**) makes the generated COD report
+**carry the original message body**. The received COD report's body reproduces the original payload (a
+`TextMessage` round-trips as the same text; a `BytesMessage`-form report carries the original bytes — the
+test recovers the body either way and asserts it contains the original text).
+
+**Why the with-data flag is set on a test-built message (not the production producer):**
+Issue #19 deliberately kept the production `BusinessMessageProducer` on plain `MQRO_COD` to avoid the
+`+setid/+setall` authority escalation (the report PUT needs context authority — see `CLAUDE.md`). This
+scenario builds its own message and sends it over the IT's **admin** connection (which already holds full
+context authority), mirroring how `CoaCodEndToEndIT` builds its own `TextMessage`. The production producer
+is **unchanged**.
+
+**Pre-conditions:** same as IT-03 (shared container, admin connection, `DEV.QUEUE.1`/`DEV.QUEUE.2`).
+
+**Step-by-step flow:**
+1. Produce a PERSISTENT `TextMessage` with `JMS_IBM_REPORT_COD = MQRO_COD_WITH_FULL_DATA` (14336) and
+   `JMSReplyTo = DEV.QUEUE.2`.
+2. Destructively receive the original under a `SESSION_TRANSACTED` context and `commit()`.
+3. Poll `DEV.QUEUE.2` (`?mdReadEnabled=true`) up to 30 s for the COD (feedback 260) and recover its body.
+
+**Key assertions (AssertJ):**
+- The COD-with-full-data report body is recoverable (not null).
+- The body **contains** the original message text (the full original payload was carried in the report).
+
+**Guide cross-references:**
+- Section 2.7 — report data options.
+- `research-output/phase-g-report-options-and-scenarios.md` — `MQRO_*` with-data semantics + values.
+
+---
+
+### IT-06 — Field recovery on BOTH report kinds (COA and COD) — catalogue of the existing assertion
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/CoaCodEndToEndIT.java`
+
+**Method:** `coaAndCodAreDelivered` → `assertRecoveredMqmdFields(report, type, …)` (runs per report)
+
+**What it proves (issue #20 AC "Field-recovery asserted on both report kinds"):**
+This AC is **already satisfied** by `CoaCodEndToEndIT` and is **not** duplicated in `ScenarioMatrixIT`.
+Inside the report-collection loop, `assertRecoveredMqmdFields(...)` is invoked **per report** (gated by
+`coaSeen`/`codSeen`), so the six recovered MQMD fields are asserted for **both** the COA and the COD:
+
+- `applIdentityData` — recovered (read-enabled; may be blank, QMgr-set).
+- `accountingToken` — recovered, **32 bytes** (`MQ_ACCOUNTING_TOKEN_LENGTH`; may be the QMgr default token).
+- `correlationIdBytes` — non-empty; `== original MsgId` bytes under default `MQRO_COPY_MSG_ID_TO_CORREL_ID`.
+- `messageIdBytes` — the report's own MsgId, recovered (read-enabled).
+- `putTimestampUtc` — non-null and plausibly recent (±10-minute window).
+- `reportTypeChar` — `'A'` for the COA, `'D'` for the COD.
+
+**Why catalogued here (not re-implemented):**
+The field-recovery scenario is the Group C catalogue entry for issue #20. `CoaCodEndToEndIT` already runs
+the six-field assertion against a real broker for both report kinds (it predates the AssertJ convention and
+uses raw JUnit asserts — left as-is, not retrofitted). Duplicating it would add cost without coverage.
+
+**Guide cross-references:**
+- IT-01 (above) — the parent end-to-end scenario this assertion lives inside.
+- `research-output/phase-f-mqmd-field-recovery.md` — the (R)-all field-recovery verdict.
+- `research-output/phase-g-report-options-and-scenarios.md` — Group A/C matrix overview.
+
+---
+
+### IT-07 — Report-PUT authority gotcha (`app` lacks `passid` → report dead-letters)
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/ScenarioMatrixIT.java`
+
+**Nested class / method:** `ReportPutAuthToDlq#reportFromLowPrivAppDeadLetters`
+
+**What it proves (issue #20, Group A):**
+When the **low-privilege `app` user** produces an original requesting a **COA** with
+`JMSReplyTo = DEV.QUEUE.2`, the Queue Manager's report PUT-with-context onto the ReplyToQ fails
+`MQRC_NOT_AUTHORIZED` (2035) and the report is routed to **`DEV.DEAD.LETTER.QUEUE`** — it never reaches the
+ReplyToQ. This is the live-verified report-PUT authority gotcha: the dev image grants `app` only
+**`put`+`browse`** on `DEV.QUEUE.2` — **no `passid`** (pass-identity context) — which is exactly the
+authority the QMgr needs to PUT the report with the original's context.
+
+**Why this scenario connects as `app` (the only one that does):**
+Every other scenario connects as `admin` (full context authority) precisely so reports are NOT refused.
+This scenario builds a **second** connection factory on channel `DEV.APP.SVRCONN` as user `app` to
+reproduce the failure path. The COA is requested (not COD) because a COA fires at **PUT** time, so the
+unauthorized report PUT — and the dead-lettering — happens immediately, with **no consume step needed**.
+The original is sent `PERSISTENT` so the report inherits persistence and is **dead-lettered** (not silently
+discarded) when its ReplyToQ PUT is refused.
+
+**Why the assertions read CURDEPTH via `runmqsc` (not JMS):**
+The robust, header-free proof. Parsing the `MQDLH` dead-letter header in JMS is brittle; instead the test
+runs `DIS QLOCAL(name) CURDEPTH` via `mq.execInContainer("bash","-c", "… | runmqsc QM1")` and parses
+`CURDEPTH(N)`. Dead-lettering is async, so the DLQ depth is polled with a bounded budget (≤ 20 s).
+
+**Pre-conditions:**
+- Docker available; `icr.io/ibm-messaging/mq:9.4.5.0-r2` reachable.
+- Queues `DEV.QUEUE.1`, `DEV.QUEUE.2`, and `DEV.DEAD.LETTER.QUEUE` (all pre-created by the dev image).
+- A `DEV.APP.SVRCONN` / `app` connection (low privilege — **no `passid`** on `DEV.QUEUE.2`).
+- The shared `@BeforeEach` also `CLEAR`s `DEV.DEAD.LETTER.QUEUE` so a prior scenario's dead-letter cannot
+  bleed into this scenario's CURDEPTH assertion.
+
+**Step-by-step flow:**
+1. As `app`, produce a PERSISTENT original to `DEV.QUEUE.1` with `JMS_IBM_REPORT_COA = MQRO_COA` and
+   `JMSReplyTo = DEV.QUEUE.2`.
+2. Poll `DEV.DEAD.LETTER.QUEUE` CURDEPTH (via `runmqsc`) up to 20 s until it reaches ≥ 1.
+
+**Key assertions (AssertJ):**
+- `DEV.QUEUE.2` CURDEPTH `== 0` (no report reached the ReplyToQ).
+- `DEV.DEAD.LETTER.QUEUE` CURDEPTH `>= 1` (the refused report dead-lettered).
+
+**Guide cross-references:**
+- Section 5.2(d) — the context-authority (`+passid`) gotcha and the `admin` workaround used elsewhere.
+- `research-output/phase-g-report-options-and-scenarios.md` §"Broker-setup facts" — the live-verified
+  `app` authority + DLQ name.
+- `CLAUDE.md` — report-PUT authority gotcha (`+passid`, corrected from `+setall`).
+
+---
+
+### IT-08 — Poison-message backout (after `BOTHRESH` rollbacks → requeued to `BOQNAME`)
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/ScenarioMatrixIT.java`
+
+**Nested class / method:** `PoisonMessageBackout#poisonMessageMovesToBackoutQueueAfterThreshold`
+
+**What it proves (issue #20, Group A):**
+A message repeatedly **rolled back** under a transacted session is, after `BOTHRESH` backouts, **requeued
+by the QMgr to `BOQNAME`** (the backout queue). With `SCENARIO.POISON.Q` defined `BOTHRESH(3)
+BOQNAME(SCENARIO.BACKOUT.Q)`, three rollbacks move the poison message off `SCENARIO.POISON.Q` and onto
+`SCENARIO.BACKOUT.Q`. The test also proves `JMSXDeliveryCount` **increments** across the redeliveries.
+
+**Why one `SESSION_TRANSACTED` context, bounded loop, and a final `commit()`:**
+`BackoutCount` lives on the MQMD; one consumer under one transacted context is the cleanest harness. The
+loop is bounded (`BOTHRESH + 2`) so it always terminates: each iteration `receive()`s, reads
+`JMSXDeliveryCount` (strictly greater than the previous), then `rollback()`s; when a `receive()` returns
+null the QMgr has already requeued the message to `BOQNAME`. The loop ends with `commit()` (never
+`rollback()`) — the requeue PUT may ride the current unit of work, and `commit()` is safe whether or not it
+does. CURDEPTH is read **after** the context closes.
+
+**Why queues are defined in `@BeforeAll`:**
+The dev image does not pre-create `SCENARIO.*`. A `@BeforeAll`-time `runmqsc` `DEFINE QLOCAL(... ) REPLACE`
+(verified — returns `AMQ8006I`) creates `SCENARIO.POISON.Q` (`BOTHRESH(3)`, `BOQNAME(SCENARIO.BACKOUT.Q)`)
+and `SCENARIO.BACKOUT.Q` once, after the container is up. The `@BeforeEach` `CLEAR`s both so the scenario is
+order-independent.
+
+**Pre-conditions:**
+- Docker available; `icr.io/ibm-messaging/mq:9.4.5.0-r2` reachable.
+- `SCENARIO.POISON.Q` (`BOTHRESH(3)`, `BOQNAME(SCENARIO.BACKOUT.Q)`) and `SCENARIO.BACKOUT.Q` defined.
+- Connection via `DEV.ADMIN.SVRCONN` as `admin` (full authority).
+
+**Step-by-step flow:**
+1. PUT one PERSISTENT message onto `SCENARIO.POISON.Q`.
+2. Under a `SESSION_TRANSACTED` context, loop: `receive()`, assert `JMSXDeliveryCount` increased,
+   `rollback()`; break when `receive()` returns null (the message has been requeued to the backout queue).
+   End with `commit()`.
+3. Poll CURDEPTH (via `runmqsc`) after the context closes.
+
+**Key assertions (AssertJ):**
+- `SCENARIO.BACKOUT.Q` CURDEPTH `>= 1` (the poison message was requeued).
+- `SCENARIO.POISON.Q` CURDEPTH `== 0` (the message left the poison queue).
+- The maximum observed `JMSXDeliveryCount` `>= 2` (the delivery count climbed across redeliveries).
+
+**Guide cross-references:**
+- `mqsc/20-queues.mqsc` — the `BOTHRESH`/`BOQNAME` backout-queue concept.
+- `research-output/phase-g-report-options-and-scenarios.md` §"Broker-setup facts" — `runmqsc DEFINE QLOCAL
+  … BOTHRESH … BOQNAME` verified working in-container.
+
+---
+
+### IT-09 — Queue full (`PUT` past `MAXDEPTH` fails `MQRC_Q_FULL` 2053)
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/ScenarioMatrixIT.java`
+
+**Nested class / method:** `QueueFull#thirdPutOnMaxDepth2QueueFailsWithQueueFull`
+
+**What it proves (issue #20, Group A):**
+A `PUT` onto a queue already at its `MAXDEPTH` fails with `MQRC_Q_FULL` (2053). With `SCENARIO.FULL.Q`
+defined `MAXDEPTH(2)`, the first two `send()`s succeed and the **third** `send()` throws, carrying MQ reason
+**2053**.
+
+**Why a non-transacted `AUTO_ACKNOWLEDGE` context and `hasStackTraceContaining("2053")`:**
+Under a transacted session a queue-full could defer to `commit()`; a non-transacted `AUTO_ACKNOWLEDGE`
+context makes the third `send()` throw **synchronously**. The JMS 2.0 simplified API's
+`JMSProducer.send()` throws `javax.jms.JMSRuntimeException` — which does **not** extend `JMSException` and
+has **no** `getLinkedException()`, so the AssertJ assertion is `assertThatThrownBy(...)` +
+`hasStackTraceContaining("2053")` (walks the full cause chain to the linked `MQException` carrying MQRC
+2053), tolerant of exactly how 2053 surfaces. The assertion does **not** pin the exception type.
+
+**Why the queue is defined in `@BeforeAll`:**
+Same as IT-08 — `runmqsc DEFINE QLOCAL(SCENARIO.FULL.Q) MAXDEPTH(2) REPLACE` (verified) creates it once
+after the container is up; the `@BeforeEach` `CLEAR`s it.
+
+**Pre-conditions:**
+- Docker available; `icr.io/ibm-messaging/mq:9.4.5.0-r2` reachable.
+- `SCENARIO.FULL.Q` defined `MAXDEPTH(2)`.
+- Connection via `DEV.ADMIN.SVRCONN` as `admin` (full authority).
+
+**Step-by-step flow:**
+1. Under a non-transacted `AUTO_ACKNOWLEDGE` context, `send()` two PERSISTENT messages (fills `MAXDEPTH(2)`).
+2. `send()` a third message and assert the throw.
+3. Read CURDEPTH (via `runmqsc`) to confirm the queue is still exactly at `MAXDEPTH`.
+
+**Key assertions (AssertJ):**
+- The third `send()` throws an exception whose stack trace contains `2053` (`MQRC_Q_FULL`).
+- `SCENARIO.FULL.Q` CURDEPTH `== 2` (the overflow PUT did not land).
+
+**Guide cross-references:**
+- `research-output/phase-g-report-options-and-scenarios.md` §"Broker-setup facts" — `runmqsc DEFINE QLOCAL
+  … MAXDEPTH` verified working in-container; `JMSRuntimeException` (not `JMSException`) for the simplified API.
+- UT-01 — `ReportFeedbackRouter` maps 2053 (`MQRC_Q_FULL`) to `EXCEPTION` (the unit-side mirror of this code).
+
+---
+
+### Timing-sensitive Group A scenarios — `@Tag("scenario")`, run via `mvn verify -Pscenarios`
+
+The next three scenarios (IT-10..IT-12) are the **timing-sensitive** Group A tier. They live in a SEPARATE,
+tag-gated class `ScenarioMatrixSlowIT` annotated `@Tag("scenario")` at the class level (JUnit 5 inherits the
+tag to its `@Nested` scenarios). The default `mvn verify` gate **excludes** them (the base failsafe config
+sets `<excludedGroups>replication,scenario</excludedGroups>`); they run **on demand** via
+`mvn verify -Pscenarios` (the `scenarios` profile inverts the filter with `<groups>scenario</groups>` +
+the `<excludedGroups>none</excludedGroups>` sentinel — an EMPTY excludedGroups would NOT override the
+inherited value). Like `ScenarioMatrixIT` they share ONE `static MQContainer`; the reconnect/pool scenarios
+**bounce the Queue Manager inside the running container** (`endmqm -i QM1` / `strmqm QM1` via
+`execInContainer`, then poll `dspmq` for `STATUS(Running)`) — NOT `MQContainer.stop()/start()`, which would
+remap the random host port and defeat client auto-reconnect. Each scenario leaves the QMgr Running; a
+`@BeforeEach` re-ensures Running and drains `DEV.QUEUE.1/2/3`.
+
+---
+
+### IT-10 — Expiration report (TTL-expired message → `MQRO_EXPIRATION`, feedback 258)
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/ScenarioMatrixSlowIT.java`
+
+**Nested class / method:** `Expiration#expiredMessageYieldsExpirationReport`
+
+**Gating:** `@Tag("scenario")` (class-level) — runs via `mvn verify -Pscenarios`; excluded from default `mvn verify`.
+
+**What it proves (issue #20, Group A, timing tier):**
+A **NON-persistent** message sent to `DEV.QUEUE.3` with a short time-to-live (`setTimeToLive(2000)` = 2 s)
+and an expiration report requested (`JMS_IBM_REPORT_EXPIRATION = MQRO_EXPIRATION`, `JMSReplyTo = DEV.QUEUE.2`)
+yields an **expiration report** (feedback `MQFB_EXPIRATION` = 258) on the report queue once the TTL elapses.
+The report's `CorrelationId` equals the original `MessageId` (default `MQRO_COPY_MSG_ID_TO_CORREL_ID`).
+
+**Why a destructive GET forces the expiry (no background scan):**
+`ALTER QMGR EXPRYINT(...)` is a **syntax error** in MQ 9.4.5 (the attribute does not exist), so there is no
+background expiry scan to rely on. The test waits out the TTL (a bounded `Thread.sleep`, > 2 s) and then does
+a **destructive GET** on `DEV.QUEUE.3` (expecting `null` — the message is gone): the QMgr discards the expired
+message **during the GET scan** and only **then** generates the `MQRO_EXPIRATION` report onto the ReplyToQ.
+A bounded poll on `DEV.QUEUE.2` (`?mdReadEnabled=true`) collects it.
+
+**Pre-conditions:**
+- Docker available; `icr.io/ibm-messaging/mq:9.4.5.0-r2` reachable.
+- Queues `DEV.QUEUE.3` (the TTL original's home) and `DEV.QUEUE.2` (report), both pre-created by the dev image.
+- Connection via `DEV.ADMIN.SVRCONN` as `admin` (full context authority for report generation).
+
+**Step-by-step flow:**
+1. Produce a NON-persistent `TextMessage` to `DEV.QUEUE.3` with `setTimeToLive(2000)`,
+   `JMS_IBM_REPORT_EXPIRATION = MQRO_EXPIRATION`, `JMSReplyTo = DEV.QUEUE.2`; capture `JMSMessageID`.
+2. Sleep > TTL (bounded ~3 s), then do a destructive `receive(2000)` on `DEV.QUEUE.3` — assert it is `null`
+   (the message expired; the GET scan triggered the report).
+3. Poll `DEV.QUEUE.2` (`?mdReadEnabled=true`) up to 30 s for a report with `JMS_IBM_FEEDBACK == 258`.
+
+**Key assertions (AssertJ):**
+- The destructive GET on `DEV.QUEUE.3` returns `null` (the TTL-expired message is gone).
+- An expiration report (feedback `MQFB_EXPIRATION` = 258) arrives on `DEV.QUEUE.2`.
+- The report's `CorrelationId` equals the original `MessageId`.
+
+**Guide cross-references:**
+- `research-output/phase-g-report-options-and-scenarios.md` §4 — the `EXPRYINT` syntax-error fact and the
+  post-TTL destructive-GET technique to force expiry.
+- IT-01 — `MQRO_COPY_MSG_ID_TO_CORREL_ID` id propagation (same CorrelId == original MsgId rule).
+
+---
+
+### IT-11 — Client auto-reconnect (round-trip survives a Queue Manager bounce)
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/ScenarioMatrixSlowIT.java`
+
+**Nested class / method:** `Reconnect#roundTripSurvivesQueueManagerBounce`
+
+**Gating:** `@Tag("scenario")` (class-level) — runs via `mvn verify -Pscenarios`; excluded from default `mvn verify`.
+
+**What it proves (issue #20, Group A, timing tier):**
+With client auto-reconnect enabled on the CF
+(`WMQ_CLIENT_RECONNECT_OPTIONS = WMQ_CLIENT_RECONNECT`, `WMQ_CLIENT_RECONNECT_TIMEOUT = 30`), a `send` +
+`receive` round-trip through `DEV.QUEUE.1` **succeeds** after a **Queue Manager bounce** — the client
+reconnects to the recovered broker on the same `host:port`. The test holds a `JMSContext` open across the
+bounce to exercise the held-context auto-reconnect path; if that context's reconnect window lapsed during the
+outage (the client begins reconnecting the instant `endmqm` breaks the connection, before the listener is
+back), the test transparently falls back to a **fresh** context against the same endpoint. Either path proves
+the client reconnects to the recovered broker; the test does not distinguish them, so it is robust rather than
+flaky (it does not assert that the held context specifically auto-reconnected).
+
+**Why the QMgr is bounced IN-container (not `MQContainer.stop()/start()`):**
+Testcontainers publishes the MQ listener on a **random host port**; stopping/starting the container would
+**remap** it, so a reconnecting client could never reach the same endpoint. Instead the test bounces only the
+QMgr inside the still-running container — `endmqm -i QM1` then `strmqm QM1` via `execInContainer`, polling
+`dspmq` for `STATUS(Running)` — so the container's port mapping stays stable and auto-reconnect actually
+works. The scenario leaves the QMgr Running for its siblings.
+
+**Pre-conditions:**
+- Docker available; `icr.io/ibm-messaging/mq:9.4.5.0-r2` reachable.
+- Queue `DEV.QUEUE.1` (business), pre-created by the dev image.
+- Connection via `DEV.ADMIN.SVRCONN` as `admin`.
+
+**Step-by-step flow:**
+1. Build the CF with `WMQ_CLIENT_RECONNECT_OPTIONS = WMQ_CLIENT_RECONNECT` and a bounded
+   `WMQ_CLIENT_RECONNECT_TIMEOUT` (30 s); open a `JMSContext` and hold it open.
+2. Bounce the QMgr (`endmqm -i QM1` / `strmqm QM1`, poll `dspmq` → `STATUS(Running)`).
+3. Wait for the SVRCONN listener to actually accept a connection (`awaitListenerReady()` — `dspmq STATUS(Running)`
+   does not mean the listener is bound to the port yet), so the round-trip below is not racing listener startup.
+4. `send` a `TextMessage` to `DEV.QUEUE.1` then `receive` it (10 s inner receive, retried under a 30 s budget),
+   preferring the held context and falling back to a fresh context if its reconnect window lapsed.
+
+**Key assertions (AssertJ):**
+- The post-bounce round-trip body equals the sent payload — the client reconnected to the recovered broker
+  (via held-context auto-reconnect or the fresh-context fallback).
+
+**Guide cross-references:**
+- `research-output/phase-a-fact-sheet.md` — `WMQ_CLIENT_RECONNECT*` field names + values (bytecode-verified).
+- `research-output/phase-g-report-options-and-scenarios.md` §4 — in-container broker-bounce technique.
+
+---
+
+### IT-12 — Pooled-JMS stale-connection invalidation (second borrow yields a working connection)
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/ScenarioMatrixSlowIT.java`
+
+**Nested class / method:** `PooledJmsInvalidation#secondBorrowAfterBounceYieldsWorkingConnection`
+
+**Gating:** `@Tag("scenario")` (class-level) — runs via `mvn verify -Pscenarios`; excluded from default `mvn verify`.
+
+**What it proves (issue #20, Group A, timing tier):**
+A `org.messaginghub.pooled.jms.JmsPoolConnectionFactory` fronting the MQ `MQConnectionFactory` **detects and
+replaces a stale physical connection**. After a first borrow round-trips a message, the Queue Manager is
+bounced (so the pooled physical connection goes dead); a **second** borrow from the same pool yields a
+**working** connection — a fresh `send`/`receive` succeeds because pooled-jms discarded the dead connection
+and established a new one.
+
+**Why the QMgr is bounced IN-container:**
+Same reason as IT-11 — bouncing only the QMgr (`endmqm -i QM1` / `strmqm QM1`, poll `dspmq`) keeps the
+container's host port stable so the pool's replacement connection re-establishes against the same endpoint;
+`MQContainer.stop()/start()` would remap the port. The pool is closed in a `finally` (`pool.stop()`), and the
+scenario leaves the QMgr Running for its siblings.
+
+**Pre-conditions:**
+- Docker available; `icr.io/ibm-messaging/mq:9.4.5.0-r2` reachable.
+- Queue `DEV.QUEUE.1` (business), pre-created by the dev image.
+- Connection via `DEV.ADMIN.SVRCONN` as `admin`; `pooled-jms` 2.0.9 on the classpath (a project dependency).
+
+**Step-by-step flow:**
+1. Build a `JmsPoolConnectionFactory`, `setConnectionFactory(mqCf)`, `setMaxConnections(2)`.
+2. Borrow a context from the pool, round-trip a message through `DEV.QUEUE.1` (asserts the pooled connection works).
+3. Bounce the QMgr (`endmqm -i QM1` / `strmqm QM1`, poll `dspmq` → `STATUS(Running)`) so the pooled connection goes stale.
+4. Borrow AGAIN from the pool and round-trip a message — assert it succeeds. `pool.stop()` in a `finally`.
+
+**Key assertions (AssertJ):**
+- The pre-bounce pooled round-trip is **not null**.
+- The post-bounce **second** borrow round-trips successfully (**not null**, body matches) — pooled-jms
+  replaced the stale connection.
+
+**Guide cross-references:**
+- `research-output/pooled-jms-factory-tuning.md` — `JmsPoolConnectionFactory` semantics and tuning.
+- `research-output/phase-g-report-options-and-scenarios.md` §4 — in-container broker-bounce technique.
+- `docs/adr/0006-role-based-connection-factories.md` — the role-based factory topology this pool fronts.
+
+---
+
+### Virtual-Thread evidence Group B scenarios — `@Tag("vt")`, run via `mvn verify -Pvt`
+
+The next two scenarios (IT-13..IT-14) are the **Virtual-Thread evidence** tier (issue #20 AC: "Virtual-Thread
+throughput/latency measured and the pinning boundary demonstrated"). They live in a SEPARATE, tag-gated class
+`VirtualThreadsEvidenceIT` annotated `@Tag("vt")` at the class level (JUnit 5 inherits the tag to its
+`@Nested` evidence groups). They are **purely test-source evidence** — production uses NO Virtual Threads (a
+single platform thread per pod + blocking JMS `receive()`, parallelism by Kubernetes replicas); nothing here
+changes production behaviour. The default `mvn verify` gate **excludes** them (the base failsafe config sets
+`<excludedGroups>replication,scenario,vt</excludedGroups>`); they run **on demand** via `mvn verify -Pvt`
+(the `vt` profile inverts the filter with `<groups>vt</groups>` + the `<excludedGroups>none</excludedGroups>`
+sentinel — an EMPTY excludedGroups would NOT override the inherited value). Like the sibling matrix ITs they
+share ONE `static MQContainer`. Every workload is **bounded** (~300 messages) — a short micro-measurement, NOT
+a sustained load run (sustained ~167 msg/s on a cluster is the deferred slice #21).
+
+---
+
+### IT-13 — Virtual-Thread concurrency pattern: right vs wrong + throughput/latency measured
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/VirtualThreadsEvidenceIT.java`
+
+**Nested class / method:**
+`RightVsWrongConcurrencyPattern#perTaskContextIsCorrectWhileSharedContextIsAnUnsafeAntiPattern` — one comparative
+method that runs BOTH patterns (shared-context wrong, per-task-context right) and measures each.
+
+**Gating:** `@Tag("vt")` (class-level) — runs via `mvn verify -Pvt`; excluded from default `mvn verify`.
+
+**What it proves (issue #20, Group B):**
+`JMSContext`/`Session` are NOT thread-safe (JMS 2.0). The **wrong** pattern — ONE shared `JMSContext` whose
+`createProducer().send(...)` is called concurrently by N (300) virtual threads — VIOLATES that contract. The
+**right** pattern — front the MQ `MQConnectionFactory` with a `JmsPoolConnectionFactory` (`maxConnections=8`)
+and give EACH virtual thread its OWN `JMSContext` drawn from the pool (try-with-resources), using virtual
+threads only for fan-out — delivers exactly N messages with no race, and the test **measures** the fan-out:
+total wall-clock → throughput (msgs/sec) and per-send latency → p50/p95/p99 (collected in nanos, sorted,
+nearest-rank indexed). Both patterns' throughputs are logged in English for the right-vs-wrong comparison.
+
+**Empirical finding — why the wrong pattern is evidence-only (no throughput-winner assertion):**
+With the IBM MQ allclient 9.4.5 the anti-pattern does NOT manifest as corruption or lost sends: the client
+SERIALIZES internal session access, so all 300 messages are delivered and no task throws (`CURDEPTH(VT.WRONG.Q)
+== 300`, `threw=false`). It also does not reliably lose on throughput — the one lean, long-lived shared session
+often OUT-runs the per-task pattern (which pays pool borrow/create/close churn, ~26 ms p50 per send), so the
+right-vs-wrong throughput ordering is **non-deterministic** across runs (observed both orders). The shared
+context is WRONG regardless: it relies on undefined, provider-/version-specific behaviour (a spec-strict
+provider could corrupt or throw) and cannot scale beyond one session. The IT therefore runs both patterns,
+LOGS both throughputs as measured evidence, and asserts ONLY the per-task pattern's correctness — it
+deliberately does not assert a throughput winner (flaky and overclaiming). A `CountDownLatch` barrier releases
+all virtual threads at once.
+
+**Why the right pattern is one `JMSContext` per task from a pool (not a shared context):**
+Virtual threads are cheap fan-out, but a JMS `JMSContext`/`Session` must not be shared across threads. Drawing
+one `JMSContext` per task from a bounded pool gives each task a safe, reused physical connection — the correct
+composition of `Executors.newVirtualThreadPerTaskExecutor()` with a `JmsPoolConnectionFactory`. The test also
+asserts `Thread.currentThread().isVirtual()` inside every task (the fan-out genuinely runs on virtual threads).
+
+**Pre-conditions:**
+- Docker available; `icr.io/ibm-messaging/mq:9.4.5.0-r2` reachable.
+- Dedicated queues `VT.WRONG.Q` and `VT.RIGHT.Q` (defined once in `@BeforeAll` via `runmqsc DEFINE QLOCAL ...
+  REPLACE`; `@BeforeEach` `CLEAR`s both for order-independence).
+- Connection via `DEV.ADMIN.SVRCONN` as `admin`; `pooled-jms` 2.0.9 on the classpath.
+
+**Step-by-step flow (one comparative method, wrong then right):**
+1. **Wrong** — open ONE `JMSContext`; submit 300 tasks to a virtual-thread-per-task executor, each calling
+   `sharedCtx.createProducer().send(VT.WRONG.Q, ...)` after a shared barrier; measure the run's wall-clock →
+   throughput, record any throwables and the delivered `CURDEPTH`, and log the observed behaviour. Drain the queue.
+2. **Right** — build a `JmsPoolConnectionFactory` (`maxConnections=8`); submit 300 tasks, each
+   `try (JMSContext c = pool.createContext(...)) { c.createProducer().send(VT.RIGHT.Q, ...); }`, timing each
+   send; measure wall-clock throughput + p50/p95/p99; `pool.stop()` in a `finally`; drain the queue.
+
+**Key assertions (AssertJ):**
+- **Wrong** — evidence-only: the run's throughput is recorded (`>= 0`) and logged; no winner is asserted (the
+  ordering is non-deterministic — see the empirical finding above).
+- **Right** — no task threw; every task ran on a virtual thread; exactly 300 messages delivered
+  (`CURDEPTH == 300`); throughput `> 0`; a latency sample collected for every delivered message.
+
+**Guide cross-references:**
+- `research-output/pooled-jms-factory-tuning.md` — `JmsPoolConnectionFactory` semantics and `maxConnections`.
+- `research-output/phase-g-report-options-and-scenarios.md` §"Virtual Threads on Java 25 (JEP-491)" — the
+  right-vs-wrong pattern and why one `JMSContext` per task from a pool is correct.
+- `docs/adr/0006-role-based-connection-factories.md` — the role-based factory topology the pool fronts.
+
+---
+
+### IT-14 — JEP-491 pinning boundary on Java 25 (synchronized no longer pins a blocking virtual thread)
+
+**Tier:** Rich
+
+**Test file:**
+`ibmmq-jms-guide/src/test/java/com/example/ibmmq/integration/VirtualThreadsEvidenceIT.java`
+
+**Nested class / methods:**
+`PinningBoundary#synchronizedBlockingDoesNotPinOnJava25` (deterministic headline result) and
+`PinningBoundary#mqIoOnVirtualThreadsUnderJfrLogsResidualNativePinning` (supporting, evidence-only).
+
+**Gating:** `@Tag("vt")` (class-level) — runs via `mvn verify -Pvt`; excluded from default `mvn verify`.
+
+**What it proves (issue #20, Group B):**
+Java 25 ships **JEP-491** — `synchronized` no longer **pins** a virtual thread that blocks while holding a
+monitor (residual pinning is only native/FFI frames). The deterministic test starts a programmatic JFR
+`Recording`, enables `jdk.VirtualThreadPinned` `.withoutThreshold()` (capture ALL pins) plus a
+`jdk.VirtualThreadStart` **positive control**, runs 64 virtual threads that EACH enter a `synchronized (lock)`
+block and `Thread.sleep(...)` inside it (the exact pre-JEP-491 pinning trigger: parking WHILE HOLDING A
+MONITOR), stops + dumps the recording to a temp `.jfr`, reads it with `RecordingFile`, and counts the events.
+The pinned count is asserted to **NOT scale with the synchronized blocks** — strictly **less than half the
+task count**. On Java ≤ 21 this same workload pins on essentially every synchronized acquisition/park (≥ the
+task count); on Java 25 synchronized no longer pins, so only a few INCIDENTAL class-loading/native pins remain
+(observed 0..~handful, non-deterministic), each logged with its top frame. An "exactly 0" assertion would be
+flaky (incidental pins vary run-to-run); "does not scale" is the deterministic claim. The positive control
+(`jdk.VirtualThreadStart` count `> 0`) proves the recording actually captured VT events, so a low pinned count
+is real evidence, not a silent instrumentation failure.
+
+**Why programmatic JFR (NOT `-Djdk.tracePinnedThreads`):**
+The `-Djdk.tracePinnedThreads` flag was **REMOVED in JDK 24+**, so it is not an option on Java 25.
+`jdk.jfr.Recording` + `jdk.jfr.consumer.RecordingFile` (the `jdk.jfr` standard module) is the supported,
+deterministic observation path: enable the event with no threshold so even a brief pin would be captured,
+then count events whose `getEventType().getName().equals("jdk.VirtualThreadPinned")`.
+
+**Why the second method is evidence-only (no count assertion):**
+The supporting method runs the right-pattern MQ-I/O workload (one pooled `JMSContext` per task) on virtual
+threads under the same JFR recording and **logs** any `jdk.VirtualThreadPinned` events with their top stack
+frame. Any residual pinning on Java 25 is environment-dependent and lives in the MQ client's NATIVE/FFI
+frames (not `synchronized`), so a count assertion would be flaky across hosts/driver builds — it observes and
+reports instead, asserting only that the MQ I/O workload itself delivered all 300 messages.
+
+**Pre-conditions:**
+- Docker available; `icr.io/ibm-messaging/mq:9.4.5.0-r2` reachable.
+- Java 25 runtime (JEP-491; `-Djdk.tracePinnedThreads` removed in JDK 24+).
+- `jdk.jfr` standard module (always present on Java 25); JFR temp files are cleaned up in a `finally`.
+- `VT.RIGHT.Q` defined (shared with IT-13); connection via `DEV.ADMIN.SVRCONN` as `admin`.
+
+**Step-by-step flow:**
+1. **Deterministic** — start a `Recording`, `enable("jdk.VirtualThreadPinned").withoutThreshold()` +
+   `enable("jdk.VirtualThreadStart")` (positive control); run 64 virtual threads each blocking
+   (`Thread.sleep(20)`) inside `synchronized (lock)`; stop + dump to a temp `.jfr`; read both event counts via
+   `RecordingFile` and log each residual pin's top frame.
+2. **Evidence-only** — under a JFR recording, run 300 virtual threads each sending via its own pooled
+   `JMSContext` to `VT.RIGHT.Q`; log any `jdk.VirtualThreadPinned` events + top stack frame; drain the queue.
+
+**Key assertions (AssertJ):**
+- **Positive control** — the `jdk.VirtualThreadStart` count is `> 0` (the recording actually captured VT
+  events; otherwise a low pinned count would be meaningless instrumentation failure).
+- **Deterministic** — the `jdk.VirtualThreadPinned` count is **less than half the task count** (`< 32` for the
+  64 tasks): on Java 25 synchronized-blocking does not pin, so pins do not scale per synchronized-block — only
+  a few incidental class-loading/native pins remain. (NOT `== 0` — incidental pins are non-deterministic.)
+- **Evidence-only** — the MQ I/O workload delivered all 300 messages (no count assertion on pinned events).
+
+**Guide cross-references:**
+- `research-output/phase-g-report-options-and-scenarios.md` §"Virtual Threads on Java 25 (JEP-491)" — the
+  deterministic-JFR pinning-count fact, residual native/FFI pinning, and the `-Djdk.tracePinnedThreads`
+  removal in JDK 24+.
+- `docs/adr/0001-java-25-runtime.md` — the Java 25 (LTS) runtime decision that makes JEP-491 applicable.
 
 ---
 
