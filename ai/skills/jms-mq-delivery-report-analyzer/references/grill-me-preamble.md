@@ -12,7 +12,7 @@ flowchart TD
     I["Intent<br/>(which reports, how requested)"]
     R["Reconciliation<br/>(join key, store, assertion)"]
     L["Lifecycle<br/>(persistence, transactions,<br/>poison handling)"]
-    A["Authority & transport<br/>(2035/+setall, TLS, secrets)"]
+    A["Authority & transport<br/>(2035/+passid, TLS, secrets)"]
 
     T e1@--> I
     I e2@--> R
@@ -77,7 +77,9 @@ flowchart TD
 ## Branch 5 — Authority & transport (feeds Cell D)
 
 20. Does the principal the queue manager uses to PUT the report have context authority
-    (`+setall`) on the reply-to queue? (Missing → `2035` → silent dead-lettering.)
+    (`+passid` minimum, full grant `AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)`) on the
+    reply-to queue? (Missing `+passid` → `2035` → silent dead-lettering; `+setall` alone
+    is not sufficient.)
 21. Is the client channel secured with TLS (a cipher set on the connection factory)? Is
     MQCSP enabled for user/password auth?
 22. Where do credentials come from — a secret manager, or hard-coded / baked into images?
