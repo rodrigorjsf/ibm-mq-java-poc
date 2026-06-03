@@ -1,10 +1,10 @@
-# ibmmq-jms-guide — COA/COD delivery reports with Micronaut 4 + IBM MQ (JMS 2.0)
+# ibmmq-jms-guide — COA/COD delivery reports with Micronaut 4 + IBM MQ (Jakarta Messaging 3.0)
 
 Production-ready example project demonstrating IBM MQ **COA (Confirmation On Arrival)
-and COD (Confirmation On Delivery) delivery reports** using the **javax.jms / JMS 2.0**
-client (`com.ibm.mq.allclient`) under **Micronaut 4** (for DI /
-`@ConfigurationProperties` / `@Factory` / lifecycle only — JMS is managed manually
-via `JMSContext`).
+and COD (Confirmation On Delivery) delivery reports** using the **jakarta.jms /
+Jakarta Messaging 3.0** client (`com.ibm.mq.jakarta.client` 9.4.5.0 + `pooled-jms` 3.2.2)
+under **Micronaut 4** (for DI / `@ConfigurationProperties` / `@Factory` / lifecycle only —
+JMS is managed manually via `JMSContext`).
 
 ## Concept (summary)
 

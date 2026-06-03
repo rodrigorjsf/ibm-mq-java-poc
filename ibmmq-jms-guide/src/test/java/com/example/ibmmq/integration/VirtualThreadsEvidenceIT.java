@@ -1,7 +1,7 @@
 package com.example.ibmmq.integration;
 
-import com.ibm.msg.client.wmq.WMQConstants;
-import com.ibm.mq.jms.MQConnectionFactory;
+import com.ibm.msg.client.jakarta.wmq.WMQConstants;
+import com.ibm.mq.jakarta.jms.MQConnectionFactory;
 import com.ibm.mq.testcontainers.MQContainer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -15,11 +15,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.Container;
 
-import javax.jms.JMSConsumer;
-import javax.jms.JMSContext;
-import javax.jms.JMSProducer;
-import javax.jms.JMSRuntimeException;
-import javax.jms.Queue;
+import jakarta.jms.JMSConsumer;
+import jakarta.jms.JMSContext;
+import jakarta.jms.JMSProducer;
+import jakarta.jms.JMSRuntimeException;
+import jakarta.jms.Queue;
 
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordedEvent;
@@ -46,7 +46,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * pinning boundary demonstrated"). This is PURELY test-source evidence: production uses NO Virtual Threads
  * (a single platform thread per pod + blocking JMS {@code receive()}, parallelism by Kubernetes replicas).
  * Nothing here changes production behaviour — it documents how a Virtual-Thread fan-out SHOULD and should NOT
- * be wired against a JMS 2.0 client, and demonstrates the Java 25 (JEP-491) pinning boundary deterministically.
+ * be wired against a Jakarta Messaging 3.0 client, and demonstrates the Java 25 (JEP-491) pinning boundary
+ * deterministically.
  *
  * <p><b>Why {@code @Tag("vt")} and class-gated.</b> These evidence tests start a real broker, run bounded
  * concurrency micro-measurements, and drive programmatic JFR — useful but not part of the deterministic

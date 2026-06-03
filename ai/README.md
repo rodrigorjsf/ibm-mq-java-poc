@@ -1,14 +1,15 @@
 # AI assets
 
-Reusable, project-agnostic AI assets for working with IBM MQ + JMS 2.0 messaging
-applications. Each asset is self-contained and carries no identifiers from any particular
-project, so it can be copied into another repository as-is.
+Reusable, project-agnostic AI assets for working with IBM MQ + JMS 2.0 / Jakarta
+Messaging 3.0 messaging applications. Each asset is self-contained and carries no
+identifiers from any particular project, so it can be copied into another repository
+as-is.
 
 ## Skills
 
 | Skill | Purpose |
 | --- | --- |
-| [`jms-mq-delivery-report-analyzer`](skills/jms-mq-delivery-report-analyzer/SKILL.md) | Drives a rigorous LLM review of any IBM MQ + JMS 2.0 application that uses COA/COD delivery reports, reporting each finding as WHERE / WHY / IMPACT / SOLUTIONS. Judges the target against a four-cell reviewer matrix × nine check dimensions, runs a grill-me preamble before judging, and reasons throughout under a distributed (Kubernetes + microservices, high-throughput, competing-consumers) deployment lens. |
+| [`jms-mq-delivery-report-analyzer`](skills/jms-mq-delivery-report-analyzer/SKILL.md) | Drives a rigorous LLM review of any IBM MQ + JMS 2.0 / Jakarta Messaging 3.0 application that uses COA/COD delivery reports, reporting each finding as WHERE / WHY / IMPACT / SOLUTIONS. Judges the target against a four-cell reviewer matrix × nine check dimensions, runs a grill-me preamble (including namespace + JDK capture) before judging, and reasons throughout under a distributed (Kubernetes + microservices, high-throughput, competing-consumers) deployment lens. |
 
 ### `jms-mq-delivery-report-analyzer` layout
 

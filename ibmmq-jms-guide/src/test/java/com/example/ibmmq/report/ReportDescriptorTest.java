@@ -1,12 +1,12 @@
 package com.example.ibmmq.report;
 
 import com.example.ibmmq.model.ReportType;
-import com.ibm.msg.client.wmq.WMQConstants;
+import com.ibm.msg.client.jakarta.wmq.WMQConstants;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import javax.jms.JMSException;
-import javax.jms.Message;
+import jakarta.jms.JMSException;
+import jakarta.jms.Message;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;

@@ -2,9 +2,14 @@
 
 Status: accepted (2026-06-02) — implementation tracked in issue #25; pairs with ADR-0006 (role-based connection factories).
 
+> **Update (2026-06-03, PRD #83 / ADR-0012):** the JMS namespace was migrated `javax.jms` → `jakarta.jms`
+> (Jakarta Messaging 3.0; client `com.ibm.mq.jakarta.client`, `pooled-jms` 3.2.2). The seam **decision and
+> contract below are unchanged** — only the namespace tokens are updated (`javax.jms.*` → `jakarta.jms.*`).
+> The `(AC5)`/`(AC6)` parentheticals still refer to issue #25's acceptance criteria.
+
 ## Context
 
-The seam between the COA/COD modules and JMS sits today at `javax.jms.ConnectionFactory`. Each entry point opens
+The seam between the COA/COD modules and JMS sits today at `jakarta.jms.ConnectionFactory`. Each entry point opens
 and closes its own `JMSContext`: `BusinessMessageProducer.send` (`createContext(AUTO_ACKNOWLEDGE)`),
 `BusinessMessageConsumer.receiveOne` (`createContext(SESSION_TRANSACTED)` + `commit()` — the commit is what releases
 the COD), and `ReportMessageConsumer.receiveOneReport` (`createContext(AUTO_ACKNOWLEDGE)` → `handleReport`).
@@ -64,13 +69,13 @@ flowchart LR
   - **`SendPort`** over the pooled producer factory — short-lived, bursty send.
   - **`ReceivePort`** over the dedicated long-lived consumer factory — used by both the business consumer and the
     report consumer.
-- **Decoded domain envelopes cross the seam, never `javax.jms.Message`.**
+- **Decoded domain envelopes cross the seam, never `jakarta.jms.Message`.**
   - *Outbound* (`SendPort`): an envelope carrying payload + businessKey + report options (COA/COD) + replyTo
     destination + delivery mode; returns the assigned `messageId`.
   - *Inbound* (`ReceivePort`): a **decoded report envelope** carrying the feedback code, the correlationId, the body,
     and the six recovered MQMD values (today's `ReportDescriptor`). All JMS/MQMD extraction
     (`getIntProperty(JMS_IBM_FEEDBACK)`, `ReportDescriptor.from`, the `?mdReadEnabled=true` URI form) moves **into the
-    pooled-JMS adapter**. No `javax.jms` type reaches a seam caller (AC6).
+    pooled-JMS adapter**. No `jakarta.jms` type reaches a seam caller (AC6).
 - **Transaction semantics live on the port as a callback unit-of-work:**
   `receiveWithinUnitOfWork(dest, timeout, handler)` begins a receive, runs `handler` on the decoded envelope,
   **commits on normal return and rolls back if the handler throws.** "Commit releases the COD" and "rollback ⇒ no
@@ -94,9 +99,9 @@ flowchart LR
 
 ## Alternatives considered
 
-- **A raw `javax.jms.Message` crosses the receive side.** Minimal adapter, but JMS leaks across the seam and the fake
+- **A raw `jakarta.jms.Message` crosses the receive side.** Minimal adapter, but JMS leaks across the seam and the fake
   must fabricate a `Message` mock — the broker-free test keeps wrestling with JMS types and AC6 is violated. Rejected.
-- **Hybrid: outbound envelope + an inbound typed property accessor** (no `javax.jms` exposed, but the adapter does not
+- **Hybrid: outbound envelope + an inbound typed property accessor** (no `jakarta.jms` exposed, but the adapter does not
   fully decode the MQMD). A real middle ground, but the fake must still model the MQMD property map faithfully and
   `handleReport` keeps reading via the accessor. Rejected as the default in favour of full decoding (clearer contract,
   the report decoding has one home); retained as a fallback if full decoding proves too coupled to MQMD specifics.

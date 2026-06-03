@@ -1,6 +1,6 @@
-# IBM MQ + JMS 2.0 + Micronaut 4 — Project Guide
+# IBM MQ + Jakarta Messaging 3.0 + Micronaut 4 — Project Guide
 
-Production-grade reference for integrating **Java 25 / Micronaut 4** with **IBM MQ** via **JMS 2.0 (`javax.jms`)**, focused on **COA/COD delivery reports**. Audience: engineers who do not yet know IBM MQ but must operate it in a real, high-concurrency, critical environment.
+Production-grade reference for integrating **Java 25 / Micronaut 4** with **IBM MQ** via **Jakarta Messaging 3.0 (`jakarta.jms`)**, focused on **COA/COD delivery reports**. The legacy **javax.jms / JMS 2.0** path is retained as a labeled migration reference (ADR-0012). Audience: engineers who do not yet know IBM MQ but must operate it in a real, high-concurrency, critical environment.
 
 ## ⭐ Standing analysis mandate (NON-NEGOTIABLE — no bypass)
 
@@ -48,7 +48,7 @@ Detail lives in the linked ADRs/docs; these are the binding directives.
 
 ## Validated facts — source of truth: `research-output/phase-a-fact-sheet.md`
 
-Stack coordinates, MQ report/feedback constant names, MQCSP/TLS/`SET CHLAUTH` notes, and the dev container image + defaults are **sha1-verified** in the fact sheet — **check it first to avoid re-research.** Glance-level: client `com.ibm.mq.allclient:9.4.5.0` / `pooled-jms 2.0.9` / `micronaut-platform 4.9.4` (`4.9.9` does **not** exist); `MQRO_*`/`MQFB_*` live in `CMQC`/`MQConstants`, **not** `WMQConstants`; `MQFB_COA=259`, `MQFB_COD=260`, read via `WMQConstants.JMS_IBM_FEEDBACK`; container `icr.io/ibm-messaging/mq:9.4.5.0-r2` (no bare `9.4.5.0` tag).
+Stack coordinates, MQ report/feedback constant names, MQCSP/TLS/`SET CHLAUTH` notes, and the dev container image + defaults are **sha1-verified** in the fact sheet (re-verified against the jakarta client bytecode per ADR-0012) — **check it first to avoid re-research.** Glance-level: client `com.ibm.mq:com.ibm.mq.jakarta.client:9.4.5.0` (Jakarta Messaging 3.0 / `jakarta.jms`; the legacy `com.ibm.mq.allclient:9.4.5.0` javax client is kept as a migration reference) / `pooled-jms 3.2.2` (3.x = jakarta; 2.0.9 = the legacy javax line) / `micronaut-platform 4.9.4` (`4.9.9` does **not** exist); under jakarta exactly three FQCNs relocate — `WMQConstants` → `com.ibm.msg.client.jakarta.wmq.WMQConstants`, `MQConnectionFactory` → `com.ibm.mq.jakarta.jms.MQConnectionFactory`, `JmsConstants` → `com.ibm.msg.client.jakarta.jms.JmsConstants`; `MQRO_*`/`MQFB_*` live in `CMQC`/`MQConstants` (`com.ibm.mq.constants.*`, **unchanged**), **not** `WMQConstants`; `MQFB_COA=259`, `MQFB_COD=260`, read via `WMQConstants.JMS_IBM_FEEDBACK`; container `icr.io/ibm-messaging/mq:9.4.5.0-r2` (no bare `9.4.5.0` tag, unchanged).
 
 - **Report semantics:** default id propagation `MQRO_COPY_MSG_ID_TO_CORREL_ID` makes the original MessageId the report's CorrelationId. Reports **inherit persistence from the original** (the brief's "non-persistent by default" assumption was refuted).
 - **Pool tuning & topology:** `maxConnections`/`maxSessionsPerConnection` semantics, ~10k-rpm sizing (`maxConnections × replicas ≤ MAXINST`; `maxSessionsPerConnection ≤ SHARECNV`), the silent-hang default (`blockIfSessionPoolIsFull=true`/timeout `-1`), and the **role-based producer-vs-consumer factory** decision: `research-output/pooled-jms-factory-tuning.md` + `docs/adr/0006-role-based-connection-factories.md` (guide §4.1; code rewrite tracked in #25).
