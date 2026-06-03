@@ -9,16 +9,16 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Teste unitario (surefire, SEM broker, SEM Docker) do GATING do runner da demo COA/COD quando o flag
- * esta AUSENTE ou diferente de {@code true} — prova direta da AC#3: o startup normal da aplicacao NAO
- * e afetado quando o flag nao esta presente.
+ * Unit test (surefire, NO broker, NO Docker) of the GATING of the COA/COD demo runner when the flag
+ * is ABSENT or different from {@code true} — direct proof of AC#3: the normal application startup is
+ * NOT affected when the flag is not present.
  *
- * <p>Sobe um {@code ApplicationContext} de verdade SEM a propriedade {@code demo.coa-cod.enabled}
- * (e, num segundo caso, com ela em {@code false}). Como {@link CoaCodDemoRunner} e anotado com
- * {@code @Requires(property = "demo.coa-cod.enabled", value = "true")}, o bean NAO e instanciado —
- * {@code containsBean} retorna {@code false}. Nada toca o broker: o runner e o unico
- * {@code ApplicationEventListener<StartupEvent>} do contexto e os beans JMS sao lazy, entao um contexto
- * sem o flag nao abre nenhuma conexao MQ.</p>
+ * <p>Boots a real {@code ApplicationContext} WITHOUT the {@code demo.coa-cod.enabled} property
+ * (and, in a second case, with it set to {@code false}). Since {@link CoaCodDemoRunner} is annotated
+ * with {@code @Requires(property = "demo.coa-cod.enabled", value = "true")}, the bean is NOT
+ * instantiated — {@code containsBean} returns {@code false}. Nothing touches the broker: the runner
+ * is the only {@code ApplicationEventListener<StartupEvent>} in the context and the JMS beans are
+ * lazy, so a context without the flag opens no MQ connections.</p>
  */
 @DisplayName("Gating da demo COA/COD (AC#3): sem o flag, o runner NAO existe e o startup nao e afetado")
 class CoaCodDemoRunnerGatingTest {
@@ -42,7 +42,7 @@ class CoaCodDemoRunnerGatingTest {
     void runnerAbsentWhenFlagMissing() {
         try (ApplicationContext ctx = ApplicationContext.run(bootProps(Map.of()))) {
             assertThat(ctx.containsBean(CoaCodDemoRunner.class))
-                    .as("runner deve estar AUSENTE sem o flag demo.coa-cod.enabled")
+                    .as("runner must be ABSENT without the demo.coa-cod.enabled flag")
                     .isFalse();
         }
     }
@@ -50,12 +50,12 @@ class CoaCodDemoRunnerGatingTest {
     @Test
     @DisplayName("Flag em false: containsBean(CoaCodDemoRunner) == false (valor deve ser exatamente true)")
     void runnerAbsentWhenFlagFalse() {
-        // Overload de PROPRIEDADES: run(Map<String,Object>) injeta o par chave/valor como property
-        // (diferente de run(String...), que interpretaria os argumentos como NOMES de environment).
-        // Assim testamos de fato o flag PRESENTE porem != "true": @Requires(value="true") reprova o bean.
+        // PROPERTY overload: run(Map<String,Object>) injects the key/value pair as a property
+        // (as opposed to run(String...) which would interpret the arguments as environment NAMES).
+        // This tests the flag actually PRESENT but != "true": @Requires(value="true") rejects the bean.
         try (ApplicationContext ctx = ApplicationContext.run(bootProps(Map.of("demo.coa-cod.enabled", "false")))) {
             assertThat(ctx.containsBean(CoaCodDemoRunner.class))
-                    .as("runner deve estar AUSENTE quando o flag != true")
+                    .as("runner must be ABSENT when flag != true")
                     .isFalse();
         }
     }
