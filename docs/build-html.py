@@ -1096,6 +1096,21 @@ MERMAID_INIT = r"""
 """
 
 
+def wrap_tables(markup):
+    """Wrap every <table>…</table> in a responsive <div class="table-scroll"> container.
+
+    Extracted from the duplicated inline re.sub calls in render_references() and render_lang()
+    (m2 DRY cleanup). Both callers use identical regex flags (re.DOTALL) and an identical
+    substitution pattern, so a single helper is the canonical form. The param is named
+    ``markup`` (not ``html``) so it does not shadow the module-level ``import html``."""
+    return re.sub(
+        r"(<table>.*?</table>)",
+        r'<div class="table-scroll">\1</div>',
+        markup,
+        flags=re.DOTALL,
+    )
+
+
 def render_references():
     """Render the canonical bibliography (docs/references.md, issue #14) to an HTML fragment.
 
@@ -1110,12 +1125,7 @@ def render_references():
     src = REFERENCES.read_text(encoding="utf-8")
     md = markdown.Markdown(extensions=["tables", "attr_list", "sane_lists"])
     body = md.convert(src)
-    body = re.sub(
-        r"(<table>.*?</table>)",
-        r'<div class="table-scroll">\1</div>',
-        body,
-        flags=re.DOTALL,
-    )
+    body = wrap_tables(body)
     return body
 
 
@@ -1150,12 +1160,7 @@ def render_lang(src_path, chrome):
 
     body, callout_counts = split_callouts(body)
     body = decorate_code(body, chrome)
-    body = re.sub(
-        r"(<table>.*?</table>)",
-        r'<div class="table-scroll">\1</div>',
-        body,
-        flags=re.DOTALL,
-    )
+    body = wrap_tables(body)
     nav_html = build_nav(body)
     return {
         "body": body,
