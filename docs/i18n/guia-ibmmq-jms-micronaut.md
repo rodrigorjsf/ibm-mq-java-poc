@@ -267,7 +267,7 @@ setIntProperty(WMQConstants.JMS_IBM_REPORT_COD, MQConstants.MQRO_COD); // pede C
 ```
 
 **O que de fato se configura no QMgr** (não os relatórios em si): a **existência** da fila de report, sua persistência,
-a DLQ, as **autorizações** (crucial — ver o *gotcha* de `+SETALL` na Seção 5), e políticas de `Expiry`. O QMgr é a
+a DLQ, as **autorizações** (crucial — ver o *gotcha* de `+passid` na Seção 5), e políticas de `Expiry`. O QMgr é a
 infraestrutura; a *intenção* de receber relatório está na mensagem.
 
 > ⚠️ **Atenção — `WMQConstants` vs. `MQConstants` (erro comum).** As propriedades JMS de **pedido** (
@@ -1174,8 +1174,9 @@ Java 25 isso emite aviso de *native-access*. **Correção:** passar `--enable-na
 **(d) — O *gotcha* que mais surpreende: autoridade de contexto para o PUT do relatório.**
 
 > ⚠️ **Atenção — relatório indo para a DLQ com `2035 MQRC_NOT_AUTHORIZED`.** Para o Queue Manager **gerar e entregar**
-> um COA/COD, ele faz um **PUT-com-contexto** na `ReplyToQ`. Isso exige **autoridade de contexto (`+setall`)**, que o
-> usuário de baixo privilégio `app` do dev image **não possui**. Resultado: o PUT do relatório falha com `2035` e o
+> um COA/COD, ele faz um **PUT-com-contexto** na `ReplyToQ`. O QMgr **passa o contexto de identidade da mensagem
+> original para o relatório**, então isso exige **`+passid`** (pass identity context) — `+setall` sozinho é **insuficiente**.
+> O usuário de baixo privilégio `app` do dev image **não o possui**. Resultado: o PUT do relatório falha com `2035` e o
 > relatório **vai para a DLQ** — a fila de relatórios fica **vazia** e você acha (erradamente) que "o COA/COD não
 > funciona".
 
@@ -1185,8 +1186,8 @@ plena), não como `app`:
 ```java
 // CoaCodEndToEndIT — comentário real explicando o porquê de conectar como admin:
 // Para o Queue Manager GERAR e ENTREGAR um relatório (COA/COD), ele faz um PUT-com-contexto na
-// ReplyToQ. Isso exige autoridade de CONTEXTO (+setall), que o usuário app de baixo privilégio
-// do dev image NÃO possui — o relatório falharia com MQRC_NOT_AUTHORIZED (2035) e iria para a DLQ.
+// ReplyToQ, passando o contexto de identidade da mensagem original. Isso exige +passid (+setall sozinho é
+// insuficiente), que o usuário app de baixo privilégio NÃO possui — o relatório falharia com MQRC_NOT_AUTHORIZED (2035) e iria para a DLQ.
 private static final String ADMIN_CHANNEL = "DEV.ADMIN.SVRCONN";
 private static final String ADMIN_USER = "admin";
 ```
@@ -1194,10 +1195,10 @@ private static final String ADMIN_USER = "admin";
 **Correção em produção** — conceda a autoridade mínima necessária ao principal da aplicação (em vez de usar `admin`):
 
 ```mqsc
-* Concede PUT + SETALL (autoridade de contexto) ao grupo da aplicação na fila de relatórios,
-* permitindo que o QMgr entregue COA/COD em nome de conexões desse principal.
+* Concede PUT + o conjunto completo de contexto (PASSID, PASSALL, SETID, SETALL) ao grupo da aplicação na fila de relatórios,
+* permitindo que o QMgr entregue COA/COD em nome de conexões desse principal (+passid é o mínimo).
 SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) +
-    GROUP('appgrp') AUTHADD(PUT, SETALL)
+    GROUP('appgrp') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)
 REFRESH SECURITY TYPE(AUTHSERV)
 ```
 
@@ -1207,7 +1208,7 @@ REFRESH SECURITY TYPE(AUTHSERV)
 > ❌ **Má prática — rodar a app de produção como `admin` "para resolver o 2035".** Você abre um buraco de segurança
 > gigante (admin remoto via canal cliente) só para entregar relatórios. **Sintoma futuro:** auditoria reprovando, CHLAUTH
 > bloqueando admins (`BLOCKUSER *MQADMIN`), e o serviço quebrando quando a regra de segurança é endurecida. Conceda
-`PUT+SETALL` ao principal específico.
+`PUT, PASSID, PASSALL, SETID, SETALL` ao principal específico.
 
 ### 5.3 Poison messages — backout, DLQ e idempotência
 
@@ -1383,7 +1384,7 @@ quadro **mudou no Java 25**:
 
 | Reason code | Nome                            | Causa típica                                                                                                                                               | Correção                                                                                                                                                                              |
 |-------------|---------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **2035**    | `MQRC_NOT_AUTHORIZED`           | Sem autorização para a operação. **No fluxo de relatórios:** o QMgr não tem `+SETALL` para fazer o PUT-com-contexto do COA/COD → relatório vai para a DLQ. | Conceda a autoridade ao principal: `SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) GROUP('appgrp') AUTHADD(PUT, SETALL)` + `REFRESH SECURITY`. Cheque também CHLAUTH/MCAUSER. |
+| **2035**    | `MQRC_NOT_AUTHORIZED`           | Sem autorização para a operação. **No fluxo de relatórios:** o QMgr não tem `+passid` para fazer o PUT-com-contexto do COA/COD → relatório vai para a DLQ. | Conceda a autoridade ao principal: `SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) GROUP('appgrp') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)` + `REFRESH SECURITY`. Cheque também CHLAUTH/MCAUSER. |
 | **2059**    | `MQRC_Q_MGR_NOT_AVAILABLE`      | O QMgr alvo está parado, em standby, ou o nome está errado.                                                                                                | Verifique se o QMgr está `RUNNING`; confira `WMQ_QUEUE_MANAGER`; em HA, use `CONNECTION_NAME_LIST`/CCDT para failover.                                                                |
 | **2538**    | `MQRC_HOST_NOT_AVAILABLE`       | Não há listener na porta/host (listener parado, porta errada, firewall).                                                                                   | Confirme listener ativo na porta 1414; cheque `WMQ_HOST_NAME`/`WMQ_PORT` e conectividade de rede.                                                                                     |
 | **2085**    | `MQRC_UNKNOWN_OBJECT_NAME`      | A fila/objeto referenciado não existe (nome errado, *case-sensitive*, não criado).                                                                         | Verifique o nome exato (maiúsculas) da fila; confirme que o MQSC foi aplicado; `DIS QLOCAL(...)`.                                                                                     |
@@ -1458,7 +1459,7 @@ Referência rápida dos pares ✅/❌ usados ao longo do guia.
 | **Reconexão**                  | Auto-reconnect + **idempotência** + validar pool×reconnect.                         | Reconexão sem idempotência → reprocessamento duplicado; conexão "morta" devolvida pelo pool.                                                            |
 | **Concorrência JMS**           | **Um `JMSContext` por thread**; I/O em threads de plataforma.                       | `Session`/`JMSContext` compartilhado entre threads → `IllegalStateException`, mensagens sumindo/duplicando.                                             |
 | **Virtual Threads**            | VTs na orquestração; JMS em threads de plataforma com pool.                         | `JMSContext` compartilhado entre VTs → corrupção de estado; VT-por-mensagem sem teto → tempestade de conexões. (Java 25/JEP 491: pinning em `synchronized` resolvido; resta só em frames nativos.)        |
-| **Segurança (relatórios)**     | Conceder `PUT+SETALL` ao principal específico.                                      | App rodando como `admin` para "resolver o 2035" → buraco de segurança; quebra quando CHLAUTH endurece.                                                  |
+| **Segurança (relatórios)**     | Conceder `PUT, PASSID, PASSALL, SETID, SETALL` ao principal.                         | App rodando como `admin` para "resolver o 2035" → buraco de segurança; quebra quando CHLAUTH endurece.                                                  |
 | **Segurança (TLS)**            | TLS 1.3, nomes coincidentes, PKCS12, sem `useIBMCipherMappings`.                    | `TLS_RSA_*`/`useIBMCipherMappings` → `2393`/`2397` no connect (RSA desabilitado no Java 25; propriedade removida no 9.4.0).                             |
 | **Segredos**                   | `password` via secret/env (`${IBM_MQ_PASSWORD}`).                                   | Senha hardcoded no fonte/YAML versionado → vazamento no Git; `2035` ao trocar a senha.                                                                  |
 

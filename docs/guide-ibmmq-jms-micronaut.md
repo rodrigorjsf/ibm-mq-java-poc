@@ -267,7 +267,7 @@ setIntProperty(WMQConstants.JMS_IBM_REPORT_COD, MQConstants.MQRO_COD); // reques
 ```
 
 **What is actually configured on the QMgr** (not the reports themselves): the **existence** of the report queue, its persistence,
-the DLQ, the **authorities** (crucial — see the `+SETALL` *gotcha* in Section 5), and `Expiry` policies. The QMgr is the
+the DLQ, the **authorities** (crucial — see the `+passid` *gotcha* in Section 5), and `Expiry` policies. The QMgr is the
 infrastructure; the *intent* to receive a report lives in the message.
 
 > ⚠️ **Caution — `WMQConstants` vs. `MQConstants` (common mistake).** The JMS **request** properties (
@@ -1173,8 +1173,9 @@ surefire/failsafe's `argLine`). Additionally, **avoid `TLS_RSA_*` ciphers** (dis
 **(d) — The *gotcha* that surprises the most: context authority for the report PUT.**
 
 > ⚠️ **Attention — report going to the DLQ with `2035 MQRC_NOT_AUTHORIZED`.** For the Queue Manager to **generate and deliver**
-> a COA/COD, it does a **PUT-with-context** on the `ReplyToQ`. This requires **context authority (`+setall`)**, which the
-> low-privilege `app` user of the dev image **does not have**. Result: the report PUT fails with `2035` and the
+> a COA/COD, it does a **PUT-with-context** on the `ReplyToQ`. The QMgr **passes the original message's identity
+> context into the report**, so this requires **`+passid`** (pass identity context) — `+setall` alone is **insufficient**.
+> The low-privilege `app` user of the dev image **lacks it**. Result: the report PUT fails with `2035` and the
 > report **goes to the DLQ** — the report queue stays **empty** and you (wrongly) conclude that "COA/COD does not
 > work".
 
@@ -1184,8 +1185,8 @@ authority), not as `app`:
 ```java
 // CoaCodEndToEndIT — real comment explaining why it connects as admin:
 // For the Queue Manager to GENERATE and DELIVER a report (COA/COD), it does a PUT-with-context on the
-// ReplyToQ. This requires CONTEXT authority (+setall), which the low-privilege app user
-// of the dev image does NOT have — the report would fail with MQRC_NOT_AUTHORIZED (2035) and go to the DLQ.
+// ReplyToQ, passing the original message's identity context. This requires +passid (+setall alone is
+// insufficient), which the low-privilege app user does NOT have — the report would fail with MQRC_NOT_AUTHORIZED (2035) and go to the DLQ.
 private static final String ADMIN_CHANNEL = "DEV.ADMIN.SVRCONN";
 private static final String ADMIN_USER = "admin";
 ```
@@ -1193,10 +1194,10 @@ private static final String ADMIN_USER = "admin";
 **Fix in production** — grant the minimum authority needed to the application principal (instead of using `admin`):
 
 ```mqsc
-* Grants PUT + SETALL (context authority) to the application group on the report queue,
-* allowing the QMgr to deliver COA/COD on behalf of connections of that principal.
+* Grants PUT + the full context set (PASSID, PASSALL, SETID, SETALL) to the application group on the report queue,
+* allowing the QMgr to deliver COA/COD on behalf of connections of that principal (+passid is the minimum).
 SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) +
-    GROUP('appgrp') AUTHADD(PUT, SETALL)
+    GROUP('appgrp') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)
 REFRESH SECURITY TYPE(AUTHSERV)
 ```
 
@@ -1206,7 +1207,7 @@ REFRESH SECURITY TYPE(AUTHSERV)
 > ❌ **Bad practice — running the production app as `admin` "to fix the 2035".** You open a giant security hole
 > (remote admin via the client channel) just to deliver reports. **Future symptom:** audit failing, CHLAUTH
 > blocking admins (`BLOCKUSER *MQADMIN`), and the service breaking when the security rule is hardened. Grant
-`PUT+SETALL` to the specific principal.
+`PUT, PASSID, PASSALL, SETID, SETALL` to the specific principal.
 
 ### 5.3 Poison messages — backout, DLQ, and idempotency
 
@@ -1381,7 +1382,7 @@ picture **changed in Java 25**:
 
 | Reason code | Name                            | Typical cause                                                                                                                                               | Fix                                                                                                                                                                              |
 |-------------|---------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **2035**    | `MQRC_NOT_AUTHORIZED`           | Not authorized for the operation. **In the report flow:** the QMgr lacks `+SETALL` to do the PUT-with-context of the COA/COD → the report goes to the DLQ. | Grant the authority to the principal: `SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) GROUP('appgrp') AUTHADD(PUT, SETALL)` + `REFRESH SECURITY`. Also check CHLAUTH/MCAUSER. |
+| **2035**    | `MQRC_NOT_AUTHORIZED`           | Not authorized for the operation. **In the report flow:** the QMgr lacks `+passid` to do the PUT-with-context of the COA/COD → the report goes to the DLQ. | Grant the authority to the principal: `SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) GROUP('appgrp') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)` + `REFRESH SECURITY`. Also check CHLAUTH/MCAUSER. |
 | **2059**    | `MQRC_Q_MGR_NOT_AVAILABLE`      | The target QMgr is stopped, in standby, or the name is wrong.                                                                                                | Verify the QMgr is `RUNNING`; check `WMQ_QUEUE_MANAGER`; in HA, use `CONNECTION_NAME_LIST`/CCDT for failover.                                                                                |
 | **2538**    | `MQRC_HOST_NOT_AVAILABLE`       | No listener on the port/host (listener stopped, wrong port, firewall).                                                                                   | Confirm an active listener on port 1414; check `WMQ_HOST_NAME`/`WMQ_PORT` and network connectivity.                                                                                     |
 | **2085**    | `MQRC_UNKNOWN_OBJECT_NAME`      | The referenced queue/object does not exist (wrong name, *case-sensitive*, not created).                                                         | Verify the exact (uppercase) queue name; confirm the MQSC was applied; `DIS QLOCAL(...)`.                                                                                     |
@@ -1456,7 +1457,7 @@ Quick reference of the ✅/❌ pairs used throughout the guide.
 | **Reconnection**               | Auto-reconnect + **idempotency** + validate pool×reconnect.                         | Reconnection without idempotency → duplicate reprocessing; a "dead" connection handed back by the pool.                                                            |
 | **JMS concurrency**            | **One `JMSContext` per thread**; I/O on platform threads.                       | `Session`/`JMSContext` shared across threads → `IllegalStateException`, messages disappearing/duplicating.                                             |
 | **Virtual Threads**            | VTs in orchestration; JMS on pooled platform threads.                         | `JMSContext` shared across VTs → state corruption; VT-per-message with no ceiling → connection storm. (Java 25/JEP 491: pinning on `synchronized` resolved; only native frames remain.)        |
-| **Security (reports)**         | Grant `PUT+SETALL` to the specific principal.                                      | App running as `admin` to "fix the 2035" → security hole; breaks when CHLAUTH hardens.                                                  |
+| **Security (reports)**         | Grant `PUT, PASSID, PASSALL, SETID, SETALL` to the principal.                       | App running as `admin` to "fix the 2035" → security hole; breaks when CHLAUTH hardens.                                                  |
 | **Security (TLS)**             | TLS 1.3, matching names, PKCS12, no `useIBMCipherMappings`.                    | `TLS_RSA_*`/`useIBMCipherMappings` → `2393`/`2397` on connect (RSA disabled on Java 25; property removed in 9.4.0).                             |
 | **Secrets**                    | `password` via secret/env (`${IBM_MQ_PASSWORD}`).                                   | Hardcoded password in source/versioned YAML → leak into Git; `2035` when the password is rotated.                                                  |
 
