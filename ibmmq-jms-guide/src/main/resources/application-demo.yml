@@ -1,30 +1,31 @@
 # =============================================================================
-# application-demo.yml — perfil (environment) "demo" para o runner gated COA/COD.
+# application-demo.yml — "demo" profile (environment) for the gated COA/COD runner.
 #
-# Ative com -Dmicronaut.environments=demo. Este perfil:
-#   1) liga o flag EXPLICITO demo.coa-cod.enabled=true -> instancia o CoaCodDemoRunner
-#      (ApplicationEventListener<StartupEvent>), que roda o fluxo produce -> consume -> COA/COD
-#      UMA vez no startup e imprime o resumo PASS/FAIL;
-#   2) conecta como ADMIN via DEV.ADMIN.SVRCONN.
+# Activate with -Dmicronaut.environments=demo. This profile:
+#   1) enables the EXPLICIT flag demo.coa-cod.enabled=true -> instantiates the CoaCodDemoRunner
+#      (ApplicationEventListener<StartupEvent>), which runs the produce -> consume -> COA/COD flow
+#      ONCE on startup and prints the PASS/FAIL summary;
+#   2) connects as ADMIN via DEV.ADMIN.SVRCONN.
 #
-# Por que admin / DEV.ADMIN.SVRCONN (gotcha 2035)? Para o Queue Manager GERAR e ENTREGAR um
-# relatorio COA/COD ele faz um PUT-com-contexto na ReplyToQ, exigindo autoridade de contexto
-# (+setall). O usuario 'app' de baixo privilegio do dev image NAO possui isso -> o PUT do relatorio
-# falha com MQRC_NOT_AUTHORIZED (2035), o relatorio vai para a DLQ e a fila de relatorios fica vazia
-# (a demo nunca veria COA/COD). O usuario 'admin' tem autoridade plena. Em PRODUCAO, conceda a
-# autoridade minima ao principal da app (SET AUTHREC ... AUTHADD(PUT, SETALL)) em vez de usar admin.
+# Why admin / DEV.ADMIN.SVRCONN (gotcha 2035)? For the Queue Manager to GENERATE and DELIVER a
+# COA/COD report it performs a PUT-with-context onto the ReplyToQ, requiring context authority
+# (+setall). The low-privilege 'app' user of the dev image does NOT have this -> the report PUT
+# fails with MQRC_NOT_AUTHORIZED (2035), the report goes to the DLQ and the report queue stays empty
+# (the demo would never see COA/COD). The 'admin' user has full authority. In PRODUCTION, grant the
+# minimum required authority to the app principal (SET AUTHREC ... AUTHADD(PUT, SETALL)) instead of
+# using admin.
 #
-# A senha vem de MQ_ADMIN_PASSWORD (alinhada ao docker-compose.yml: MQ_ADMIN_PASSWORD=passw0rd) com
-# fallback para passw0rd.
+# The password comes from MQ_ADMIN_PASSWORD (aligned with docker-compose.yml: MQ_ADMIN_PASSWORD=passw0rd)
+# with fallback to passw0rd.
 # =============================================================================
 
-# Flag EXPLICITO que ativa o runner gated. Ausente fora deste perfil -> startup normal nao afetado.
+# EXPLICIT flag that activates the gated runner. Absent outside this profile -> normal startup unaffected.
 demo:
   coa-cod:
     enabled: true
 
 ibm-mq:
-  # Canal/usuario de ADMIN para ter a autoridade de contexto que gera os relatorios COA/COD.
+  # ADMIN channel/user to have the context authority required to generate COA/COD reports.
   channel: DEV.ADMIN.SVRCONN
   user: admin
   password: ${MQ_ADMIN_PASSWORD:passw0rd}

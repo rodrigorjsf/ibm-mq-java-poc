@@ -19,16 +19,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Teste unitario (surefire, SEM broker, SEM Micronaut, SEM Docker) da ORQUESTRACAO da demo COA/COD
- * (AC#1 + AC#2). Constroi o {@link CoaCodDemoRunner} diretamente com os beans JMS mockados e inspeciona
- * o veredito de {@code runDemo()}.
+ * Unit test (surefire, NO broker, NO Micronaut, NO Docker) of the ORCHESTRATION of the COA/COD demo
+ * (AC#1 + AC#2). Builds the {@link CoaCodDemoRunner} directly with mocked JMS beans and inspects
+ * the verdict from {@code runDemo()}.
  *
- * <p><b>Por que construcao direta (e nao via {@code ApplicationContext})?</b> O runner e um
- * {@code ApplicationEventListener<StartupEvent>}: subir o contexto dispararia o listener no startup,
- * consumindo os stubs ANTES do corpo do teste. Para validar o contrato de {@code runDemo()} de forma
- * deterministica — sem colisao de stubs nem o spin ate o deadline — construimos o runner manualmente
- * e o invocamos UMA vez, exatamente como {@code LoggingFlowTest} faz com os beans de producao. O
- * gating via {@code @Requires} (AC#3) e coberto separadamente em {@link CoaCodDemoRunnerGatingTest} e
+ * <p><b>Why direct construction (and not via {@code ApplicationContext})?</b> The runner is an
+ * {@code ApplicationEventListener<StartupEvent>}: booting the context would trigger the listener on
+ * startup, consuming the stubs BEFORE the test body. To validate the {@code runDemo()} contract
+ * deterministically — without stub collision or spinning to the deadline — we build the runner manually
+ * and invoke it ONCE, exactly as {@code LoggingFlowTest} does with the production beans. The gating
+ * via {@code @Requires} (AC#3) is covered separately in {@link CoaCodDemoRunnerGatingTest} and
  * {@link CoaCodDemoRunnerEnabledGatingTest}.</p>
  */
 @DisplayName("Demo COA/COD — orquestracao (produce -> consume -> COA/COD) e validacao 259/260")
@@ -46,8 +46,8 @@ class CoaCodDemoRunnerTest {
 
         when(producer.send(anyString(), anyString())).thenReturn(MSG_ID);
         when(consumer.receiveOne(anyLong())).thenReturn(DEMO_PAYLOAD);
-        // COA, depois COD, depois null: AMBOS com correlationId == MSG_ID (default
-        // MQRO_COPY_MSG_ID_TO_CORREL_ID). Apos ver os dois, o loop de coleta sai antes do deadline.
+        // COA, then COD, then null: BOTH with correlationId == MSG_ID (default
+        // MQRO_COPY_MSG_ID_TO_CORREL_ID). After seeing both, the collection loop exits before the deadline.
         DeliveryEvent coa = new DeliveryEvent(
                 ReportType.COA, MQConstants.MQFB_COA, MSG_ID, MSG_ID, Instant.now());
         DeliveryEvent cod = new DeliveryEvent(
@@ -58,17 +58,17 @@ class CoaCodDemoRunnerTest {
 
         CoaCodDemoRunner.DemoResult result = runner.runDemo();
 
-        // AC#1: um unico fluxo produziu, consumiu e colheu os relatorios reutilizando os beans.
+        // AC#1: a single flow produced, consumed, and collected the reports reusing the beans.
         verify(producer).send(anyString(), anyString());
         verify(consumer).receiveOne(anyLong());
 
-        // AC#2: ambos os feedbacks (259/260) vistos e correlId == messageId.
-        assertThat(result.messageId()).as("messageId de producer.send").isEqualTo(MSG_ID);
-        assertThat(result.coaSeen()).as("COA (feedback 259) visto").isTrue();
-        assertThat(result.codSeen()).as("COD (feedback 260) visto").isTrue();
+        // AC#2: both feedbacks (259/260) seen and correlId == messageId.
+        assertThat(result.messageId()).as("messageId from producer.send").isEqualTo(MSG_ID);
+        assertThat(result.coaSeen()).as("COA (feedback 259) seen").isTrue();
+        assertThat(result.codSeen()).as("COD (feedback 260) seen").isTrue();
         assertThat(result.correlationOk())
-                .as("todos os relatorios COA/COD com correlId == messageId").isTrue();
-        assertThat(result.passed()).as("veredito agregado PASS").isTrue();
+                .as("all COA/COD reports with correlId == messageId").isTrue();
+        assertThat(result.passed()).as("aggregated verdict PASS").isTrue();
         assertThat(result.reports())
                 .extracting(DeliveryEvent::feedbackCode)
                 .contains(MQConstants.MQFB_COA, MQConstants.MQFB_COD);
@@ -83,21 +83,21 @@ class CoaCodDemoRunnerTest {
 
         when(producer.send(anyString(), anyString())).thenReturn(MSG_ID);
         when(consumer.receiveOne(anyLong())).thenReturn(DEMO_PAYLOAD);
-        // Apenas um COA e depois null: o loop nunca ve o COD e roda ate o deadline. Para manter o
-        // teste rapido, o runner usa um deadline curto neste cenario via construtor de teste.
+        // Only one COA and then null: the loop never sees the COD and runs until the deadline. To keep
+        // the test fast, the runner uses a short deadline in this scenario via the test constructor.
         DeliveryEvent coa = new DeliveryEvent(
                 ReportType.COA, MQConstants.MQFB_COA, MSG_ID, MSG_ID, Instant.now());
         when(reportConsumer.receiveOneReport(anyLong())).thenReturn(coa, (DeliveryEvent) null);
 
-        // Construtor de teste: (consumeTimeout=200ms, reportPollTimeout=1ms, reportDeadline=50ms).
-        // O deadline curto (50ms, o 6o arg) impede o surefire de prender quando o COD nunca chega.
+        // Test constructor: (consumeTimeout=200ms, reportPollTimeout=1ms, reportDeadline=50ms).
+        // The short deadline (50ms, the 6th arg) prevents surefire from hanging when COD never arrives.
         CoaCodDemoRunner runner = new CoaCodDemoRunner(
                 producer, consumer, reportConsumer, 200L, 1L, 50L);
 
         CoaCodDemoRunner.DemoResult result = runner.runDemo();
 
-        assertThat(result.coaSeen()).as("COA visto").isTrue();
-        assertThat(result.codSeen()).as("COD ausente").isFalse();
-        assertThat(result.passed()).as("veredito agregado FAIL (falta COD)").isFalse();
+        assertThat(result.coaSeen()).as("COA seen").isTrue();
+        assertThat(result.codSeen()).as("COD absent").isFalse();
+        assertThat(result.passed()).as("aggregated verdict FAIL (missing COD)").isFalse();
     }
 }

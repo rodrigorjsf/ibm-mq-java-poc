@@ -170,15 +170,10 @@
         </dependency>
 
         <!-- ===================== Logging ===================== -->
-        <!-- Escopo compile (nao runtime): o codigo de producao importa apenas a API SLF4J + MDC,
-             mas os testes de fluxo MDC (LoggingFlowTest) precisam de ch.qos.logback.classic.*
-             (ListAppender/ILoggingEvent) no classpath de test-compile. compile contem runtime contem
-             test-compile, entao manter logback-classic disponivel no compile preserva o logging de
-             console em producao E habilita a compilacao dos testes de captura de log. -->
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
-            <scope>compile</scope>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- ===================== Testes ===================== -->
