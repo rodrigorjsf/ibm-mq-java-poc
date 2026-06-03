@@ -129,10 +129,14 @@ class DeliveryReportPersistenceIT {
                 Map.entry("datasources.reader.username", "corr"),
                 Map.entry("datasources.reader.password", "corrpass")));
 
-        // Tocar o bean de schema dispara o @PostConstruct ensureSchema() contra o container vivo
-        // (CREATE TABLE IF NOT EXISTS + UNIQUE(correlation_id, feedback)). Os @Singleton sao lazy, entao
-        // pedimos o bean explicitamente para garantir que a tabela exista antes do primeiro INSERT.
-        context.getBean(DeliveryReportSchema.class);
+        // ADR-0010 schema-on-first-write: o @PostConstruct sumiu, entao apenas pedir o bean nao cria mais a
+        // tabela. Chamamos ensureSchema() explicitamente contra o container vivo (CREATE TABLE IF NOT EXISTS
+        // + UNIQUE(correlation_id, feedback)) para que a tabela exista antes do truncate e do primeiro
+        // INSERT. ensureSchema() e idempotente; ele NAO vira o latch do consumer (o latch vive no consumer),
+        // entao o caminho de primeira escrita continua disparando o guarda — os @Test inserem via esse
+        // caminho (AC6). Reusamos a MESMA instancia do bean injetada no consumer abaixo.
+        DeliveryReportSchema auditSchema = context.getBean(DeliveryReportSchema.class);
+        auditSchema.ensureSchema();
 
         // Isolamento entre testes: o container e @BeforeAll (uma instancia por classe) e a tabela e
         // CREATE TABLE IF NOT EXISTS (nunca recriada), entao linhas de um teste vazariam para o proximo —
@@ -150,10 +154,12 @@ class DeliveryReportPersistenceIT {
         store.register(PendingMessage.newlySent(CORREL_ID, "pedido-40", "{}"));
 
         // A ReceivePort nao e exercitada por handleReport(envelope) — o IT dirige o consumer diretamente
-        // com um ReportEnvelope decodificado (sem broker), entao um mock da porta basta.
+        // com um ReportEnvelope decodificado (sem broker), entao um mock da porta basta. O writeRepository
+        // segue como auditRepository (5o arg) e o auditSchema entra como o 6o/ultimo arg (ADR-0010): a
+        // primeira escrita atravessa o guarda de schema-on-first-write.
         reportConsumer = new ReportMessageConsumer(
                 mock(ReceivePort.class), new MqProperties(), store,
-                new ReportFeedbackRouter(), writeRepository);
+                new ReportFeedbackRouter(), writeRepository, auditSchema);
     }
 
     @AfterEach

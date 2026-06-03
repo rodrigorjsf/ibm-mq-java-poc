@@ -188,10 +188,11 @@ class LoggingFlowTest {
     class ReportStages {
 
         private ReportMessageConsumer reportConsumer(InMemoryCorrelationStore store) {
-            // auditRepository=null: no datasource in this log test; audit persistence stays inert.
-            // The ReceivePort is not exercised by handleReport(envelope), so a mock suffices.
+            // auditRepository=null + auditSchema=null: no datasource in this log test; audit persistence
+            // stays inert and the schema guard (ADR-0010) never fires. The ReceivePort is not exercised by
+            // handleReport(envelope), so a mock suffices.
             return new ReportMessageConsumer(
-                    mock(ReceivePort.class), new MqProperties(), store, new ReportFeedbackRouter(), null);
+                    mock(ReceivePort.class), new MqProperties(), store, new ReportFeedbackRouter(), null, null);
         }
 
         @Test
