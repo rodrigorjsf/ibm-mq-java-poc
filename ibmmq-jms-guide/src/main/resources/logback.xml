@@ -4,6 +4,9 @@
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
         <!-- %X{messageId} e %X{correlationId} expoem os ids vinculados via MDC no fluxo COA/COD,
              tornando uma unica mensagem rastreavel de ponta a ponta no console (grep por id). -->
+        <!-- Contract: these MDC keys are OWNED by com.example.ibmmq.logging.MdcTraceScope.MESSAGE_ID
+             ("messageId") and MdcTraceScope.CORRELATION_ID ("correlationId"). That class is the single
+             source of truth for the code<->logback contract; keep %X{...} below in sync with it. -->
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} [messageId=%X{messageId} correlationId=%X{correlationId}] - %msg%n</pattern>
         </encoder>
