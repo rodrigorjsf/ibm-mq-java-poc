@@ -60,7 +60,7 @@ A producer sends a persistent `TextMessage` requesting **COA** (confirm on arriv
 
 ## Gotchas captured (full detail in the guide §5 and `CLAUDE.md`)
 
-- **Report-PUT authority (2035):** a low-privilege user lacks context authority (`+setall`), so the queue manager's COA/COD report PUT fails with `MQRC_NOT_AUTHORIZED (2035)` and the report silently lands on the DLQ. Grant `SET AUTHREC ... AUTHADD(PUT, SETALL)`.
+- **Report-PUT authority (2035):** a low-privilege user lacks the pass-identity context authority (`+passid` — `+setall` alone is insufficient), so the queue manager's COA/COD report PUT (a PUT-with-context that passes the original message's identity context) fails with `MQRC_NOT_AUTHORIZED (2035)` and the report silently lands on the DLQ. Grant `SET AUTHREC ... AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)`.
 - **Report persistence** is inherited from the original message — it is *not* non-persistent by default.
 - **Testcontainers + modern Docker:** use Testcontainers 2.x (older docker-java fails against Docker engine 29.x); pin `commons-codec:1.16.1` for the zerodep transport.
 

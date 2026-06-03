@@ -9,11 +9,11 @@
 #
 # Why admin / DEV.ADMIN.SVRCONN (gotcha 2035)? For the Queue Manager to GENERATE and DELIVER a
 # COA/COD report it performs a PUT-with-context onto the ReplyToQ, requiring context authority
-# (+setall). The low-privilege 'app' user of the dev image does NOT have this -> the report PUT
+# (+passid). The low-privilege 'app' user of the dev image does NOT have this -> the report PUT
 # fails with MQRC_NOT_AUTHORIZED (2035), the report goes to the DLQ and the report queue stays empty
 # (the demo would never see COA/COD). The 'admin' user has full authority. In PRODUCTION, grant the
-# minimum required authority to the app principal (SET AUTHREC ... AUTHADD(PUT, SETALL)) instead of
-# using admin.
+# minimum required authority to the app principal (SET AUTHREC ... AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL))
+# instead of using admin.
 #
 # The password comes from MQ_ADMIN_PASSWORD (aligned with docker-compose.yml: MQ_ADMIN_PASSWORD=passw0rd)
 # with fallback to passw0rd.

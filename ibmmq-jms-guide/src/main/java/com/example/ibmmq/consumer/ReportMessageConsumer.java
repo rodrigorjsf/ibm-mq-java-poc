@@ -25,22 +25,22 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Le a fila de relatorios (JMSReplyTo) e processa os relatorios de entrega COA/COD/etc.
+ * Reads the report queue (JMSReplyTo) and processes the COA/COD/etc. delivery reports.
  *
- * <p><b>Como classificar:</b> o codigo de feedback do MQMD ja foi lido (da propriedade canonica
- * {@code JMS_IBM_Feedback}) pelo adapter de recebimento e chega no {@link ReportEnvelope#feedbackCode()}.
- * Esta propriedade e canonica e <em>sempre populada</em> para relatorios — diferente de
- * {@code JMS_IBM_MQMD_Feedback}, que so e preenchida quando {@code WMQ_MQMD_READ_ENABLED=true} no destino.</p>
+ * <p><b>How to classify:</b> the MQMD feedback code was already read (from the canonical
+ * {@code JMS_IBM_Feedback} property) by the receive adapter and arrives in {@link ReportEnvelope#feedbackCode()}.
+ * This property is canonical and <em>always populated</em> for reports — unlike
+ * {@code JMS_IBM_MQMD_Feedback}, which is only filled when {@code WMQ_MQMD_READ_ENABLED=true} on the destination.</p>
  *
- * <p><b>Como correlacionar:</b> com o default {@code MQRO_COPY_MSG_ID_TO_CORREL_ID}, o relatorio
- * chega com {@code JMSCorrelationID == MessageId} da mensagem original. Buscamos a pendencia por esse
- * id no {@link CorrelationStore}.</p>
+ * <p><b>How to correlate:</b> with the default {@code MQRO_COPY_MSG_ID_TO_CORREL_ID}, the report
+ * arrives with {@code JMSCorrelationID == MessageId} of the original message. We look up the pending entry
+ * by that id in the {@link CorrelationStore}.</p>
  *
- * <p><b>Seam (ADR-0008):</b> este entry point nao abre mais um {@code JMSContext} proprio — delega ao
- * {@link ReceivePort#receiveReport}, que faz toda a extracao MQMD ({@code JMS_IBM_Feedback},
- * {@code getJMSCorrelationID}, os seis valores MQMD do #19) e entrega um {@link ReportEnvelope}
- * decodificado. Nenhum {@code javax.jms.Message} chega aqui; a classificacao e a reconciliacao operam
- * puramente sobre o envelope.</p>
+ * <p><b>Seam (ADR-0008):</b> this entry point no longer opens its own {@code JMSContext} — it delegates to
+ * {@link ReceivePort#receiveReport}, which performs all MQMD extraction ({@code JMS_IBM_Feedback},
+ * {@code getJMSCorrelationID}, the six MQMD values from #19) and delivers a decoded {@link ReportEnvelope}.
+ * No {@code javax.jms.Message} reaches here; classification and reconciliation operate purely on the
+ * envelope.</p>
  */
 @Singleton
 public class ReportMessageConsumer {
@@ -89,10 +89,10 @@ public class ReportMessageConsumer {
     }
 
     /**
-     * Recebe um relatorio da fila de relatorios (com timeout), classifica e registra o evento.
+     * Receives a report from the report queue (with timeout), classifies it and records the event.
      *
-     * @param timeoutMillis tempo maximo de espera (ms).
-     * @return o {@link DeliveryEvent} derivado, ou {@code null} se o timeout expirar sem relatorio.
+     * @param timeoutMillis maximum time to wait (ms).
+     * @return the derived {@link DeliveryEvent}, or {@code null} if the timeout expires with no report.
      */
     public DeliveryEvent receiveOneReport(long timeoutMillis) {
         // The ReceivePort adapter owns the JMSContext lifecycle, the queue:///...?mdReadEnabled=true
@@ -100,15 +100,15 @@ public class ReportMessageConsumer {
         // feedback code, correlation id, body, and the six MQMD values into a ReportEnvelope.
         ReportEnvelope env = receivePort.receiveReport(props.getReportQueue(), timeoutMillis);
         if (env == null) {
-            LOG.debug("Nenhum relatorio dentro do timeout ({} ms)", timeoutMillis);
+            LOG.debug("No report within the timeout ({} ms)", timeoutMillis);
             return null;
         }
         return handleReport(env);
     }
 
     /**
-     * Processa um unico relatorio decodificado. Exposto separadamente para testabilidade (pode ser
-     * chamado com um {@link ReportEnvelope} sintetico, sem broker).
+     * Processes a single decoded report. Exposed separately for testability (it can be called with a
+     * synthetic {@link ReportEnvelope}, without a broker).
      */
     public DeliveryEvent handleReport(ReportEnvelope env) {
         try {
@@ -127,7 +127,7 @@ public class ReportMessageConsumer {
             // descriptor degrades gracefully and the already-acked report path is never aborted.
             ReportDescriptor descriptor = env.descriptor();
 
-            // Correlaciona de volta a mensagem original (CorrelationId == MessageId original).
+            // Correlate back to the original message (CorrelationId == original MessageId).
             Optional<PendingMessage> pending = correlationStore.findByMessageId(correlationId);
             String originalMessageId = pending.map(PendingMessage::messageId).orElse(correlationId);
             // Issue #21: capture the original send instant for the produce->report latency baseline. NULL when
@@ -143,20 +143,20 @@ public class ReportMessageConsumer {
             // clears both keys before the thread returns to the pool (see the producer's note); under
             // ~10k rpm a reused thread must not leak this report's ids to the next.
             try (var scope = MdcTraceScope.bind(originalMessageId, correlationId)) {
-                LOG.info("[stage=CLASSIFY] Relatorio classificado: tipo={}, feedback={}, correlId={}",
+                LOG.info("[stage=CLASSIFY] Report classified: type={}, feedback={}, correlId={}",
                         type, feedback, correlationId);
-                LOG.info("[stage=CORRELATE] Correlacionado a mensagem original: originalMsgId={}, conhecido={}",
+                LOG.info("[stage=CORRELATE] Correlated to the original message: originalMsgId={}, known={}",
                         originalMessageId, pending.isPresent());
 
                 // Observation instant: shared by both the durable audit row and the DeliveryEvent below,
                 // so the persisted timestamp matches the event the caller sees.
                 Instant observedAt = Instant.now();
 
-                // Atualiza o estado da pendencia conforme o tipo de relatorio.
+                // Update the pending state according to the report type.
                 switch (type) {
                     case COA -> {
-                        // COA = Confirmation On Arrival: a mensagem CHEGOU na fila de destino.
-                        LOG.info("[stage=COA] Confirmacao de chegada (arrival) registrada: correlId={}, originalMsgId={}",
+                        // COA = Confirmation On Arrival: the message ARRIVED on the destination queue.
+                        LOG.info("[stage=COA] Arrival confirmation (COA) recorded: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
                         // Append-only audit row (writer datasource). Best-effort: a persist failure must NOT
                         // break the reconciliation path that follows (the report is already acked).
@@ -168,16 +168,16 @@ public class ReportMessageConsumer {
                         recordAndSurface(type, correlationId, originalMessageId);
                     }
                     case COD -> {
-                        // COD = Confirmation On Delivery: a mensagem foi CONSUMIDA destrutivamente.
-                        LOG.info("[stage=COD] Confirmacao de entrega (delivery) registrada: correlId={}, originalMsgId={}",
+                        // COD = Confirmation On Delivery: the message was CONSUMED destructively.
+                        LOG.info("[stage=COD] Delivery confirmation (COD) recorded: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
                         persistAudit(type, feedback, correlationId, originalMessageId, observedAt, sentAt, descriptor);
                         recordAndSurface(type, correlationId, originalMessageId);
                     }
                     case EXPIRATION, NAN, EXCEPTION ->
-                            LOG.warn("[stage=PROBLEM] Relatorio de problema: tipo={}, feedback={}, correlId={}",
+                            LOG.warn("[stage=PROBLEM] Problem report: type={}, feedback={}, correlId={}",
                                     type, feedback, correlationId);
-                    default -> { /* PAN/UNKNOWN: apenas registra no resumo abaixo. */ }
+                    default -> { /* PAN/UNKNOWN: only recorded in the summary below. */ }
                 }
 
                 // Full 6-field event (issue #19): only this call site builds the extended DeliveryEvent;
@@ -191,15 +191,15 @@ public class ReportMessageConsumer {
                         descriptor.putTimestampUtc(),
                         descriptor.reportTypeChar());
 
-                LOG.info("[stage=REPORT-DONE] Relatorio processado: tipo={}, feedback={}, correlId={}, originalMsgId={}, "
-                                + "conhecido={}, putTsUtc={}, reportTypeChar={}, msgIdHex={}",
+                LOG.info("[stage=REPORT-DONE] Report processed: type={}, feedback={}, correlId={}, originalMsgId={}, "
+                                + "known={}, putTsUtc={}, reportTypeChar={}, msgIdHex={}",
                         type, feedback, correlationId, originalMessageId, pending.isPresent(),
                         descriptor.putTimestampUtc(), descriptor.reportTypeChar(), descriptor.messageIdBytesHex());
 
                 return event;
             }
         } catch (Exception e) {
-            throw new IllegalStateException("Falha ao processar relatorio de entrega", e);
+            throw new IllegalStateException("Failed to process delivery report", e);
         }
     }
 
@@ -227,8 +227,8 @@ public class ReportMessageConsumer {
         ReconcileResult result = correlationStore.recordReport(correlationId, type);
         switch (result.outcome()) {
             case COMPLETED -> LOG.info(
-                    "[stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, "
-                            + "originalMsgId={}, pendentesRestantes={}",
+                    "[stage=RECONCILE] Delivery complete (COA+COD): pending entry reconciled and removed, "
+                            + "originalMsgId={}, remainingPending={}",
                     originalMessageId, correlationStore.pendingCount());
             case ORPHAN -> {
                 long total = orphanReportCount.incrementAndGet();

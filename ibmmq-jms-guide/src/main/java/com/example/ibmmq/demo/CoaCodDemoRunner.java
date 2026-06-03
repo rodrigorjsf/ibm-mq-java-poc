@@ -40,7 +40,7 @@ import java.util.List;
  * orchestration banner and the final validation summary; it does NOT re-log those stages.</p>
  *
  * <p><b>Report authority (gotcha 2035):</b> for the QMgr to GENERATE+DELIVER a COA/COD report it performs
- * a PUT-with-context onto the ReplyToQ, requiring context authority ({@code +setall}). The low-privilege
+ * a PUT-with-context onto the ReplyToQ, requiring context authority ({@code +passid}). The low-privilege
  * {@code app} user of the dev image does NOT have this -> the report PUT fails with
  * {@code MQRC_NOT_AUTHORIZED (2035)}, the report goes to the DLQ and the report queue stays empty
  * (the demo "hangs" never seeing the reports). Therefore the demo must connect as {@code admin} via

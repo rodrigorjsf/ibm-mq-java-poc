@@ -307,7 +307,7 @@ flowchart LR
     QM([QM1<br/>Queue Manager]):::qm
     BQ[DEV.QUEUE.1<br/>business queue]:::queue
     RQ[DEV.QUEUE.2<br/>report queue]:::queue
-    PASS([resultado=PASS<br/>COA+COD+correlId]):::pass
+    PASS([result=PASS<br/>COA+COD+correlId]):::pass
 
     P -->|1 PRODUCE<br/>COA+COD enabled<br/>JMSReplyTo=DEV.QUEUE.2| BQ
     BQ -->|2 COA report<br/>feedback=259| QM
@@ -348,7 +348,7 @@ JAVA_HOME=/home/rodrigo/.local/jdk25 /home/rodrigo/.local/maven-current/bin/mvn 
 > not the application JVM — the flag would be silently ignored.
 
 > **When is it done?** The demo runs once at startup. Once you see the
-> `[demo=COA/COD] [resultado=PASS]` summary line, the flow is complete. The
+> `[demo=COA/COD] [result=PASS]` summary line, the flow is complete. The
 > application does **not** call `System.exit`; if the process does not return to
 > the shell on its own, press **Ctrl-C** to stop it (the summary has already been
 > written to `/tmp/coa-cod-demo.log`).
@@ -364,8 +364,8 @@ JAVA_HOME=/home/rodrigo/.local/jdk25 /home/rodrigo/.local/maven-current/bin/mvn 
 ### 4.3 Expected Log Output
 
 The application emits narrated `INFO` log lines tagged with `[stage=...]` and
-`[demo=COA/COD]`. The log text is Brazilian Portuguese (source language) — this
-is what you will see verbatim.
+`[demo=COA/COD]`. The log text is English (ADR-0004) — this is what you will see
+verbatim.
 
 **Stage sequence (in order):**
 
@@ -380,22 +380,22 @@ is what you will see verbatim.
 | `[stage=COA]` | COA report (feedback=259) registered |
 | `[stage=COD]` | COD report (feedback=260) registered |
 | `[stage=RECONCILE]` | Both COA+COD confirmed; pending entry removed |
-| `[resultado=PASS]` | Final summary — all assertions passed |
+| `[result=PASS]` | Final summary — all assertions passed |
 
 **Example verbatim log excerpt (passing run):**
 
 ```
-INFO  [stage=BANNER] Iniciando a demo COA/COD ponta-a-ponta (produce -> consume -> COA/COD) contra o broker local.
-INFO  [stage=PRODUCE] Mensagem de negocio enviada: businessKey=demo-coa-cod, messageId=ID:..., replyTo=DEV.QUEUE.2
-INFO  [stage=CONSUME] Mensagem de negocio consumida (GET destrutivo): body={"demo":"coa-cod","pedido":42}
-INFO  [stage=COMMIT] Consumo confirmado (commit): COD liberado para a fila de relatorios
-INFO  [stage=CLASSIFY] Relatorio classificado: tipo=COA, feedback=259, correlId=ID:...
-INFO  [stage=CORRELATE] Correlacionado a mensagem original: originalMsgId=ID:..., conhecido=true
-INFO  [stage=COA] Confirmacao de chegada (arrival) registrada: correlId=ID:..., originalMsgId=ID:...
-INFO  [stage=CLASSIFY] Relatorio classificado: tipo=COD, feedback=260, correlId=ID:...
-INFO  [stage=COD] Confirmacao de entrega (delivery) registrada: correlId=ID:..., originalMsgId=ID:...
-INFO  [stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, ...
-INFO  [demo=COA/COD] [resultado=PASS] Fluxo validado: COA(feedback=259)=true, COD(feedback=260)=true, correlId==messageId=true ...
+INFO  [stage=BANNER] Starting the end-to-end COA/COD demo (produce -> consume -> COA/COD) against the local broker.
+INFO  [stage=PRODUCE] Business message sent: businessKey=demo-coa-cod, messageId=ID:..., replyTo=DEV.QUEUE.2
+INFO  [stage=CONSUME] Business message consumed (destructive GET): body={"demo":"coa-cod","pedido":42}
+INFO  [stage=COMMIT] Consumption committed (commit): COD released to the report queue
+INFO  [stage=CLASSIFY] Report classified: type=COA, feedback=259, correlId=ID:...
+INFO  [stage=CORRELATE] Correlated to the original message: originalMsgId=ID:..., known=true
+INFO  [stage=COA] Arrival confirmation (COA) recorded: correlId=ID:..., originalMsgId=ID:...
+INFO  [stage=CLASSIFY] Report classified: type=COD, feedback=260, correlId=ID:...
+INFO  [stage=COD] Delivery confirmation (COD) recorded: correlId=ID:..., originalMsgId=ID:...
+INFO  [stage=RECONCILE] Delivery complete (COA+COD): pending entry reconciled and removed, ...
+INFO  [demo=COA/COD] [result=PASS] Flow validated: COA(feedback=259)=true, COD(feedback=260)=true, correlId==messageId=true ...
 ```
 
 > **Note — the `[stage=CONSUME]`/`[stage=COMMIT]` lines carry no `messageId`.** Since the ADR-0008 messaging seam, the
@@ -417,18 +417,18 @@ A run is a **PASS** when all of the following hold:
 | Feedback code for COA | `feedback=259` in the CLASSIFY line |
 | Feedback code for COD | `feedback=260` in the CLASSIFY line |
 | Correlation is correct | `correlId==messageId=true` in the PASS line |
-| Final verdict | `[resultado=PASS]` in the log |
+| Final verdict | `[result=PASS]` in the log |
 
-A run is a **FAIL** when the log shows `[resultado=FAIL]` instead.
+A run is a **FAIL** when the log shows `[result=FAIL]` instead.
 
 ### 5.1 Step-by-step validation checklist
 
 1. Run the demo command (section 4.2) — it tees output to `/tmp/coa-cod-demo.log`.
-2. Once the `[resultado=PASS]` summary line appears, the flow is complete; stop
+2. Once the `[result=PASS]` summary line appears, the flow is complete; stop
    the process with **Ctrl-C** if it does not return on its own (section 4.2).
 3. Confirm the final verdict is PASS:
    ```bash
-   grep '\[resultado=PASS\]' /tmp/coa-cod-demo.log
+   grep '\[result=PASS\]' /tmp/coa-cod-demo.log
    ```
    A matching line means the run passed; no match means it failed (section 7).
 4. Confirm `[stage=COA]` appears **before** `[stage=COD]` (COA precedes COD):
@@ -437,7 +437,7 @@ A run is a **FAIL** when the log shows `[resultado=FAIL]` instead.
    ```
 5. Confirm the same `messageId` appears in the `[stage=PRODUCE]` and PASS lines:
    ```bash
-   grep -E '\[stage=PRODUCE\]|\[resultado=PASS\]' /tmp/coa-cod-demo.log
+   grep -E '\[stage=PRODUCE\]|\[result=PASS\]' /tmp/coa-cod-demo.log
    ```
 6. If any check fails, see section 7 (Troubleshooting).
 
@@ -602,7 +602,7 @@ Key queues for this project:
 
 ## 7. Troubleshooting
 
-### 7.1 Demo logs `[resultado=FAIL]` — report queue empty / no COA or COD
+### 7.1 Demo logs `[result=FAIL]` — report queue empty / no COA or COD
 
 **Symptom:** demo finishes but `[stage=COA]` and/or `[stage=COD]` never appear;
 `coaSeen=false` or `codSeen=false` in the FAIL line; `DEV.QUEUE.2` depth is 0
@@ -668,7 +668,7 @@ here) is compatible with Docker Engine 29+ / API 1.54.
 ### 7.4 `micronaut.environments=demo` has no effect
 
 **Symptom:** demo runs but the demo runner is not instantiated; the narrated log
-lines (`[stage=BANNER]`, `[stage=PRODUCE]`, ...) never appear; `[resultado=...]`
+lines (`[stage=BANNER]`, `[stage=PRODUCE]`, ...) never appear; `[result=...]`
 absent.
 
 **Root cause:** `-Dmicronaut.environments=demo` was placed as a bare Maven

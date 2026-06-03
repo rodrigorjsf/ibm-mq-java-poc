@@ -103,7 +103,7 @@ NEVER on during normal startup). Activated via the Micronaut `demo` profile, it 
 reuses the production beans (producer / consumer / report consumer + the narrated logger) and runs the
 full **produce -> consume -> COA/COD** flow exactly once, printing the narrated stages
 (`[stage=PRODUCE/CONSUME/COMMIT/CLASSIFY/CORRELATE/COA/COD/RECONCILE]`) and a final
-`[resultado=PASS|FAIL]` summary that validates **feedback 259 (COA) + 260 (COD)** and **`correlId == messageId`**.
+`[result=PASS|FAIL]` summary that validates **feedback 259 (COA) + 260 (COD)** and **`correlId == messageId`**.
 
 Prerequisite: the local broker up (`docker compose up -d`, with `MQ_ADMIN_PASSWORD` set). The `demo`
 profile connects as **admin / `DEV.ADMIN.SVRCONN`** because the queue manager's report PUT *passes* the
