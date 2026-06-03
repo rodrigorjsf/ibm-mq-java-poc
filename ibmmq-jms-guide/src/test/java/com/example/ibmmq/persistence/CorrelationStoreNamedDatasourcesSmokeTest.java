@@ -39,6 +39,11 @@ class CorrelationStoreNamedDatasourcesSmokeTest {
 
     private static Map<String, Object> namedDatasourceProperties() {
         return Map.ofEntries(
+                // Pin a valid ibm-mq.password so the context boots under the eager @Context validation of
+                // MqProperties (issue #27 / ADR-0011): the ambient ${IBM_MQ_PASSWORD:passw0rd} default
+                // resolves blank when the env var is exported empty, which would trip the credential rule
+                // (user=app + blank password) and refuse to boot — unrelated to this datasource-wiring test.
+                Map.entry("ibm-mq.password", "passw0rd"),
                 Map.entry("correlation.store", "jdbc"),
                 // Writer/primary = `default` (nome load-bearing — ver ADR-0005).
                 Map.entry("datasources.default.url", "jdbc:postgresql://localhost:5432/correlation"),
@@ -95,7 +100,10 @@ class CorrelationStoreNamedDatasourcesSmokeTest {
     @DisplayName("SEM datasources: as repositories de delivery_report ficam INERTES (nada de HikariCP em teste unitario)")
     void deliveryReportRepositoriesAreInertWithoutDatasources() {
         // Espelha o application.yml commitado (sem bloco datasources): o contexto de teste fica inerte.
-        try (ApplicationContext ctx = ApplicationContext.run()) {
+        // Pin only ibm-mq.password (no datasources) so the context boots under the eager @Context
+        // validation of MqProperties (issue #27 / ADR-0011) while still proving the repos stay inert
+        // without datasources.* keys.
+        try (ApplicationContext ctx = ApplicationContext.run(Map.of("ibm-mq.password", "passw0rd"))) {
             assertThat(ctx.containsBean(DeliveryReportWriteRepository.class))
                     .as("o repo WRITER NAO deve existir sem datasources.default.url")
                     .isFalse();
