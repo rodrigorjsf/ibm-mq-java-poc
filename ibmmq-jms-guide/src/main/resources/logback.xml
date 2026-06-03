@@ -8,6 +8,10 @@
              (m1: no more "[messageId= correlationId=]" noise on startup/Micronaut lines)
              while preserving the full ids on flow lines. The regex matches exactly the
              all-empty form (including the trailing space) and collapses it to nothing. -->
+        <!-- Contract: these MDC keys are OWNED by com.example.ibmmq.logging.MdcTraceScope.MESSAGE_ID
+             ("messageId") and MdcTraceScope.CORRELATION_ID ("correlationId"). That class is the single
+             source of truth for the code<->logback contract; keep %X{...} below in sync with it. -->
+
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36}%replace( [messageId=%X{messageId} correlationId=%X{correlationId}]){'^ \[messageId= correlationId=\]$',''} - %msg%n</pattern>
         </encoder>
