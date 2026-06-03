@@ -151,24 +151,28 @@ public class CoaCodDemoRunner implements ApplicationEventListener<StartupEvent> 
 
         // (c) COLHER os relatorios sob um deadline generoso, em qualquer ordem (COA/COD), tolerando
         // retornos null (timeout) ate ver AMBOS os feedbacks.
-        List<DeliveryEvent> reports = collectReports();
+        CollectedReports collected = collectReports();
 
-        // (d) VALIDAR.
-        return validate(messageId, reports);
+        // (d) VALIDAR — reuse the flags already computed by collectReports (m3).
+        return validate(messageId, collected);
     }
 
     /**
      * Loop deadline-bounded que le a fila de relatorios reutilizando o {@link ReportMessageConsumer}
      * (que ja narra [stage=CLASSIFY/CORRELATE/COA/COD/RECONCILE]). Para assim que AMBOS COA(259) e
      * COD(260) forem vistos, ou quando o deadline expirar.
+     *
+     * <p>Uses {@link System#nanoTime()} for a monotonic deadline (m4); the subtraction-based
+     * comparison ({@code nanoTime() - deadlineNanos < 0}) is overflow-safe per the JDK contract.</p>
      */
-    private List<DeliveryEvent> collectReports() {
+    private CollectedReports collectReports() {
         List<DeliveryEvent> reports = new ArrayList<>();
         boolean coaSeen = false;
         boolean codSeen = false;
 
-        long deadline = System.currentTimeMillis() + reportDeadlineMillis;
-        while (System.currentTimeMillis() < deadline && !(coaSeen && codSeen)) {
+        // m4: nanoTime() is monotonic — immune to wall-clock adjustments (NTP, DST, leap seconds).
+        long deadlineNanos = System.nanoTime() + reportDeadlineMillis * 1_000_000L;
+        while (System.nanoTime() - deadlineNanos < 0 && !(coaSeen && codSeen)) {
             DeliveryEvent event = reportConsumer.receiveOneReport(reportPollTimeoutMillis);
             if (event == null) {
                 // Timeout sem relatorio: continua ate o deadline.
@@ -181,8 +185,21 @@ public class CoaCodDemoRunner implements ApplicationEventListener<StartupEvent> 
                 codSeen = true;
             }
         }
-        return reports;
+        // Return the list together with the flags already computed during collection (m3:
+        // avoids re-scanning the list in validate() via anyMatch).
+        return new CollectedReports(List.copyOf(reports), coaSeen, codSeen);
     }
+
+    /**
+     * Carries the result of one {@link #collectReports()} pass: the immutable report list
+     * plus the COA/COD seen-flags already computed during the collection loop (m3: no need
+     * for validate() to re-derive them via anyMatch).
+     */
+    private record CollectedReports(
+            List<DeliveryEvent> reports,
+            boolean coaSeen,
+            boolean codSeen
+    ) {}
 
     /**
      * Valida (AC#2) que chegaram AMBOS os relatorios — COA (feedback {@code MQFB_COA}=259) e COD
@@ -191,9 +208,11 @@ public class CoaCodDemoRunner implements ApplicationEventListener<StartupEvent> 
      * constants {@code MQConstants.MQFB_*}, nunca literais; o feedback foi lido pelo consumer via
      * {@code WMQConstants.JMS_IBM_FEEDBACK}.
      */
-    private DemoResult validate(String messageId, List<DeliveryEvent> reports) {
-        boolean coaSeen = reports.stream().anyMatch(e -> e.feedbackCode() == MQConstants.MQFB_COA);
-        boolean codSeen = reports.stream().anyMatch(e -> e.feedbackCode() == MQConstants.MQFB_COD);
+    private DemoResult validate(String messageId, CollectedReports collected) {
+        // Reuse the flags computed by collectReports — no redundant anyMatch re-scan (m3).
+        boolean coaSeen = collected.coaSeen();
+        boolean codSeen = collected.codSeen();
+        List<DeliveryEvent> reports = collected.reports();
 
         // Cada relatorio COA/COD deve correlacionar ao messageId original (correlId == messageId).
         boolean correlationOk = reports.stream()
