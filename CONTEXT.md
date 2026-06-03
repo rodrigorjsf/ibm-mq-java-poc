@@ -56,7 +56,7 @@ The keyed record of in-flight business messages awaiting their COA/COD, used to 
 _Avoid_: tracker, cache.
 
 **Log trace context (MDC)**:
-The pair of ids (MessageId + CorrelationId) bound into the logging framework's Mapped Diagnostic Context so every log line of one business message's lifecycle (PRODUCE → CONSUME → COA/COD → reconcile) carries them — making a single message greppable end-to-end. This is a **logging/observability** concern, distinct from the Correlation store: it reconciles nothing and holds no delivery state, it only decorates log output.
+The pair of ids (MessageId + CorrelationId) bound into the logging framework's Mapped Diagnostic Context so every log line of one business message's lifecycle (PRODUCE → CONSUME → COA/COD → reconcile) carries them — making a single message greppable end-to-end. This is a **logging/observability** concern, distinct from the Correlation store: it reconciles nothing and holds no delivery state, it only decorates log output. Realized by the `MdcTraceScope` helper (`com.example.ibmmq.logging.MdcTraceScope`), a single `AutoCloseable` that owns the `MESSAGE_ID`/`CORRELATION_ID` key constants (the one source of truth for the code↔`logback.xml` `%X{...}` contract) and is bound per step via try-with-resources so the keys are always cleared.
 _Avoid_: naming it with "Correlation" (e.g. `CorrelationContext`) — that overloads the Correlation store; "tracing" without naming MDC.
 
 **Competing consumers**:
