@@ -2,13 +2,13 @@ package com.example.ibmmq.producer;
 
 import com.example.ibmmq.config.MqProperties;
 import com.example.ibmmq.correlation.CorrelationStore;
+import com.example.ibmmq.logging.MdcTraceScope;
 import com.example.ibmmq.messaging.OutboundMessage;
 import com.example.ibmmq.messaging.SendPort;
 import com.example.ibmmq.model.PendingMessage;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 
 /**
  * Produz mensagens de negocio (JSON) na fila de negocio, solicitando relatorios COA e COD.
@@ -65,24 +65,19 @@ public class BusinessMessageProducer {
         // MQRO_COPY_MSG_ID_TO_CORREL_ID makes this id the report's CorrelationId.
         String messageId = sendPort.send(outbound);
 
-        // MDC: vincula messageId e correlationId para que esta primeira etapa do ciclo de vida
-        // ja carregue os mesmos ids que aparecerao nas etapas COA/COD. Como o default IBM MQ e
-        // MQRO_COPY_MSG_ID_TO_CORREL_ID, o CorrelationId do relatorio futuro sera ESTE messageId —
-        // por isso vinculamos correlationId = messageId aqui (a chave que fecha o ciclo).
-        MDC.put("messageId", messageId);
-        MDC.put("correlationId", messageId);
-        try {
+        // MDC trace context: bind messageId and correlationId so this first lifecycle step already
+        // carries the same ids the COA/COD steps will. Because the IBM MQ default is
+        // MQRO_COPY_MSG_ID_TO_CORREL_ID, the future report's CorrelationId WILL be this messageId — so
+        // we bind correlationId = messageId here (the key that closes the cycle). The try-with-resources
+        // guarantees both keys are cleared before the thread (virtual/carrier) returns to the pool, so
+        // under ~10k rpm a reused thread cannot leak this message's ids to the next.
+        try (var scope = MdcTraceScope.bind(messageId, messageId)) {
             correlationStore.register(PendingMessage.newlySent(messageId, businessKey, jsonPayload));
 
             LOG.info("[stage=PRODUCE] Mensagem de negocio enviada: businessKey={}, messageId={}, replyTo={}",
                     businessKey, messageId, props.getReportQueue());
 
             return messageId;
-        } finally {
-            // Limpa o MDC antes de devolver a thread (virtual/carrier) ao pool: sob ~10k rpm uma
-            // thread reutilizada nao pode vazar os ids desta mensagem para a proxima.
-            MDC.remove("messageId");
-            MDC.remove("correlationId");
         }
     }
 }

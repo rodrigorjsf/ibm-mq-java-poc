@@ -3,6 +3,7 @@ package com.example.ibmmq.consumer;
 import com.example.ibmmq.config.MqProperties;
 import com.example.ibmmq.correlation.CorrelationStore;
 import com.example.ibmmq.correlation.ReconcileResult;
+import com.example.ibmmq.logging.MdcTraceScope;
 import com.example.ibmmq.messaging.ReceivePort;
 import com.example.ibmmq.messaging.ReportEnvelope;
 import com.example.ibmmq.model.DeliveryEvent;
@@ -15,7 +16,6 @@ import io.micronaut.core.annotation.Nullable;
 import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -121,13 +121,14 @@ public class ReportMessageConsumer {
             // the percentiles in `make load-verify` (ADR-0007), so p95/p99 stay robust.
             Instant sentAt = pending.map(PendingMessage::sentAt).orElse(null);
 
-            // MDC: correlationId = JMSCorrelationID do relatorio; messageId = MessageId original
-            // derivado pela correlacao. Vinculamos ANTES das etapas para que toda linha (classify,
-            // correlate, COA/COD, reconcile) carregue os mesmos ids — fechando a rastreabilidade
-            // ponta-a-ponta: o mesmo id do PRODUCE aparece aqui no relatorio.
-            MDC.put("messageId", originalMessageId);
-            MDC.put("correlationId", correlationId);
-            try {
+            // MDC trace context: messageId = original MessageId derived by correlation; correlationId =
+            // the report's JMSCorrelationID. NOTE the asymmetry — these are two DIFFERENT source values
+            // (unlike the producer, which binds the same id to both). We bind BEFORE the steps so every
+            // line (classify, correlate, COA/COD, reconcile) carries the same ids, closing end-to-end
+            // traceability: the same id from PRODUCE shows up here on the report. The try-with-resources
+            // clears both keys before the thread returns to the pool (see the producer's note); under
+            // ~10k rpm a reused thread must not leak this report's ids to the next.
+            try (var scope = MdcTraceScope.bind(originalMessageId, correlationId)) {
                 LOG.info("[stage=CLASSIFY] Relatorio classificado: tipo={}, feedback={}, correlId={}",
                         type, feedback, correlationId);
                 LOG.info("[stage=CORRELATE] Correlacionado a mensagem original: originalMsgId={}, conhecido={}",
@@ -182,11 +183,6 @@ public class ReportMessageConsumer {
                         descriptor.putTimestampUtc(), descriptor.reportTypeChar(), descriptor.messageIdBytesHex());
 
                 return event;
-            } finally {
-                // Limpa o MDC antes de devolver a thread ao pool (ver nota do produtor): sob ~10k rpm
-                // uma thread reutilizada nao pode vazar os ids deste relatorio para o proximo.
-                MDC.remove("messageId");
-                MDC.remove("correlationId");
             }
         } catch (Exception e) {
             throw new IllegalStateException("Falha ao processar relatorio de entrega", e);
