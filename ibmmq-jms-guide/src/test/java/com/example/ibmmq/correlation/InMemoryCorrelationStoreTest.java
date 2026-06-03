@@ -24,7 +24,7 @@ import static org.mockito.Mockito.mock;
  * Testes unitarios (sem broker) da logica de correlacao MessageId<->CorrelationId e do roteamento
  * de feedback no {@link ReportMessageConsumer}. Os relatorios sao fabricados como {@link ReportEnvelope}
  * sinteticos ({@link ReportEnvelope#synthetic}) — o seam (ADR-0008) ja entrega envelopes decodificados,
- * nunca um {@code javax.jms.Message}.
+ * nunca um {@code jakarta.jms.Message}.
  */
 class InMemoryCorrelationStoreTest {
 

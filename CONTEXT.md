@@ -1,6 +1,6 @@
 # IBM MQ + JMS 2.0 COA/COD — Domain Context
 
-Glossary of the domain language for this project: integrating Java / Micronaut with IBM MQ over JMS 2.0 (`javax.jms`), centered on COA/COD delivery reports. Terms only — no implementation details (those live in the guide, `docs/adr/`, and the code).
+Glossary of the domain language for this project: integrating Java / Micronaut with IBM MQ over Jakarta Messaging (`jakarta.jms`), with the legacy JMS 2.0 (`javax.jms`) namespace retained as a documented migration source — centered on COA/COD delivery reports. Terms only — no implementation details (those live in the guide, `docs/adr/`, and the code).
 
 ## Language
 
@@ -22,7 +22,11 @@ _Avoid_: ack, receipt, response.
 The low-level header on every MQ message carrying MessageId, CorrelationId, Report, Feedback, and Persistence.
 
 **JMSContext**:
-The JMS 2.0 unified handle (connection + session) used to produce and consume; not thread-safe — one per thread.
+The unified handle (connection + session) used to produce and consume — JMS 2.0 (`javax.jms`) and Jakarta Messaging 3.0 (`jakarta.jms`) both expose it; not thread-safe — one per thread.
+
+**JMS namespace (`javax.jms` vs `jakarta.jms`)**:
+The two API namespaces for the same messaging contract. `javax.jms` is the frozen JMS 2.0 line (IBM MQ `com.ibm.mq.allclient`, `pooled-jms` 2.x); `jakarta.jms` is Jakarta Messaging 3.0 (IBM MQ `com.ibm.mq.jakarta.client`, `pooled-jms` 3.x). The distinction is **API-level only** — every COA/COD semantic, feedback/report constant, authority rule, and persistence behavior in this glossary is identical across both. This project's primary namespace is **`jakarta.jms`** (ADR-0012); `javax.jms` is retained only as the documented migration source.
+_Avoid_: implying the namespace changes any report/correlation behavior; calling `javax.jms` "the old JMS" without naming the namespace.
 
 **MQSC**:
 IBM MQ's administration command language (`DEFINE`, `ALTER`, `SET CHLAUTH`).

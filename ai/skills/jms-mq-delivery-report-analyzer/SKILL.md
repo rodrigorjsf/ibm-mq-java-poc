@@ -1,15 +1,20 @@
 ---
 name: jms-mq-delivery-report-analyzer
-description: Drives a rigorous LLM review of any IBM MQ + JMS 2.0 application that uses COA/COD delivery reports (Confirmation On Arrival / Confirmation On Delivery). Use when asked to audit, review, or harden COA/COD report handling, feedback-code classification, correlation/reconciliation, report-queue topology, report-PUT authority, persistence, pooling/concurrency, or transactions in a JMS messaging codebase — especially under a distributed (Kubernetes + microservices, high-throughput, competing-consumers) deployment. Reports each finding as WHERE / WHY / IMPACT / SOLUTIONS.
+description: Drives a rigorous LLM review of any IBM MQ + JMS 2.0 / Jakarta Messaging 3.0 application that uses COA/COD delivery reports (Confirmation On Arrival / Confirmation On Delivery). Use when asked to audit, review, or harden COA/COD report handling, feedback-code classification, correlation/reconciliation, report-queue topology, report-PUT authority, persistence, pooling/concurrency, or transactions in a JMS messaging codebase — especially under a distributed (Kubernetes + microservices, high-throughput, competing-consumers) deployment. Reports each finding as WHERE / WHY / IMPACT / SOLUTIONS.
 ---
 
 # JMS / MQ Delivery-Report Analyzer
 
-A project-agnostic review harness for IBM MQ + JMS 2.0 applications that request and
-process **COA** (Confirmation On Arrival) and **COD** (Confirmation On Delivery)
-delivery reports. It judges the target code against a **four-cell reviewer matrix ×
-nine check dimensions**, and it always reasons under a distributed deployment lens —
-never as a single-instance toy.
+A project-agnostic review harness for IBM MQ + JMS 2.0 / Jakarta Messaging 3.0
+applications that request and process **COA** (Confirmation On Arrival) and **COD**
+(Confirmation On Delivery) delivery reports. It judges the target code against a
+**four-cell reviewer matrix × nine check dimensions**, and it always reasons under a
+distributed deployment lens — never as a single-instance toy.
+
+> **Namespace note.** The nine check dimensions are all MQ-protocol-level and apply
+> equally to both namespaces. A small number of API coordinates differ: the Phase-0
+> grill captures the target's namespace and JDK version first, and namespace-sensitive
+> lines in the references are marked inline with `[javax]` / `[jakarta]` annotations.
 
 ## Standing assumption (woven into every check)
 
@@ -54,6 +59,10 @@ time, and when a question can be answered by reading the code, read the code ins
 asking. Resolve each branch before moving on. The full question tree is in
 `references/grill-me-preamble.md`; the spine is:
 
+- **Namespace & JDK (answered first — parameterizes namespace-sensitive checks):**
+  Is the target using `javax.jms` (JMS 2.0, `com.ibm.mq.allclient`, pooled-jms 2.x) or
+  `jakarta.messaging` (Jakarta Messaging 3.0, `com.ibm.mq.jakarta.client`, pooled-jms
+  3.x)? What JDK version — specifically, is it JDK 24+ (JEP 491 delivered) or earlier?
 - **Topology:** How many replicas of the report consumer? Competing consumers on one
   shared report queue, or a queue per pod? Is the correlation state in-process,
   external, or absent?
@@ -129,4 +138,4 @@ IBM's own constant and verb names are **not** repo-specific and must be kept ver
 `MQRO_COA`, `MQFB_COD`, `JMS_IBM_FEEDBACK`, `MQRO_DEAD_LETTER_Q`, dead-letter queue /
 DLQ, `SET CHLAUTH`, `+setall`. Only ever invent **neutral** example object names. This
 skill carries no identifiers from any particular project, so it drops cleanly into any
-IBM MQ + JMS 2.0 repository.
+IBM MQ + JMS 2.0 / Jakarta Messaging 3.0 repository.

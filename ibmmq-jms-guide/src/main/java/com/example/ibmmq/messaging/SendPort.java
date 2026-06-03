@@ -5,7 +5,7 @@ package com.example.ibmmq.messaging;
  * factory</b>. {@link com.example.ibmmq.producer.BusinessMessageProducer} calls through this port instead
  * of opening its own {@code JMSContext}.
  *
- * <p>Only decoded domain envelopes cross the seam — never a {@code javax.jms.Message}. The implementation
+ * <p>Only decoded domain envelopes cross the seam — never a {@code jakarta.jms.Message}. The implementation
  * (the pooled-JMS adapter) owns all JMS construction and the {@code queue:///} destination resolution; the
  * in-memory fake models the same contract without a broker.</p>
  *

@@ -10,7 +10,7 @@ package com.example.ibmmq.messaging;
  * and no COD is generated. The handler's returned value is propagated back to the caller of
  * {@code receiveWithinUnitOfWork} (typically the message body itself).</p>
  *
- * <p>No {@code javax.jms} type is exposed: the handler sees only the decoded {@code String} body.</p>
+ * <p>No {@code jakarta.jms} type is exposed: the handler sees only the decoded {@code String} body.</p>
  */
 @FunctionalInterface
 public interface UnitOfWorkHandler {

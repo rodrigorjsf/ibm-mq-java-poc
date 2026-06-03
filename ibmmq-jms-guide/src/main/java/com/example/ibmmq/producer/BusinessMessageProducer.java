@@ -26,10 +26,10 @@ import org.slf4j.LoggerFactory;
  * We register the MessageId in the {@link CorrelationStore} to close the cycle when the report arrives.</p>
  *
  * <p><b>Seam (ADR-0008):</b> this entry point no longer opens its own {@code JMSContext} — it delegates to
- * the {@link SendPort} (the send port over the pooled producer factory, ADR-0006). All {@code javax.jms}
+ * the {@link SendPort} (the send port over the pooled producer factory, ADR-0006). All {@code jakarta.jms}
  * construction (TextMessage, JMSReplyTo, report options, {@code queue:///} resolution) lives in the
  * pooled-JMS adapter; the producer only assembles the decoded {@link OutboundMessage} and never sees a
- * {@code javax.jms.Message}.</p>
+ * {@code jakarta.jms.Message}.</p>
  */
 @Singleton
 public class BusinessMessageProducer {

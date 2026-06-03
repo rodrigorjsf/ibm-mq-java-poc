@@ -1,9 +1,10 @@
 # GOOD vs BAD practices catalogue (de-identified)
 
-Generic patterns for IBM MQ + JMS 2.0 COA/COD code, one block per dimension. No example
-carries a project-specific identifier — all object names are neutral placeholders
-(`APP.REQUEST.QUEUE`, `APP.REPORT.QUEUE`, `QUEUE.NAME`) and all symbol names are generic.
-Pair each GOOD/BAD pair with the matching dimension in `check-dimensions.md`.
+Generic patterns for IBM MQ + JMS 2.0 / Jakarta Messaging 3.0 COA/COD code, one block
+per dimension. No example carries a project-specific identifier — all object names are
+neutral placeholders (`APP.REQUEST.QUEUE`, `APP.REPORT.QUEUE`, `QUEUE.NAME`) and all
+symbol names are generic. Pair each GOOD/BAD pair with the matching dimension in
+`check-dimensions.md`.
 
 ---
 
@@ -35,13 +36,20 @@ Pair each GOOD/BAD pair with the matching dimension in `check-dimensions.md`.
   replicas the receiving pod did not send the original, so every lookup misses; a rolling
   deploy then loses the map entirely.
 
-## 4. Connection pooling
+## 4. Connection pooling & async-listener topology
 
-- **GOOD** — Wrap the MQ connection factory in a pool (`pooled-jms` 2.x for `javax.jms`)
-  with a **bounded** maximum connection count and configured session limits, reused across
-  messages.
+- **GOOD** — Wrap the MQ connection factory in a pool (`pooled-jms` **2.x for
+  `javax.jms` [javax]** / **3.x for `jakarta.messaging` [jakarta]**; package
+  `org.messaginghub.pooled.jms.*` unchanged) with a **bounded** maximum connection count
+  and configured session limits, reused across messages.
+- **GOOD (async listeners)** — Use a **dedicated non-pooled factory** for any async
+  `MessageListener` / listener container; keep the pooled factory for producers and
+  synchronous consumers. A single pooled factory shared with async listeners starves the
+  pool and can deadlock under load (role-based factory split).
 - **BAD** — Create a connection (or session) per message, or use an unbounded pool that
   multiplies across replicas until the queue manager's channel limit is exhausted.
+- **BAD** — Share a single pooled factory between a `MessageListener` and producers;
+  under peak load the listener drains the pool, blocking producer threads.
 
 ## 5. Transactions
 
@@ -52,12 +60,16 @@ Pair each GOOD/BAD pair with the matching dimension in `check-dimensions.md`.
 - **BAD** — Share a `JMSContext` across worker threads (not thread-safe); or reach for XA
   by default, doubling latency and coupling the fleet to the slowest resource.
 
-## 6. Virtual Threads pinning
+## 6. Virtual Threads & the MQ consume path
 
-- **GOOD** — On JDK 24+ rely on JEP 491 so `synchronized` no longer pins; on hot JMS
-  paths still prefer `ReentrantLock` over `synchronized` around blocking send/receive/commit.
-- **BAD** — Run Virtual Threads on a pre-JEP-491 runtime with `synchronized` held across a
-  blocking JMS call, pinning carrier threads and silently capping pod throughput.
+- **GOOD** — Use **one platform thread per consumer + replica fan-out** for blocking JMS
+  work (`receive()`, `commit()`). Parallelism comes from running more replicas (competing
+  consumers), not from multiplexing virtual threads inside a pod. The IBM MQ client's
+  native frames pin virtual threads regardless of JDK version (JEP 491 / JDK 24 removes
+  the `synchronized` pinning boundary, but native-frame pinning survives).
+- **BAD** — Assign blocking JMS I/O (`receive()`, `commit()`) to virtual threads, even
+  on JDK 24+: native-frame pinning silently caps the pod's effective parallelism. The
+  symptom is latency, not an error — easy to misattribute to the broker.
 
 ## 7. Report-queue topology
 
@@ -82,6 +94,17 @@ Pair each GOOD/BAD pair with the matching dimension in `check-dimensions.md`.
 - **BAD** — No backout threshold (a poison report redelivers forever and ping-pongs
   across replicas) and non-idempotent processing (a redelivered COD double-counts a
   delivery).
+
+## MQMD field recovery from reports
+
+- **GOOD** — Enable MQMD read on the connection factory (`mdReadEnabled=true` URI
+  parameter or equivalent) and read the report's own descriptor fields (`PutDate`,
+  `PutTime`, `MsgId`, `CorrelId`, `BackoutCount`, `PutApplName`) via the
+  `JMS_IBM_MQMD_*` properties. Parse `PutDate`+`PutTime` as UTC (the queue manager
+  writes GMT). These fields are recoverable from the report's own descriptor — no
+  producer change and no `_WITH_FULL_DATA` variant are required.
+- **BAD** — Leave MQMD read disabled and lose per-report timing, backout depth, and
+  queue manager metadata that cannot be recovered after the message is consumed.
 
 ## Security — report-PUT context authority
 

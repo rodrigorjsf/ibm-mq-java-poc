@@ -30,7 +30,7 @@ import java.util.Map;
  * <p><b>Prova das fatias 1-3 (epic #25).</b> Em vez de duplicar JMS cru com um {@code MQConnectionFactory}
  * montado a mao, este IT sobe um {@link ApplicationContext} Micronaut e pede os tres entry points de
  * producao — {@link BusinessMessageProducer}, {@link BusinessMessageConsumer} e
- * {@link ReportMessageConsumer} — que delegam toda a construcao {@code javax.jms} ao adapter pooled-JMS.
+ * {@link ReportMessageConsumer} — que delegam toda a construcao {@code jakarta.jms} ao adapter pooled-JMS.
  * Como {@code messaging.adapter} NAO e definido aqui, os {@code @Requires(notEquals = "fake")} resolvem
  * para os adapters de PRODUCAO ({@code PooledJmsSendAdapter}/{@code PooledJmsReceiveAdapter}) — definir
  * {@code messaging.adapter=fake} exercitaria o broker em memoria e nunca tocaria o container (verde-mas-
@@ -148,7 +148,7 @@ class CoaCodEndToEndIT {
 
         // ---- 3) LER DEV.QUEUE.2 e exigir COA (259) E COD (260), ambos com CorrelId == MessageId ----
         // O ReceivePort aplica a URI ?mdReadEnabled=true (issue #19) na propria fila de relatorios, entao
-        // os seis valores MQMD vem populados no DeliveryEvent. Nenhum javax.jms.Message chega ao teste.
+        // os seis valores MQMD vem populados no DeliveryEvent. Nenhum jakarta.jms.Message chega ao teste.
         boolean coaSeen = false;
         boolean codSeen = false;
 
@@ -168,7 +168,7 @@ class CoaCodEndToEndIT {
                     "CorrelationId do relatorio deve ser igual ao MessageId original");
 
             // Bonus #19: assercoes dos seis campos MQMD recuperados, lidas dos acessores do DeliveryEvent
-            // (sem reimportar javax.jms). Mapeamento 1:1 com o IT anterior (live-validado) — nada mais estrito.
+            // (sem reimportar jakarta.jms). Mapeamento 1:1 com o IT anterior (live-validado) — nada mais estrito.
             assertRecoveredMqmdFields(ev, feedback, windowStartUtc, originalMessageId);
 
             // MQFB_COA = 259, MQFB_COD = 260 (de com.ibm.mq.constants.MQConstants).
@@ -185,7 +185,7 @@ class CoaCodEndToEndIT {
 
     /**
      * Issue #19 — asserts the six recovered MQMD values directly off the decoded {@link DeliveryEvent}
-     * accessors (no {@code javax.jms} re-import). STRICT on the deterministic ones; TOLERANT on QMgr-set
+     * accessors (no {@code jakarta.jms} re-import). STRICT on the deterministic ones; TOLERANT on QMgr-set
      * values (which may legitimately be blank or a QMgr default). Maps the prior live-validated IT 1:1.
      *
      * <ul>

@@ -1,8 +1,8 @@
 package com.example.ibmmq.integration;
 
-import com.ibm.msg.client.wmq.WMQConstants;
+import com.ibm.msg.client.jakarta.wmq.WMQConstants;
 import com.ibm.mq.constants.MQConstants;
-import com.ibm.mq.jms.MQConnectionFactory;
+import com.ibm.mq.jakarta.jms.MQConnectionFactory;
 import com.ibm.mq.testcontainers.MQContainer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -14,13 +14,13 @@ import org.junit.jupiter.api.Test;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.testcontainers.containers.Container;
 
-import javax.jms.JMSConsumer;
-import javax.jms.JMSContext;
-import javax.jms.JMSProducer;
-import javax.jms.JMSRuntimeException;
-import javax.jms.Message;
-import javax.jms.Queue;
-import javax.jms.TextMessage;
+import jakarta.jms.JMSConsumer;
+import jakarta.jms.JMSContext;
+import jakarta.jms.JMSProducer;
+import jakarta.jms.JMSRuntimeException;
+import jakarta.jms.Message;
+import jakarta.jms.Queue;
+import jakarta.jms.TextMessage;
 
 import java.time.Duration;
 
@@ -243,7 +243,7 @@ class ScenarioMatrixSlowIT {
                 JMSProducer producer = ctx.createProducer();
                 // Non-persistent: an expired non-persistent message is discarded and (with the report
                 // requested) yields an expiration report. 2s TTL keeps the wait bounded.
-                producer.setDeliveryMode(javax.jms.DeliveryMode.NON_PERSISTENT);
+                producer.setDeliveryMode(jakarta.jms.DeliveryMode.NON_PERSISTENT);
                 producer.setTimeToLive(2_000L);
                 producer.send(expiryQueue, msg);
                 originalMessageId = msg.getJMSMessageID();
@@ -308,7 +308,7 @@ class ScenarioMatrixSlowIT {
         @DisplayName("CF com WMQ_CLIENT_RECONNECT + bounce do QMgr (mesma porta) -> send/receive reconecta e funciona")
         void roundTripSurvivesQueueManagerBounce() throws Exception {
             MQConnectionFactory cf = buildConnectionFactory();
-            // Enable client auto-reconnect on the CF (field names verified against allclient 9.4.5 bytecode:
+            // Enable client auto-reconnect on the CF (field names verified against jakarta.client 9.4.5 bytecode:
             // WMQ_CLIENT_RECONNECT_OPTIONS, WMQ_CLIENT_RECONNECT=16777216, WMQ_CLIENT_RECONNECT_TIMEOUT).
             cf.setIntProperty(WMQConstants.WMQ_CLIENT_RECONNECT_OPTIONS, WMQConstants.WMQ_CLIENT_RECONNECT);
             cf.setIntProperty(WMQConstants.WMQ_CLIENT_RECONNECT_TIMEOUT, 30); // bounded reconnect window (s)
@@ -384,7 +384,7 @@ class ScenarioMatrixSlowIT {
             MQConnectionFactory mqCf = buildConnectionFactory();
 
             JmsPoolConnectionFactory pool = new JmsPoolConnectionFactory();
-            // setConnectionFactory accepts the javax.jms.ConnectionFactory; the MQ CF is one.
+            // setConnectionFactory accepts the jakarta.jms.ConnectionFactory; the MQ CF is one.
             pool.setConnectionFactory(mqCf);
             pool.setMaxConnections(2);
             try {
