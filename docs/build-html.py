@@ -37,7 +37,11 @@ from pathlib import Path
 import markdown
 from markdown.extensions.toc import TocExtension
 
-DOCS = Path("/home/rodrigo/IBM-MQ/docs")
+# Resolve docs/ relative to THIS script so the build + parity gate operate on the
+# checkout they run in (main tree, a git worktree, or a CI clone) — never a hardcoded
+# absolute path that would silently validate a different tree. build-html.py lives in
+# docs/, so its parent IS the docs root.
+DOCS = Path(__file__).resolve().parent
 # Bilingual sources (issue #13): the EN doc is the canonical guide; the pt-BR doc is the
 # i18n source. Both are embedded in ONE standalone page with an in-page language toggle.
 GUIDE_EN = DOCS / "guide-ibmmq-jms-micronaut.md"
