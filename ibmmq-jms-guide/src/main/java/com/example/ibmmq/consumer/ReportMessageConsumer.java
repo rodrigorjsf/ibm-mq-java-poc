@@ -9,6 +9,7 @@ import com.example.ibmmq.messaging.ReportEnvelope;
 import com.example.ibmmq.model.DeliveryEvent;
 import com.example.ibmmq.model.PendingMessage;
 import com.example.ibmmq.model.ReportType;
+import com.example.ibmmq.persistence.DeliveryReportSchema;
 import com.example.ibmmq.persistence.DeliveryReportWriteRepository;
 import com.example.ibmmq.report.ReportDescriptor;
 import com.example.ibmmq.report.ReportFeedbackRouter;
@@ -20,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -55,6 +57,16 @@ public class ReportMessageConsumer {
     // simply skipped and the consumer keeps working. Present in the k3s harness and the persistence IT.
     private final DeliveryReportWriteRepository auditRepository;
 
+    // ADR-0010 schema-on-first-write: the audit table is created lazily on the FIRST audit write, not by an
+    // eager startup hook. auditSchema owns the DDL + retry/backoff; @Nullable and co-gated with the
+    // repository on datasources.default.url, so both are ABSENT together in datasource-less contexts. The
+    // schemaReady latch makes the ensure exactly-once-on-SUCCESS: it flips true ONLY when ensureSchema()
+    // returns, so a transient first-write DB failure is retried on the next write (see persistAudit). The
+    // double-checked AtomicBoolean keeps the ensure correct under the async MessageListener scale-up variant
+    // (ADR-0006) even though today's harness is single-thread-per-pod.
+    private final @Nullable DeliveryReportSchema auditSchema;
+    private final AtomicBoolean schemaReady = new AtomicBoolean(false);
+
     // Orphan-rate metric (issue #26): an in-process counter of COA/COD reports recorded for a
     // correlation id with no prior registration (an at-least-once redelivery after the pair already
     // completed, or a report this process never registered). No Micrometer dependency in this module,
@@ -66,12 +78,14 @@ public class ReportMessageConsumer {
                                  MqProperties props,
                                  CorrelationStore correlationStore,
                                  ReportFeedbackRouter feedbackRouter,
-                                 @Nullable DeliveryReportWriteRepository auditRepository) {
+                                 @Nullable DeliveryReportWriteRepository auditRepository,
+                                 @Nullable DeliveryReportSchema auditSchema) {
         this.receivePort = receivePort;
         this.props = props;
         this.correlationStore = correlationStore;
         this.feedbackRouter = feedbackRouter;
         this.auditRepository = auditRepository;
+        this.auditSchema = auditSchema;
     }
 
     /**
@@ -241,6 +255,12 @@ public class ReportMessageConsumer {
      * Appends one durable COA/COD audit row to {@code delivery_report} on the WRITER datasource —
      * <b>best-effort</b>.
      *
+     * <p><b>Schema-on-first-write (ADR-0010).</b> Before the first insert this path ensures the
+     * {@code delivery_report} table exists via {@link #ensureSchemaReady()} (a one-time idempotent guard
+     * around {@link DeliveryReportSchema#ensureSchema()}). The ensure runs only when a real report is
+     * persisted (live-DB report-consumer pod), never in datasource-less contexts; a transient ensure
+     * failure is best-effort (skip this write, retry next).</p>
+     *
      * <p>Three properties matter here, all by design:</p>
      * <ul>
      *   <li><b>Optional.</b> When no datasource is configured (unit/context tests) the repository bean
@@ -262,6 +282,14 @@ public class ReportMessageConsumer {
                               ReportDescriptor descriptor) {
         if (auditRepository == null) {
             return; // No datasource configured (e.g. unit/context test) — audit persistence is inert.
+        }
+        // ADR-0010 schema-on-first-write: ensure the audit table exists before the FIRST write, behind a
+        // one-time idempotent guard. Placed AFTER the null-repo early return so datasource-less contexts
+        // never connect, and BEFORE insertIfAbsent so the table always exists first. Best-effort: if the
+        // ensure fails (transient DB outage), the latch stays false (retried next write) and we skip THIS
+        // insert without aborting the already-acked reconciliation path.
+        if (!ensureSchemaReady()) {
+            return;
         }
         try {
             // Issue #19: additively persist the six recovered MQMD values (all nullable). The byte[]
@@ -291,6 +319,50 @@ public class ReportMessageConsumer {
             // Best-effort: the report is already acked; never break reconciliation on a persist failure.
             LOG.warn("[stage=AUDIT] Failed to persist report (best-effort, ignored): type={}, correlId={}, cause={}",
                     type, correlationId, e.getMessage());
+        }
+    }
+
+    /**
+     * Ensures the {@code delivery_report} audit schema exists, ONCE, on the first audit write (ADR-0010).
+     *
+     * <p><b>Exactly-once-on-SUCCESS.</b> The {@link #schemaReady} latch flips {@code true} ONLY when
+     * {@link DeliveryReportSchema#ensureSchema()} returns successfully; every subsequent write then skips
+     * straight through (fast path). A transient first-write DB failure (Postgres briefly unavailable) is
+     * <b>best-effort</b>: it is logged at WARN, the latch stays {@code false}, this method returns
+     * {@code false} so the caller skips THIS insert WITHOUT aborting the already-acked reconciliation path,
+     * and the ensure is retried on the NEXT write.</p>
+     *
+     * <p><b>Concurrency.</b> A double-checked {@code AtomicBoolean} keeps the ensure correct under the async
+     * {@code MessageListener} scale-up variant (ADR-0006); the {@code synchronized} block guarantees at most
+     * one thread runs {@code ensureSchema()} while the rest wait, and the fast path (already-ready) takes no
+     * lock. Today's harness is single-thread-per-pod, so contention is nil — this is defence-in-depth.</p>
+     *
+     * @return {@code true} when the schema is ready (already, or just ensured) and the caller may insert;
+     *         {@code false} when the ensure failed and the caller must skip this write (retried next time).
+     */
+    private boolean ensureSchemaReady() {
+        if (schemaReady.get()) {
+            return true; // Fast path: schema already ensured by an earlier write — no lock, no DB touch.
+        }
+        if (auditSchema == null) {
+            // Defensive: auditSchema is co-gated with auditRepository on datasources.default.url, so a
+            // present repository normally implies a present schema. If it is ever absent, skip silently.
+            return false;
+        }
+        synchronized (this) {
+            if (schemaReady.get()) {
+                return true; // Another thread ensured it while we waited on the lock.
+            }
+            try {
+                auditSchema.ensureSchema();
+                schemaReady.set(true); // Flip ONLY on a successful ensure (exactly-once-on-SUCCESS).
+                return true;
+            } catch (RuntimeException e) {
+                // Best-effort: leave the latch false so the next write retries; never break reconciliation.
+                LOG.warn("[stage=AUDIT-INIT] Failed to ensure delivery_report schema on first write "
+                        + "(best-effort, retried next write): cause={}", e.getMessage());
+                return false;
+            }
         }
     }
 }

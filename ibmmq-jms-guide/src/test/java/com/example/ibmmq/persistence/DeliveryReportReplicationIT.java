@@ -141,7 +141,9 @@ class DeliveryReportReplicationIT {
                 Map.entry("datasources.reader.password", "corrpass")));
 
         // Cria a tabela no PRIMARY (writer). A replicacao fisica a propaga ao standby (sem DDL no replica).
-        context.getBean(DeliveryReportSchema.class);
+        // ADR-0010 schema-on-first-write: o @PostConstruct sumiu, entao chamamos ensureSchema() explicitamente
+        // (este IT escreve direto pelo writer.insertIfAbsent, sem passar pelo guarda do consumer).
+        context.getBean(DeliveryReportSchema.class).ensureSchema();
     }
 
     @AfterEach

@@ -59,9 +59,10 @@ class BrokerFreeCoaCodFlowTest {
 
         producer = new BusinessMessageProducer(sendPort, props, correlationStore);
         consumer = new BusinessMessageConsumer(receivePort, props);
-        // auditRepository=null: sem datasource neste teste unitario, a persistencia de auditoria fica inerte.
+        // auditRepository=null + auditSchema=null: sem datasource neste teste unitario, a persistencia de
+        // auditoria fica inerte e o guarda de schema (ADR-0010) nunca dispara.
         reportConsumer = new ReportMessageConsumer(
-                receivePort, props, correlationStore, new ReportFeedbackRouter(), null);
+                receivePort, props, correlationStore, new ReportFeedbackRouter(), null, null);
     }
 
     @Test
