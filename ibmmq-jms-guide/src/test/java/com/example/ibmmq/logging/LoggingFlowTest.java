@@ -135,7 +135,7 @@ class LoggingFlowTest {
             ILoggingEvent produceEvent = eventWithStage(appender, "[stage=PRODUCE]");
             assertThat(produceEvent).as("linha [stage=PRODUCE] emitida").isNotNull();
             assertThat(produceEvent.getFormattedMessage())
-                    .contains("Mensagem de negocio enviada")
+                    .contains("Business message sent")
                     .contains(MSG_ID);
             // MDC: the future report correlation id (correlationId) is the messageId itself.
             assertThat(produceEvent.getMDCPropertyMap()).containsEntry("messageId", MSG_ID);
@@ -174,12 +174,12 @@ class LoggingFlowTest {
             ILoggingEvent consumeEvent = eventWithStage(appender, "[stage=CONSUME]");
             assertThat(consumeEvent).as("linha [stage=CONSUME] emitida").isNotNull();
             assertThat(consumeEvent.getFormattedMessage())
-                    .contains("Mensagem de negocio consumida")
+                    .contains("Business message consumed")
                     .contains("{\"k\":\"v\"}");
 
             ILoggingEvent commitEvent = eventWithStage(appender, "[stage=COMMIT]");
             assertThat(commitEvent).as("linha [stage=COMMIT] emitida").isNotNull();
-            assertThat(commitEvent.getFormattedMessage()).contains("Consumo confirmado");
+            assertThat(commitEvent.getFormattedMessage()).contains("Consumption committed");
         }
     }
 
@@ -188,10 +188,11 @@ class LoggingFlowTest {
     class ReportStages {
 
         private ReportMessageConsumer reportConsumer(InMemoryCorrelationStore store) {
-            // auditRepository=null: no datasource in this log test; audit persistence stays inert.
-            // The ReceivePort is not exercised by handleReport(envelope), so a mock suffices.
+            // auditRepository=null + auditSchema=null: no datasource in this log test; audit persistence
+            // stays inert and the schema guard (ADR-0010) never fires. The ReceivePort is not exercised by
+            // handleReport(envelope), so a mock suffices.
             return new ReportMessageConsumer(
-                    mock(ReceivePort.class), new MqProperties(), store, new ReportFeedbackRouter(), null);
+                    mock(ReceivePort.class), new MqProperties(), store, new ReportFeedbackRouter(), null, null);
         }
 
         @Test
@@ -224,7 +225,7 @@ class LoggingFlowTest {
                         .containsEntry("messageId", MSG_ID)
                         .containsEntry("correlationId", MSG_ID);
             }
-            assertThat(coa.getFormattedMessage()).contains("chegada");
+            assertThat(coa.getFormattedMessage()).contains("Arrival confirmation");
         }
 
         @Test
@@ -253,7 +254,7 @@ class LoggingFlowTest {
                         .containsEntry("messageId", MSG_ID)
                         .containsEntry("correlationId", MSG_ID);
             }
-            assertThat(cod.getFormattedMessage()).contains("entrega");
+            assertThat(cod.getFormattedMessage()).contains("Delivery confirmation");
             // COA+COD confirmed -> pending entry reconciled and removed.
             assertThat(store.pendingCount()).isZero();
         }

@@ -85,11 +85,14 @@ Pair each GOOD/BAD pair with the matching dimension in `check-dimensions.md`.
 
 ## Security — report-PUT context authority
 
-- **GOOD** — Grant the app principal context authority on the reply-to queue, conceptually
-  `SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) PRINCIPAL('<app-principal>')
-  AUTHADD(PUT, SETALL)`, so the queue manager's PUT-with-context succeeds.
-- **BAD** — Run with a low-privilege principal lacking `+setall`; the report PUT fails
-  `MQRC_NOT_AUTHORIZED (2035)` and the entire report stream is silently dead-lettered.
+- **GOOD** — Grant the app principal the full context authority set on the reply-to queue,
+  conceptually `SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE)
+  PRINCIPAL('<app-principal>') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)`, so the
+  queue manager's PUT-with-context succeeds. The minimum required is `+passid` — verified
+  live: `+put +setall` alone still fails `AMQ8077W … passid`.
+- **BAD** — Run with a low-privilege principal lacking `+passid`; the report PUT fails
+  `MQRC_NOT_AUTHORIZED (2035)` and the entire report stream is silently dead-lettered
+  (even granting `+setall` is not enough without `+passid`).
 
 ## Security — TLS / cipher & secrets
 

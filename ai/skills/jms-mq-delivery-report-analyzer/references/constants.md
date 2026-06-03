@@ -114,14 +114,16 @@ actually be persistent report traffic).
 
 To generate and deliver a COA/COD report, the queue manager performs a **PUT with
 context** onto the reply-to queue, on behalf of the principal associated with the
-inbound channel. That principal therefore needs **context authority** (`+setall`) on the
-reply-to queue. A low-privilege principal lacking it causes the report PUT to fail with
-`MQRC_NOT_AUTHORIZED (2035)`, and the report **silently lands on the dead-letter queue**
-— the reply-to queue stays empty and the failure is easy to miss. The fix is to grant
-the principal context authority, conceptually:
+inbound channel. That principal therefore needs **context authority (`+passid` minimum)**
+on the reply-to queue. The minimum authority it actually requires is **`+passid`** (pass
+identity context) — verified live on k3d, where `+put +setall` *without* `+passid` still
+failed `AMQ8077W … passid`. A low-privilege principal lacking it causes the report PUT to
+fail with `MQRC_NOT_AUTHORIZED (2035)`, and the report **silently lands on the
+dead-letter queue** — the reply-to queue stays empty and the failure is easy to miss. The
+fix is to grant the principal the full context authority set, conceptually:
 
 ```
-SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) PRINCIPAL('<app-principal>') AUTHADD(PUT, SETALL)
+SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) PRINCIPAL('<app-principal>') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)
 ```
 
 (Object and principal names above are neutral placeholders — substitute the target's

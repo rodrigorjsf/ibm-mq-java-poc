@@ -711,7 +711,7 @@ message.
 setIntProperty(WMQConstants.JMS_IBM_REPORT_COD, MQConstants.MQRO_COD); // pede COD
 </code></pre></div>
 <p><strong>O que de fato se configura no QMgr</strong> (não os relatórios em si): a <strong>existência</strong> da fila de report, sua persistência,
-a DLQ, as <strong>autorizações</strong> (crucial — ver o <em>gotcha</em> de <code>+SETALL</code> na Seção 5), e políticas de <code>Expiry</code>. O QMgr é a
+a DLQ, as <strong>autorizações</strong> (crucial — ver o <em>gotcha</em> de <code>+passid</code> na Seção 5), e políticas de <code>Expiry</code>. O QMgr é a
 infraestrutura; a <em>intenção</em> de receber relatório está na mensagem.</p>
 <div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Atenção — <code>WMQConstants</code> vs. <code>MQConstants</code> (erro comum).</strong> As propriedades JMS de <strong>pedido</strong> (
 <code>JMS_IBM_REPORT_COA</code>, <code>JMS_IBM_FEEDBACK</code>...) ficam em <strong><code>com.ibm.msg.client.wmq.WMQConstants</code></strong> — o <strong>nome do campo</strong> é
@@ -1771,31 +1771,32 @@ Java 25 isso emite aviso de <em>native-access</em>. <strong>Correção:</strong>
 <code>argLine</code> do surefire/failsafe). Além disso, <strong>evite ciphers <code>TLS_RSA_*</code></strong> (desabilitados a partir do Java 25).</p>
 <p><strong>(d) — O <em>gotcha</em> que mais surpreende: autoridade de contexto para o PUT do relatório.</strong></p>
 <div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Atenção — relatório indo para a DLQ com <code>2035 MQRC_NOT_AUTHORIZED</code>.</strong> Para o Queue Manager <strong>gerar e entregar</strong>
-um COA/COD, ele faz um <strong>PUT-com-contexto</strong> na <code>ReplyToQ</code>. Isso exige <strong>autoridade de contexto (<code>+setall</code>)</strong>, que o
-usuário de baixo privilégio <code>app</code> do dev image <strong>não possui</strong>. Resultado: o PUT do relatório falha com <code>2035</code> e o
+um COA/COD, ele faz um <strong>PUT-com-contexto</strong> na <code>ReplyToQ</code>. O QMgr <strong>passa o contexto de identidade da mensagem
+original para o relatório</strong>, então isso exige <strong><code>+passid</code></strong> (pass identity context) — <code>+setall</code> sozinho é <strong>insuficiente</strong>.
+O usuário de baixo privilégio <code>app</code> do dev image <strong>não o possui</strong>. Resultado: o PUT do relatório falha com <code>2035</code> e o
 relatório <strong>vai para a DLQ</strong> — a fila de relatórios fica <strong>vazia</strong> e você acha (erradamente) que "o COA/COD não
 funciona".</p></div></div>
 <p>Esse comportamento está documentado no próprio teste de integração — que por isso conecta como <strong><code>admin</code></strong> (autoridade
 plena), não como <code>app</code>:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="java"><code class="language-java">// CoaCodEndToEndIT — comentário real explicando o porquê de conectar como admin:
 // Para o Queue Manager GERAR e ENTREGAR um relatório (COA/COD), ele faz um PUT-com-contexto na
-// ReplyToQ. Isso exige autoridade de CONTEXTO (+setall), que o usuário app de baixo privilégio
-// do dev image NÃO possui — o relatório falharia com MQRC_NOT_AUTHORIZED (2035) e iria para a DLQ.
+// ReplyToQ, passando o contexto de identidade da mensagem original. Isso exige +passid (+setall sozinho é
+// insuficiente), que o usuário app de baixo privilégio NÃO possui — o relatório falharia com MQRC_NOT_AUTHORIZED (2035) e iria para a DLQ.
 private static final String ADMIN_CHANNEL = &quot;DEV.ADMIN.SVRCONN&quot;;
 private static final String ADMIN_USER = &quot;admin&quot;;
 </code></pre></div>
 <p><strong>Correção em produção</strong> — conceda a autoridade mínima necessária ao principal da aplicação (em vez de usar <code>admin</code>):</p>
-<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">mqsc</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="mqsc"><code class="language-mqsc">* Concede PUT + SETALL (autoridade de contexto) ao grupo da aplicação na fila de relatórios,
-* permitindo que o QMgr entregue COA/COD em nome de conexões desse principal.
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">mqsc</span><button type="button" class="copy-btn" data-copied="Copiado!" aria-label="Copiar código para a área de transferência">Copiar</button></div><pre class="code-block" data-lang="mqsc"><code class="language-mqsc">* Concede PUT + o conjunto completo de contexto (PASSID, PASSALL, SETID, SETALL) ao grupo da aplicação na fila de relatórios,
+* permitindo que o QMgr entregue COA/COD em nome de conexões desse principal (+passid é o mínimo).
 SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) +
-    GROUP('appgrp') AUTHADD(PUT, SETALL)
+    GROUP('appgrp') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)
 REFRESH SECURITY TYPE(AUTHSERV)
 </code></pre></div>
 <div class="callout callout-boa-pratica" role="note"><span class="callout-icon" aria-hidden="true">✅</span><div class="callout-body"><p><strong>Boa prática — diagnosticar "report sumido" olhando a DLQ primeiro.</strong> Antes de suspeitar do código, inspecione a
 DLQ: se há relatórios lá com reason <code>2035</code>, o problema é autorização de contexto, não a aplicação.</p></div></div><div class="callout callout-ma-pratica" role="note"><span class="callout-icon" aria-hidden="true">❌</span><div class="callout-body"><p><strong>Má prática — rodar a app de produção como <code>admin</code> "para resolver o 2035".</strong> Você abre um buraco de segurança
 gigante (admin remoto via canal cliente) só para entregar relatórios. <strong>Sintoma futuro:</strong> auditoria reprovando, CHLAUTH
 bloqueando admins (<code>BLOCKUSER *MQADMIN</code>), e o serviço quebrando quando a regra de segurança é endurecida. Conceda
-<code>PUT+SETALL</code> ao principal específico.</p></div></div>
+<code>PUT, PASSID, PASSALL, SETID, SETALL</code> ao principal específico.</p></div></div>
 <h3 id="53-poison-messages--backout-dlq-e-idempotência">5.3 Poison messages — backout, DLQ e idempotência</h3>
 <p>Uma mensagem que <strong>sempre falha</strong> ao ser processada (corrompida, regra impossível) é uma <em>poison message</em>. Sem proteção,
 ela é consumida, dá rollback, volta para a fila, é consumida de novo... <em>loop</em> infinito que trava a fila.</p>
@@ -1936,8 +1937,8 @@ citados apenas para delimitar o escopo.</p></div></div>
 <tr>
 <td><strong>2035</strong></td>
 <td><code>MQRC_NOT_AUTHORIZED</code></td>
-<td>Sem autorização para a operação. <strong>No fluxo de relatórios:</strong> o QMgr não tem <code>+SETALL</code> para fazer o PUT-com-contexto do COA/COD → relatório vai para a DLQ.</td>
-<td>Conceda a autoridade ao principal: <code>SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) GROUP('appgrp') AUTHADD(PUT, SETALL)</code> + <code>REFRESH SECURITY</code>. Cheque também CHLAUTH/MCAUSER.</td>
+<td>Sem autorização para a operação. <strong>No fluxo de relatórios:</strong> o QMgr não tem <code>+passid</code> para fazer o PUT-com-contexto do COA/COD → relatório vai para a DLQ.</td>
+<td>Conceda a autoridade ao principal: <code>SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) GROUP('appgrp') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)</code> + <code>REFRESH SECURITY</code>. Cheque também CHLAUTH/MCAUSER.</td>
 </tr>
 <tr>
 <td><strong>2059</strong></td>
@@ -2186,7 +2187,7 @@ você adotar o módulo declarativo (que abstrai justamente o objeto que COA/COD 
 </tr>
 <tr>
 <td><strong>Segurança (relatórios)</strong></td>
-<td>Conceder <code>PUT+SETALL</code> ao principal específico.</td>
+<td>Conceder <code>PUT, PASSID, PASSALL, SETID, SETALL</code> ao principal.</td>
 <td>App rodando como <code>admin</code> para "resolver o 2035" → buraco de segurança; quebra quando CHLAUTH endurece.</td>
 </tr>
 <tr>
@@ -2550,7 +2551,7 @@ message.
 setIntProperty(WMQConstants.JMS_IBM_REPORT_COD, MQConstants.MQRO_COD); // requests COD
 </code></pre></div>
 <p><strong>What is actually configured on the QMgr</strong> (not the reports themselves): the <strong>existence</strong> of the report queue, its persistence,
-the DLQ, the <strong>authorities</strong> (crucial — see the <code>+SETALL</code> <em>gotcha</em> in Section 5), and <code>Expiry</code> policies. The QMgr is the
+the DLQ, the <strong>authorities</strong> (crucial — see the <code>+passid</code> <em>gotcha</em> in Section 5), and <code>Expiry</code> policies. The QMgr is the
 infrastructure; the <em>intent</em> to receive a report lives in the message.</p>
 <div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Caution — <code>WMQConstants</code> vs. <code>MQConstants</code> (common mistake).</strong> The JMS <strong>request</strong> properties (
 <code>JMS_IBM_REPORT_COA</code>, <code>JMS_IBM_FEEDBACK</code>...) live in <strong><code>com.ibm.msg.client.wmq.WMQConstants</code></strong> — the <strong>field name</strong> is
@@ -3608,31 +3609,32 @@ Java 25 this emits a <em>native-access</em> warning. <strong>Fix:</strong> pass 
 surefire/failsafe's <code>argLine</code>). Additionally, <strong>avoid <code>TLS_RSA_*</code> ciphers</strong> (disabled from Java 25 on).</p>
 <p><strong>(d) — The <em>gotcha</em> that surprises the most: context authority for the report PUT.</strong></p>
 <div class="callout callout-atencao" role="note"><span class="callout-icon" aria-hidden="true">⚠️</span><div class="callout-body"><p><strong>Attention — report going to the DLQ with <code>2035 MQRC_NOT_AUTHORIZED</code>.</strong> For the Queue Manager to <strong>generate and deliver</strong>
-a COA/COD, it does a <strong>PUT-with-context</strong> on the <code>ReplyToQ</code>. This requires <strong>context authority (<code>+setall</code>)</strong>, which the
-low-privilege <code>app</code> user of the dev image <strong>does not have</strong>. Result: the report PUT fails with <code>2035</code> and the
+a COA/COD, it does a <strong>PUT-with-context</strong> on the <code>ReplyToQ</code>. The QMgr <strong>passes the original message's identity
+context into the report</strong>, so this requires <strong><code>+passid</code></strong> (pass identity context) — <code>+setall</code> alone is <strong>insufficient</strong>.
+The low-privilege <code>app</code> user of the dev image <strong>lacks it</strong>. Result: the report PUT fails with <code>2035</code> and the
 report <strong>goes to the DLQ</strong> — the report queue stays <strong>empty</strong> and you (wrongly) conclude that "COA/COD does not
 work".</p></div></div>
 <p>This behavior is documented in the integration test itself — which is why it connects as <strong><code>admin</code></strong> (full
 authority), not as <code>app</code>:</p>
 <div class="code-wrap"><div class="code-toolbar"><span class="code-lang">java</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="java"><code class="language-java">// CoaCodEndToEndIT — real comment explaining why it connects as admin:
 // For the Queue Manager to GENERATE and DELIVER a report (COA/COD), it does a PUT-with-context on the
-// ReplyToQ. This requires CONTEXT authority (+setall), which the low-privilege app user
-// of the dev image does NOT have — the report would fail with MQRC_NOT_AUTHORIZED (2035) and go to the DLQ.
+// ReplyToQ, passing the original message's identity context. This requires +passid (+setall alone is
+// insufficient), which the low-privilege app user does NOT have — the report would fail with MQRC_NOT_AUTHORIZED (2035) and go to the DLQ.
 private static final String ADMIN_CHANNEL = &quot;DEV.ADMIN.SVRCONN&quot;;
 private static final String ADMIN_USER = &quot;admin&quot;;
 </code></pre></div>
 <p><strong>Fix in production</strong> — grant the minimum authority needed to the application principal (instead of using <code>admin</code>):</p>
-<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">mqsc</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="mqsc"><code class="language-mqsc">* Grants PUT + SETALL (context authority) to the application group on the report queue,
-* allowing the QMgr to deliver COA/COD on behalf of connections of that principal.
+<div class="code-wrap"><div class="code-toolbar"><span class="code-lang">mqsc</span><button type="button" class="copy-btn" data-copied="Copied!" aria-label="Copy code to clipboard">Copy</button></div><pre class="code-block" data-lang="mqsc"><code class="language-mqsc">* Grants PUT + the full context set (PASSID, PASSALL, SETID, SETALL) to the application group on the report queue,
+* allowing the QMgr to deliver COA/COD on behalf of connections of that principal (+passid is the minimum).
 SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) +
-    GROUP('appgrp') AUTHADD(PUT, SETALL)
+    GROUP('appgrp') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)
 REFRESH SECURITY TYPE(AUTHSERV)
 </code></pre></div>
 <div class="callout callout-boa-pratica" role="note"><span class="callout-icon" aria-hidden="true">✅</span><div class="callout-body"><p><strong>Good practice — diagnose a "vanished report" by looking at the DLQ first.</strong> Before suspecting the code, inspect the
 DLQ: if there are reports there with reason <code>2035</code>, the problem is context authorization, not the application.</p></div></div><div class="callout callout-ma-pratica" role="note"><span class="callout-icon" aria-hidden="true">❌</span><div class="callout-body"><p><strong>Bad practice — running the production app as <code>admin</code> "to fix the 2035".</strong> You open a giant security hole
 (remote admin via the client channel) just to deliver reports. <strong>Future symptom:</strong> audit failing, CHLAUTH
 blocking admins (<code>BLOCKUSER *MQADMIN</code>), and the service breaking when the security rule is hardened. Grant
-<code>PUT+SETALL</code> to the specific principal.</p></div></div>
+<code>PUT, PASSID, PASSALL, SETID, SETALL</code> to the specific principal.</p></div></div>
 <h3 id="53-poison-messages--backout-dlq-and-idempotency">5.3 Poison messages — backout, DLQ, and idempotency</h3>
 <p>A message that <strong>always fails</strong> when processed (corrupted, an impossible rule) is a <em>poison message</em>. Without protection,
 it is consumed, rolls back, returns to the queue, is consumed again... an infinite <em>loop</em> that stalls the queue.</p>
@@ -3772,8 +3774,8 @@ mentioned only to bound the scope.</p></div></div>
 <tr>
 <td><strong>2035</strong></td>
 <td><code>MQRC_NOT_AUTHORIZED</code></td>
-<td>Not authorized for the operation. <strong>In the report flow:</strong> the QMgr lacks <code>+SETALL</code> to do the PUT-with-context of the COA/COD → the report goes to the DLQ.</td>
-<td>Grant the authority to the principal: <code>SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) GROUP('appgrp') AUTHADD(PUT, SETALL)</code> + <code>REFRESH SECURITY</code>. Also check CHLAUTH/MCAUSER.</td>
+<td>Not authorized for the operation. <strong>In the report flow:</strong> the QMgr lacks <code>+passid</code> to do the PUT-with-context of the COA/COD → the report goes to the DLQ.</td>
+<td>Grant the authority to the principal: <code>SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) GROUP('appgrp') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)</code> + <code>REFRESH SECURITY</code>. Also check CHLAUTH/MCAUSER.</td>
 </tr>
 <tr>
 <td><strong>2059</strong></td>
@@ -4022,7 +4024,7 @@ you adopt the declarative module (which abstracts away precisely the object that
 </tr>
 <tr>
 <td><strong>Security (reports)</strong></td>
-<td>Grant <code>PUT+SETALL</code> to the specific principal.</td>
+<td>Grant <code>PUT, PASSID, PASSALL, SETID, SETALL</code> to the principal.</td>
 <td>App running as <code>admin</code> to "fix the 2035" → security hole; breaks when CHLAUTH hardens.</td>
 </tr>
 <tr>

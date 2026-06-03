@@ -11,24 +11,24 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Produz mensagens de negocio (JSON) na fila de negocio, solicitando relatorios COA e COD.
+ * Produces business messages (JSON) onto the business queue, requesting COA and COD reports.
  *
- * <p><b>Fluxo de relatorios:</b> ao habilitar COA e COD via as propriedades JMS {@code JMS_IBM_Report_*},
- * o gerenciador de filas gerara:
+ * <p><b>Report flow:</b> by enabling COA and COD via the {@code JMS_IBM_Report_*} JMS properties,
+ * the queue manager will generate:
  * <ul>
- *   <li><b>COA</b> quando a mensagem for COLOCADA na fila de destino (timing de chegada);</li>
- *   <li><b>COD</b> quando a app consumidora fizer um GET destrutivo (timing de entrega).</li>
+ *   <li><b>COA</b> when the message is PUT onto the destination queue (arrival timing);</li>
+ *   <li><b>COD</b> when the consuming app performs a destructive GET (delivery timing).</li>
  * </ul>
- * Ambos os relatorios sao enviados para a fila indicada em {@code JMSReplyTo}.</p>
+ * Both reports are sent to the queue indicated in {@code JMSReplyTo}.</p>
  *
- * <p><b>Correlacao:</b> nao definimos opcoes de propagacao de id, entao vale o default
- * {@code MQRO_COPY_MSG_ID_TO_CORREL_ID}: o MessageId desta mensagem vira o CorrelationId do relatorio.
- * Registramos o MessageId no {@link CorrelationStore} para fechar o ciclo quando o relatorio chegar.</p>
+ * <p><b>Correlation:</b> we do not set id-propagation options, so the default
+ * {@code MQRO_COPY_MSG_ID_TO_CORREL_ID} applies: this message's MessageId becomes the report's CorrelationId.
+ * We register the MessageId in the {@link CorrelationStore} to close the cycle when the report arrives.</p>
  *
- * <p><b>Seam (ADR-0008):</b> este entry point nao abre mais um {@code JMSContext} proprio — delega ao
- * {@link SendPort} (a porta de envio sobre a factory de produtor pooled, ADR-0006). Toda a construcao
- * {@code javax.jms} (TextMessage, JMSReplyTo, opcoes de report, resolucao {@code queue:///}) vive no
- * adapter pooled-JMS; o produtor apenas monta o {@link OutboundMessage} decodificado e nunca ve um
+ * <p><b>Seam (ADR-0008):</b> this entry point no longer opens its own {@code JMSContext} — it delegates to
+ * the {@link SendPort} (the send port over the pooled producer factory, ADR-0006). All {@code javax.jms}
+ * construction (TextMessage, JMSReplyTo, report options, {@code queue:///} resolution) lives in the
+ * pooled-JMS adapter; the producer only assembles the decoded {@link OutboundMessage} and never sees a
  * {@code javax.jms.Message}.</p>
  */
 @Singleton
@@ -49,11 +49,11 @@ public class BusinessMessageProducer {
     }
 
     /**
-     * Envia uma mensagem de negocio persistente com COA+COD habilitados.
+     * Sends a persistent business message with COA+COD enabled.
      *
-     * @param businessKey identificador de dominio (ex. id do pedido) — para log/auditoria.
-     * @param jsonPayload corpo JSON ja serializado.
-     * @return o JMSMessageID atribuido (chave de correlacao com os relatorios).
+     * @param businessKey domain identifier (e.g. order id) — for logging/auditing.
+     * @param jsonPayload already-serialized JSON body.
+     * @return the assigned JMSMessageID (correlation key with the reports).
      */
     public String send(String businessKey, String jsonPayload) {
         // Decoded outbound envelope: a persistent business message with both COA and COD requested,
@@ -74,7 +74,7 @@ public class BusinessMessageProducer {
         try (var scope = MdcTraceScope.bind(messageId, messageId)) {
             correlationStore.register(PendingMessage.newlySent(messageId, businessKey, jsonPayload));
 
-            LOG.info("[stage=PRODUCE] Mensagem de negocio enviada: businessKey={}, messageId={}, replyTo={}",
+            LOG.info("[stage=PRODUCE] Business message sent: businessKey={}, messageId={}, replyTo={}",
                     businessKey, messageId, props.getReportQueue());
 
             return messageId;

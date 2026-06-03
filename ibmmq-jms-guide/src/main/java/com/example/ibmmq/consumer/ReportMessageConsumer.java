@@ -9,6 +9,7 @@ import com.example.ibmmq.messaging.ReportEnvelope;
 import com.example.ibmmq.model.DeliveryEvent;
 import com.example.ibmmq.model.PendingMessage;
 import com.example.ibmmq.model.ReportType;
+import com.example.ibmmq.persistence.DeliveryReportSchema;
 import com.example.ibmmq.persistence.DeliveryReportWriteRepository;
 import com.example.ibmmq.report.ReportDescriptor;
 import com.example.ibmmq.report.ReportFeedbackRouter;
@@ -20,25 +21,26 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Le a fila de relatorios (JMSReplyTo) e processa os relatorios de entrega COA/COD/etc.
+ * Reads the report queue (JMSReplyTo) and processes the COA/COD/etc. delivery reports.
  *
- * <p><b>Como classificar:</b> o codigo de feedback do MQMD ja foi lido (da propriedade canonica
- * {@code JMS_IBM_Feedback}) pelo adapter de recebimento e chega no {@link ReportEnvelope#feedbackCode()}.
- * Esta propriedade e canonica e <em>sempre populada</em> para relatorios — diferente de
- * {@code JMS_IBM_MQMD_Feedback}, que so e preenchida quando {@code WMQ_MQMD_READ_ENABLED=true} no destino.</p>
+ * <p><b>How to classify:</b> the MQMD feedback code was already read (from the canonical
+ * {@code JMS_IBM_Feedback} property) by the receive adapter and arrives in {@link ReportEnvelope#feedbackCode()}.
+ * This property is canonical and <em>always populated</em> for reports — unlike
+ * {@code JMS_IBM_MQMD_Feedback}, which is only filled when {@code WMQ_MQMD_READ_ENABLED=true} on the destination.</p>
  *
- * <p><b>Como correlacionar:</b> com o default {@code MQRO_COPY_MSG_ID_TO_CORREL_ID}, o relatorio
- * chega com {@code JMSCorrelationID == MessageId} da mensagem original. Buscamos a pendencia por esse
- * id no {@link CorrelationStore}.</p>
+ * <p><b>How to correlate:</b> with the default {@code MQRO_COPY_MSG_ID_TO_CORREL_ID}, the report
+ * arrives with {@code JMSCorrelationID == MessageId} of the original message. We look up the pending entry
+ * by that id in the {@link CorrelationStore}.</p>
  *
- * <p><b>Seam (ADR-0008):</b> este entry point nao abre mais um {@code JMSContext} proprio — delega ao
- * {@link ReceivePort#receiveReport}, que faz toda a extracao MQMD ({@code JMS_IBM_Feedback},
- * {@code getJMSCorrelationID}, os seis valores MQMD do #19) e entrega um {@link ReportEnvelope}
- * decodificado. Nenhum {@code javax.jms.Message} chega aqui; a classificacao e a reconciliacao operam
- * puramente sobre o envelope.</p>
+ * <p><b>Seam (ADR-0008):</b> this entry point no longer opens its own {@code JMSContext} — it delegates to
+ * {@link ReceivePort#receiveReport}, which performs all MQMD extraction ({@code JMS_IBM_Feedback},
+ * {@code getJMSCorrelationID}, the six MQMD values from #19) and delivers a decoded {@link ReportEnvelope}.
+ * No {@code javax.jms.Message} reaches here; classification and reconciliation operate purely on the
+ * envelope.</p>
  */
 @Singleton
 public class ReportMessageConsumer {
@@ -55,6 +57,16 @@ public class ReportMessageConsumer {
     // simply skipped and the consumer keeps working. Present in the k3s harness and the persistence IT.
     private final DeliveryReportWriteRepository auditRepository;
 
+    // ADR-0010 schema-on-first-write: the audit table is created lazily on the FIRST audit write, not by an
+    // eager startup hook. auditSchema owns the DDL + retry/backoff; @Nullable and co-gated with the
+    // repository on datasources.default.url, so both are ABSENT together in datasource-less contexts. The
+    // schemaReady latch makes the ensure exactly-once-on-SUCCESS: it flips true ONLY when ensureSchema()
+    // returns, so a transient first-write DB failure is retried on the next write (see persistAudit). The
+    // double-checked AtomicBoolean keeps the ensure correct under the async MessageListener scale-up variant
+    // (ADR-0006) even though today's harness is single-thread-per-pod.
+    private final @Nullable DeliveryReportSchema auditSchema;
+    private final AtomicBoolean schemaReady = new AtomicBoolean(false);
+
     // Orphan-rate metric (issue #26): an in-process counter of COA/COD reports recorded for a
     // correlation id with no prior registration (an at-least-once redelivery after the pair already
     // completed, or a report this process never registered). No Micrometer dependency in this module,
@@ -66,19 +78,21 @@ public class ReportMessageConsumer {
                                  MqProperties props,
                                  CorrelationStore correlationStore,
                                  ReportFeedbackRouter feedbackRouter,
-                                 @Nullable DeliveryReportWriteRepository auditRepository) {
+                                 @Nullable DeliveryReportWriteRepository auditRepository,
+                                 @Nullable DeliveryReportSchema auditSchema) {
         this.receivePort = receivePort;
         this.props = props;
         this.correlationStore = correlationStore;
         this.feedbackRouter = feedbackRouter;
         this.auditRepository = auditRepository;
+        this.auditSchema = auditSchema;
     }
 
     /**
-     * Recebe um relatorio da fila de relatorios (com timeout), classifica e registra o evento.
+     * Receives a report from the report queue (with timeout), classifies it and records the event.
      *
-     * @param timeoutMillis tempo maximo de espera (ms).
-     * @return o {@link DeliveryEvent} derivado, ou {@code null} se o timeout expirar sem relatorio.
+     * @param timeoutMillis maximum time to wait (ms).
+     * @return the derived {@link DeliveryEvent}, or {@code null} if the timeout expires with no report.
      */
     public DeliveryEvent receiveOneReport(long timeoutMillis) {
         // The ReceivePort adapter owns the JMSContext lifecycle, the queue:///...?mdReadEnabled=true
@@ -86,15 +100,15 @@ public class ReportMessageConsumer {
         // feedback code, correlation id, body, and the six MQMD values into a ReportEnvelope.
         ReportEnvelope env = receivePort.receiveReport(props.getReportQueue(), timeoutMillis);
         if (env == null) {
-            LOG.debug("Nenhum relatorio dentro do timeout ({} ms)", timeoutMillis);
+            LOG.debug("No report within the timeout ({} ms)", timeoutMillis);
             return null;
         }
         return handleReport(env);
     }
 
     /**
-     * Processa um unico relatorio decodificado. Exposto separadamente para testabilidade (pode ser
-     * chamado com um {@link ReportEnvelope} sintetico, sem broker).
+     * Processes a single decoded report. Exposed separately for testability (it can be called with a
+     * synthetic {@link ReportEnvelope}, without a broker).
      */
     public DeliveryEvent handleReport(ReportEnvelope env) {
         try {
@@ -113,7 +127,7 @@ public class ReportMessageConsumer {
             // descriptor degrades gracefully and the already-acked report path is never aborted.
             ReportDescriptor descriptor = env.descriptor();
 
-            // Correlaciona de volta a mensagem original (CorrelationId == MessageId original).
+            // Correlate back to the original message (CorrelationId == original MessageId).
             Optional<PendingMessage> pending = correlationStore.findByMessageId(correlationId);
             String originalMessageId = pending.map(PendingMessage::messageId).orElse(correlationId);
             // Issue #21: capture the original send instant for the produce->report latency baseline. NULL when
@@ -129,20 +143,20 @@ public class ReportMessageConsumer {
             // clears both keys before the thread returns to the pool (see the producer's note); under
             // ~10k rpm a reused thread must not leak this report's ids to the next.
             try (var scope = MdcTraceScope.bind(originalMessageId, correlationId)) {
-                LOG.info("[stage=CLASSIFY] Relatorio classificado: tipo={}, feedback={}, correlId={}",
+                LOG.info("[stage=CLASSIFY] Report classified: type={}, feedback={}, correlId={}",
                         type, feedback, correlationId);
-                LOG.info("[stage=CORRELATE] Correlacionado a mensagem original: originalMsgId={}, conhecido={}",
+                LOG.info("[stage=CORRELATE] Correlated to the original message: originalMsgId={}, known={}",
                         originalMessageId, pending.isPresent());
 
                 // Observation instant: shared by both the durable audit row and the DeliveryEvent below,
                 // so the persisted timestamp matches the event the caller sees.
                 Instant observedAt = Instant.now();
 
-                // Atualiza o estado da pendencia conforme o tipo de relatorio.
+                // Update the pending state according to the report type.
                 switch (type) {
                     case COA -> {
-                        // COA = Confirmation On Arrival: a mensagem CHEGOU na fila de destino.
-                        LOG.info("[stage=COA] Confirmacao de chegada (arrival) registrada: correlId={}, originalMsgId={}",
+                        // COA = Confirmation On Arrival: the message ARRIVED on the destination queue.
+                        LOG.info("[stage=COA] Arrival confirmation (COA) recorded: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
                         // Append-only audit row (writer datasource). Best-effort: a persist failure must NOT
                         // break the reconciliation path that follows (the report is already acked).
@@ -154,16 +168,16 @@ public class ReportMessageConsumer {
                         recordAndSurface(type, correlationId, originalMessageId);
                     }
                     case COD -> {
-                        // COD = Confirmation On Delivery: a mensagem foi CONSUMIDA destrutivamente.
-                        LOG.info("[stage=COD] Confirmacao de entrega (delivery) registrada: correlId={}, originalMsgId={}",
+                        // COD = Confirmation On Delivery: the message was CONSUMED destructively.
+                        LOG.info("[stage=COD] Delivery confirmation (COD) recorded: correlId={}, originalMsgId={}",
                                 correlationId, originalMessageId);
                         persistAudit(type, feedback, correlationId, originalMessageId, observedAt, sentAt, descriptor);
                         recordAndSurface(type, correlationId, originalMessageId);
                     }
                     case EXPIRATION, NAN, EXCEPTION ->
-                            LOG.warn("[stage=PROBLEM] Relatorio de problema: tipo={}, feedback={}, correlId={}",
+                            LOG.warn("[stage=PROBLEM] Problem report: type={}, feedback={}, correlId={}",
                                     type, feedback, correlationId);
-                    default -> { /* PAN/UNKNOWN: apenas registra no resumo abaixo. */ }
+                    default -> { /* PAN/UNKNOWN: only recorded in the summary below. */ }
                 }
 
                 // Full 6-field event (issue #19): only this call site builds the extended DeliveryEvent;
@@ -177,15 +191,15 @@ public class ReportMessageConsumer {
                         descriptor.putTimestampUtc(),
                         descriptor.reportTypeChar());
 
-                LOG.info("[stage=REPORT-DONE] Relatorio processado: tipo={}, feedback={}, correlId={}, originalMsgId={}, "
-                                + "conhecido={}, putTsUtc={}, reportTypeChar={}, msgIdHex={}",
+                LOG.info("[stage=REPORT-DONE] Report processed: type={}, feedback={}, correlId={}, originalMsgId={}, "
+                                + "known={}, putTsUtc={}, reportTypeChar={}, msgIdHex={}",
                         type, feedback, correlationId, originalMessageId, pending.isPresent(),
                         descriptor.putTimestampUtc(), descriptor.reportTypeChar(), descriptor.messageIdBytesHex());
 
                 return event;
             }
         } catch (Exception e) {
-            throw new IllegalStateException("Falha ao processar relatorio de entrega", e);
+            throw new IllegalStateException("Failed to process delivery report", e);
         }
     }
 
@@ -213,8 +227,8 @@ public class ReportMessageConsumer {
         ReconcileResult result = correlationStore.recordReport(correlationId, type);
         switch (result.outcome()) {
             case COMPLETED -> LOG.info(
-                    "[stage=RECONCILE] Entrega completa (COA+COD): pendencia reconciliada e removida, "
-                            + "originalMsgId={}, pendentesRestantes={}",
+                    "[stage=RECONCILE] Delivery complete (COA+COD): pending entry reconciled and removed, "
+                            + "originalMsgId={}, remainingPending={}",
                     originalMessageId, correlationStore.pendingCount());
             case ORPHAN -> {
                 long total = orphanReportCount.incrementAndGet();
@@ -241,6 +255,12 @@ public class ReportMessageConsumer {
      * Appends one durable COA/COD audit row to {@code delivery_report} on the WRITER datasource —
      * <b>best-effort</b>.
      *
+     * <p><b>Schema-on-first-write (ADR-0010).</b> Before the first insert this path ensures the
+     * {@code delivery_report} table exists via {@link #ensureSchemaReady()} (a one-time idempotent guard
+     * around {@link DeliveryReportSchema#ensureSchema()}). The ensure runs only when a real report is
+     * persisted (live-DB report-consumer pod), never in datasource-less contexts; a transient ensure
+     * failure is best-effort (skip this write, retry next).</p>
+     *
      * <p>Three properties matter here, all by design:</p>
      * <ul>
      *   <li><b>Optional.</b> When no datasource is configured (unit/context tests) the repository bean
@@ -262,6 +282,14 @@ public class ReportMessageConsumer {
                               ReportDescriptor descriptor) {
         if (auditRepository == null) {
             return; // No datasource configured (e.g. unit/context test) — audit persistence is inert.
+        }
+        // ADR-0010 schema-on-first-write: ensure the audit table exists before the FIRST write, behind a
+        // one-time idempotent guard. Placed AFTER the null-repo early return so datasource-less contexts
+        // never connect, and BEFORE insertIfAbsent so the table always exists first. Best-effort: if the
+        // ensure fails (transient DB outage), the latch stays false (retried next write) and we skip THIS
+        // insert without aborting the already-acked reconciliation path.
+        if (!ensureSchemaReady()) {
+            return;
         }
         try {
             // Issue #19: additively persist the six recovered MQMD values (all nullable). The byte[]
@@ -291,6 +319,50 @@ public class ReportMessageConsumer {
             // Best-effort: the report is already acked; never break reconciliation on a persist failure.
             LOG.warn("[stage=AUDIT] Failed to persist report (best-effort, ignored): type={}, correlId={}, cause={}",
                     type, correlationId, e.getMessage());
+        }
+    }
+
+    /**
+     * Ensures the {@code delivery_report} audit schema exists, ONCE, on the first audit write (ADR-0010).
+     *
+     * <p><b>Exactly-once-on-SUCCESS.</b> The {@link #schemaReady} latch flips {@code true} ONLY when
+     * {@link DeliveryReportSchema#ensureSchema()} returns successfully; every subsequent write then skips
+     * straight through (fast path). A transient first-write DB failure (Postgres briefly unavailable) is
+     * <b>best-effort</b>: it is logged at WARN, the latch stays {@code false}, this method returns
+     * {@code false} so the caller skips THIS insert WITHOUT aborting the already-acked reconciliation path,
+     * and the ensure is retried on the NEXT write.</p>
+     *
+     * <p><b>Concurrency.</b> A double-checked {@code AtomicBoolean} keeps the ensure correct under the async
+     * {@code MessageListener} scale-up variant (ADR-0006); the {@code synchronized} block guarantees at most
+     * one thread runs {@code ensureSchema()} while the rest wait, and the fast path (already-ready) takes no
+     * lock. Today's harness is single-thread-per-pod, so contention is nil — this is defence-in-depth.</p>
+     *
+     * @return {@code true} when the schema is ready (already, or just ensured) and the caller may insert;
+     *         {@code false} when the ensure failed and the caller must skip this write (retried next time).
+     */
+    private boolean ensureSchemaReady() {
+        if (schemaReady.get()) {
+            return true; // Fast path: schema already ensured by an earlier write — no lock, no DB touch.
+        }
+        if (auditSchema == null) {
+            // Defensive: auditSchema is co-gated with auditRepository on datasources.default.url, so a
+            // present repository normally implies a present schema. If it is ever absent, skip silently.
+            return false;
+        }
+        synchronized (this) {
+            if (schemaReady.get()) {
+                return true; // Another thread ensured it while we waited on the lock.
+            }
+            try {
+                auditSchema.ensureSchema();
+                schemaReady.set(true); // Flip ONLY on a successful ensure (exactly-once-on-SUCCESS).
+                return true;
+            } catch (RuntimeException e) {
+                // Best-effort: leave the latch false so the next write retries; never break reconciliation.
+                LOG.warn("[stage=AUDIT-INIT] Failed to ensure delivery_report schema on first write "
+                        + "(best-effort, retried next write): cause={}", e.getMessage());
+                return false;
+            }
         }
     }
 }
