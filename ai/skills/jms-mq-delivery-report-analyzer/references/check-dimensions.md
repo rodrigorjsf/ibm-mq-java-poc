@@ -145,16 +145,19 @@ reconciliation — at 167 msg/s the error budget is consumed quickly.
 
 This cell owns two dimensions; they are deliberately deeper rather than more numerous.
 
-### Dimension — Report-PUT context authority (2035 / `+setall`)
+### Dimension — Report-PUT context authority (2035 / `+passid`)
 
 **Look for:** whether the principal the queue manager uses to PUT the report onto the
-reply-to queue has **context authority** (`+setall`). The report PUT is a PUT-with-context
-on behalf of the inbound channel's principal; a low-privilege principal lacking `+setall`
-makes the PUT fail with `MQRC_NOT_AUTHORIZED (2035)`, and the report is **silently
-dead-lettered** while the reply-to queue stays empty (see `constants.md` §7). Confirm an
-authority grant exists, conceptually `SET AUTHREC ... AUTHADD(PUT, SETALL)` on the
-reply-to queue for the app principal. Describe this **generically** — do not name any
-project's dev channels.
+reply-to queue has **context authority** (`+passid` minimum). The report PUT is a
+PUT-with-context on behalf of the inbound channel's principal; the minimum authority it
+actually requires is **`+passid`** (pass identity context) — live-verified on k3d where
+`+put +setall` *without* `+passid` still failed `AMQ8077W … passid`. A low-privilege
+principal lacking it fails with `MQRC_NOT_AUTHORIZED (2035)`, and the report is
+**silently dead-lettered** while the reply-to queue stays empty (see `constants.md` §7).
+Confirm the full context authority grant exists, conceptually
+`SET AUTHREC ... AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)` on the reply-to queue
+for the app principal. Describe this **generically** — do not name any project's dev
+channels.
 
 **Distributed failure mode:** because the failure is silent and routes to the DLQ, at
 167 msg/s an authority gap can dead-letter the **entire** report stream with no

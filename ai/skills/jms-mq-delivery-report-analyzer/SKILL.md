@@ -81,7 +81,7 @@ contract.
 | A | Correlation & Reconciliation reviewer | 1 report-request correctness · 2 feedback classification · 3 id-propagation & correlation durability |
 | B | Connectivity, Pooling & Concurrency reviewer | 4 connection pooling · 5 transactions · 6 Virtual Threads pinning |
 | C | Reliability & Failure-modes reviewer | 7 report-queue topology / reply-to · 8 persistence inheritance · 9 poison-message backout & idempotency |
-| D | Security & Authority reviewer | report-PUT context authority (2035 / +setall) · TLS / cipher & secrets |
+| D | Security & Authority reviewer | report-PUT context authority (2035 / +passid) · TLS / cipher & secrets |
 
 The nine numbered dimensions are spelled out in detail (what to look for, the
 distributed failure mode, and the validated constants) in

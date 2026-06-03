@@ -25,11 +25,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * resolve para ele mesmo com o segundo datasource {@code reader} presente. Este teste prova justamente
  * essa resolucao continuar limpa.</p>
  *
- * <p><b>Por que asserir DEFINICOES de bean (e nao {@code getBean}):</b> os beans de schema
- * ({@link DeliveryReportSchema}, {@code JdbcCorrelationStore#ensureSchema}) abrem conexao no
- * {@code @PostConstruct}. Sem um Postgres vivo, instancia-los faria o teste pendurar no backoff. Os
- * {@code @Singleton} do Micronaut sao LAZY (so instanciam ao serem pedidos), entao apenas SUBIR o
- * contexto nao os cria. Verificamos a RESOLUCAO checando que ha exatamente UMA definicao candidata —
+ * <p><b>Por que asserir DEFINICOES de bean (e nao {@code getBean}):</b> instanciar os beans de schema
+ * abriria conexao com o Postgres — o {@link DeliveryReportSchema} agora ensura o schema LAZILY na primeira
+ * escrita de auditoria (ADR-0010, issue #52: nada de {@code @PostConstruct}/{@code @Context}/
+ * {@code StartupEvent}), e o {@code JdbcCorrelationStore} ainda ensura no {@code @PostConstruct}. Em ambos
+ * os casos, sem um Postgres vivo, INSTANCIAR o bean (via {@code getBean}) faria o teste pendurar no backoff
+ * de conexao. Os {@code @Singleton} do Micronaut sao LAZY (so instanciam ao serem pedidos), entao apenas
+ * SUBIR o contexto nao os cria. Verificamos a RESOLUCAO checando que ha exatamente UMA definicao candidata —
  * isso prova o wiring (zero ambiguidade) sem tocar o banco. {@code initialization-fail-timeout: -1}
  * garante que, mesmo se o pool fosse tocado, ele nao falharia eager por falta de DB.</p>
  */

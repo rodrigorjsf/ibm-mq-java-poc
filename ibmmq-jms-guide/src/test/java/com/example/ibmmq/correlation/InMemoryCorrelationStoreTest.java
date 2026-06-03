@@ -41,9 +41,11 @@ class InMemoryCorrelationStoreTest {
         // exercitadas nesse caminho, entao mockamos a porta e usamos props default.
         ReceivePort receivePort = mock(ReceivePort.class);
         MqProperties props = new MqProperties();
-        // auditRepository=null: este teste unitario nao tem datasource, entao a persistencia de auditoria
-        // (delivery_report) fica inerte — o consumer skipa o persist quando o repo e nulo.
-        reportConsumer = new ReportMessageConsumer(receivePort, props, store, new ReportFeedbackRouter(), null);
+        // auditRepository=null + auditSchema=null: este teste unitario nao tem datasource, entao a
+        // persistencia de auditoria (delivery_report) fica inerte — o consumer skipa o persist quando o repo
+        // e nulo e nunca chama o guarda de schema (ADR-0010).
+        reportConsumer = new ReportMessageConsumer(
+                receivePort, props, store, new ReportFeedbackRouter(), null, null);
     }
 
     @Test
