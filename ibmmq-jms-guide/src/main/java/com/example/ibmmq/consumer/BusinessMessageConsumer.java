@@ -21,7 +21,7 @@ import org.slf4j.LoggerFactory;
  * <p><b>Seam (ADR-0008):</b> this entry point no longer opens its own {@code JMSContext} — it delegates to
  * {@link ReceivePort#receiveWithinUnitOfWork}. The port runs the handler INSIDE the UoW and
  * <b>commits</b> on a normal return (releasing the COD) or <b>rolls back</b> on a throw (no COD); this
- * consumer NEVER calls commit()/rollback() directly. No {@code javax.jms.Message} reaches here —
+ * consumer NEVER calls commit()/rollback() directly. No {@code jakarta.jms.Message} reaches here —
  * the handler sees only the decoded body.</p>
  *
  * <p><b>Observability note (ADR-0008, intentional consequence):</b> the seam exposes only the BODY of

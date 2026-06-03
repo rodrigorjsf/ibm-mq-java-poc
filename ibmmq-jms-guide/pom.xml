@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>ibmmq-jms-guide</name>
-    <description>Micronaut 4 + IBM MQ (JMS 2.0 / javax.jms) — demonstracao de relatorios COA/COD</description>
+    <description>Micronaut 4 + IBM MQ (Jakarta Messaging 3.0 / jakarta.jms) — demonstracao de relatorios COA/COD</description>
 
     <properties>
         <!-- Producao roda em Java 25 (LTS); o bytecode gerado tem como alvo o release 25 (Amazon Corretto 25).
@@ -35,10 +35,14 @@
              acima). A dependencia de runtime micronaut-validation continua sem versao (o BOM a gere). -->
         <micronaut.validation.version>4.10.0</micronaut.validation.version>
 
-        <!-- Cliente IBM MQ javax.jms / JMS 2.0. -->
+        <!-- Cliente IBM MQ jakarta.jms / Jakarta Messaging 3.0 (com.ibm.mq.jakarta.client).
+             Mudanca de namespace APENAS (ADR-0012): a versao fica TRAVADA em 9.4.5.0 para paridade
+             com a imagem do broker icr.io/ibm-messaging/mq:9.4.5.0-r2 e o fact sheet sha1-verificado —
+             NAO e um bump de versao. -->
         <ibm.mq.version>9.4.5.0</ibm.mq.version>
-        <!-- Pool JMS na linha javax (2.x ainda e javax.jms; 3.x = jakarta). -->
-        <pooled.jms.version>2.0.9</pooled.jms.version>
+        <!-- Pool JMS na linha jakarta (3.x = jakarta.jms; 2.x era javax.jms). O pacote
+             org.messaginghub.pooled.jms.* e o mesmo da linha 2.x — so a versao muda. -->
+        <pooled.jms.version>3.2.2</pooled.jms.version>
 
         <jackson.version>2.18.2</jackson.version>
 
@@ -118,15 +122,18 @@
         </dependency>
 
         <!-- ===================== IBM MQ + Pool JMS ===================== -->
-        <!-- allclient = javax.jms (JMS 2.0). Traz com.ibm.mq.*, com.ibm.msg.client.*,
-             com.ibm.mq.constants.* (CMQC/MQConstants) e a javax.jms-api 2.0.1 transitiva. -->
+        <!-- jakarta.client = jakarta.jms (Jakarta Messaging 3.0). Traz com.ibm.mq.jakarta.*,
+             com.ibm.msg.client.jakarta.*, com.ibm.mq.constants.* (CMQC/MQConstants — namespace-independente)
+             e a jakarta.jms-api 3.x transitiva. Substitui o antigo com.ibm.mq.allclient (javax.jms). -->
         <dependency>
             <groupId>com.ibm.mq</groupId>
-            <artifactId>com.ibm.mq.allclient</artifactId>
+            <artifactId>com.ibm.mq.jakarta.client</artifactId>
             <version>${ibm.mq.version}</version>
             <scope>compile</scope>
         </dependency>
-        <!-- Pool de conexoes JMS (javax). Classe: org.messaginghub.pooled.jms.JmsPoolConnectionFactory. -->
+        <!-- Pool de conexoes JMS (jakarta). Classe: org.messaginghub.pooled.jms.JmsPoolConnectionFactory.
+             A 3.x espera uma jakarta.jms.ConnectionFactory em setConnectionFactory — fornecida pela
+             com.ibm.mq.jakarta.jms.MQConnectionFactory. -->
         <dependency>
             <groupId>org.messaginghub</groupId>
             <artifactId>pooled-jms</artifactId>

@@ -4,8 +4,8 @@ import com.example.ibmmq.config.MqConnectionFactoryFactory;
 import com.example.ibmmq.model.ReportType;
 import com.example.ibmmq.report.ReportDescriptor;
 import com.example.ibmmq.report.ReportFeedbackRouter;
-import com.ibm.msg.client.wmq.WMQConstants;
-import com.ibm.mq.jms.MQConnectionFactory;
+import com.ibm.msg.client.jakarta.wmq.WMQConstants;
+import com.ibm.mq.jakarta.jms.MQConnectionFactory;
 import io.micronaut.context.annotation.Requires;
 import jakarta.annotation.PreDestroy;
 import jakarta.inject.Named;
@@ -13,15 +13,15 @@ import jakarta.inject.Singleton;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.jms.JMSConsumer;
-import javax.jms.JMSContext;
-import javax.jms.Message;
-import javax.jms.Queue;
-import javax.jms.TextMessage;
+import jakarta.jms.JMSConsumer;
+import jakarta.jms.JMSContext;
+import jakarta.jms.Message;
+import jakarta.jms.Queue;
+import jakarta.jms.TextMessage;
 
 /**
  * Production {@link ReceivePort} adapter over the <b>dedicated long-lived consumer factory</b> (ADR-0006).
- * This is the only place on the receive side that touches {@code javax.jms}.
+ * This is the only place on the receive side that touches {@code jakarta.jms}.
  *
  * <h2>Long-lived held contexts (ADR-0006 consumer lifecycle)</h2>
  * The adapter holds TWO long-lived {@link JMSContext}s drawn from the dedicated, non-pooled
@@ -133,7 +133,7 @@ public class PooledJmsReceiveAdapter implements ReceivePort {
 
     /**
      * Extracts the feedback code, correlation id, body, and the six MQMD values from a received report into a
-     * {@link ReportEnvelope}. ALL JMS extraction happens here (ADR-0008) so no {@code javax.jms.Message}
+     * {@link ReportEnvelope}. ALL JMS extraction happens here (ADR-0008) so no {@code jakarta.jms.Message}
      * crosses the seam.
      */
     private ReportEnvelope decode(Message report) throws Exception {

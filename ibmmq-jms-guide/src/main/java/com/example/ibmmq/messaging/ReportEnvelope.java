@@ -5,7 +5,7 @@ import com.example.ibmmq.report.ReportDescriptor;
 
 /**
  * Decoded inbound domain envelope that crosses the RECEIVE side of the messaging seam for a COA/COD report
- * (ADR-0008). It carries the already-extracted report data so NO {@code javax.jms.Message} reaches the
+ * (ADR-0008). It carries the already-extracted report data so NO {@code jakarta.jms.Message} reaches the
  * {@link com.example.ibmmq.consumer.ReportMessageConsumer}:
  *
  * <ul>
@@ -35,7 +35,7 @@ public record ReportEnvelope(
     /**
      * Builds a report envelope, deriving the descriptor's report-type char from the supplied feedback when a
      * descriptor is not otherwise available. Convenience for the in-memory fake, which has no real
-     * {@code javax.jms.Message} to extract from.
+     * {@code jakarta.jms.Message} to extract from.
      *
      * @param feedbackCode  the feedback code.
      * @param correlationId the correlation id.

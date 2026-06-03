@@ -1,29 +1,29 @@
 package com.example.ibmmq.messaging;
 
 import com.example.ibmmq.config.MqConnectionFactoryFactory;
-import com.ibm.msg.client.wmq.WMQConstants;
+import com.ibm.msg.client.jakarta.wmq.WMQConstants;
 import com.ibm.mq.constants.MQConstants;
 import io.micronaut.context.annotation.Requires;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 
-import javax.jms.DeliveryMode;
-import javax.jms.JMSContext;
-import javax.jms.JMSProducer;
-import javax.jms.Queue;
-import javax.jms.TextMessage;
+import jakarta.jms.DeliveryMode;
+import jakarta.jms.JMSContext;
+import jakarta.jms.JMSProducer;
+import jakarta.jms.Queue;
+import jakarta.jms.TextMessage;
 
 /**
  * Production {@link SendPort} adapter over the <b>pooled producer factory</b> (ADR-0006). This is the only
- * place on the send side that touches {@code javax.jms}: it opens a short-lived {@code JMSContext} per send
+ * place on the send side that touches {@code jakarta.jms}: it opens a short-lived {@code JMSContext} per send
  * over the pooled {@link JmsPoolConnectionFactory}, builds the {@code TextMessage}, sets {@code JMSReplyTo}
  * and the {@code JMS_IBM_REPORT_*} options, resolves the {@code queue:///} destinations, sends, and returns
  * the assigned {@code messageId}.
  *
  * <p>All of this used to live inside {@code BusinessMessageProducer}; ADR-0008 moves it behind the seam so
  * the producer calls {@link SendPort#send} with a decoded {@link OutboundMessage} and never sees a
- * {@code javax.jms.Message}.</p>
+ * {@code jakarta.jms.Message}.</p>
  *
  * <p><b>Default bean.</b> Gated on {@code messaging.adapter != fake} so it is the production default and is
  * absent when the in-memory fake is selected (broker-free unit tests set {@code messaging.adapter=fake}).</p>

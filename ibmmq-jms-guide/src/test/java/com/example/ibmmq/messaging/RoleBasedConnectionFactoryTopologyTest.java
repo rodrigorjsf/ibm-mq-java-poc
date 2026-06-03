@@ -4,14 +4,14 @@ import com.example.ibmmq.config.MqConnectionFactoryFactory;
 import com.example.ibmmq.consumer.BusinessMessageConsumer;
 import com.example.ibmmq.consumer.ReportMessageConsumer;
 import com.example.ibmmq.producer.BusinessMessageProducer;
-import com.ibm.mq.jms.MQConnectionFactory;
+import com.ibm.mq.jakarta.jms.MQConnectionFactory;
 import io.micronaut.context.ApplicationContext;
 import io.micronaut.inject.qualifiers.Qualifiers;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 
-import javax.jms.ConnectionFactory;
+import jakarta.jms.ConnectionFactory;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
