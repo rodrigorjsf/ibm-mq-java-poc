@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p><b>Seam (ADR-0008):</b> this entry point no longer opens its own {@code JMSContext} — it delegates to
  * {@link ReceivePort#receiveReport}, which performs all MQMD extraction ({@code JMS_IBM_Feedback},
  * {@code getJMSCorrelationID}, the six MQMD values from #19) and delivers a decoded {@link ReportEnvelope}.
- * No {@code javax.jms.Message} reaches here; classification and reconciliation operate purely on the
+ * No {@code jakarta.jms.Message} reaches here; classification and reconciliation operate purely on the
  * envelope.</p>
  */
 @Singleton

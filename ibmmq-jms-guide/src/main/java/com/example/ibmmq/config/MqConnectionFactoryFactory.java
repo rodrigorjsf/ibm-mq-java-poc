@@ -1,7 +1,7 @@
 package com.example.ibmmq.config;
 
-import com.ibm.msg.client.wmq.WMQConstants;
-import com.ibm.mq.jms.MQConnectionFactory;
+import com.ibm.msg.client.jakarta.wmq.WMQConstants;
+import com.ibm.mq.jakarta.jms.MQConnectionFactory;
 import io.micronaut.context.annotation.Bean;
 import io.micronaut.context.annotation.Factory;
 import io.micronaut.context.annotation.Primary;
@@ -11,7 +11,7 @@ import org.messaginghub.pooled.jms.JmsPoolConnectionFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.jms.JMSException;
+import jakarta.jms.JMSException;
 
 /**
  * Micronaut factory that produces the TWO role-based JMS connection factories used across the
@@ -24,7 +24,7 @@ import javax.jms.JMSException;
  * <ul>
  *   <li><b>Producer</b> ({@link #PRODUCER}) — a {@link JmsPoolConnectionFactory} (pooled). The send
  *       path opens a short-lived {@code JMSContext} per send, so it benefits from pooling physical
- *       connections/sessions. {@code @Primary} so the still-unqualified {@code javax.jms.ConnectionFactory}
+ *       connections/sessions. {@code @Primary} so the still-unqualified {@code jakarta.jms.ConnectionFactory}
  *       injections in the entry points resolve here without a {@code NonUniqueBeanException}. The pool
  *       bean carries {@code preDestroy="stop"} to close its connections at context shutdown.</li>
  *   <li><b>Consumer</b> ({@link #CONSUMER}) — the raw, NON-pooled {@link MQConnectionFactory}. The
@@ -53,7 +53,7 @@ public class MqConnectionFactoryFactory {
      *
      * <p>Todas as chaves vem de {@code WMQConstants} (interface que herda as constantes de
      * {@code CommonConstants}/{@code JmsConstants}). Os valores foram verificados contra o bytecode
-     * de {@code com.ibm.mq.allclient:9.4.5.0}.</p>
+     * de {@code com.ibm.mq.jakarta.client:9.4.5.0}.</p>
      */
     private MQConnectionFactory buildMqConnectionFactory(MqProperties props) throws JMSException {
         MQConnectionFactory cf = new MQConnectionFactory();
@@ -132,7 +132,7 @@ public class MqConnectionFactoryFactory {
      * so a pool of physical connections/sessions is the right profile here.
      *
      * <p><b>{@code @Primary}</b> is load-bearing: the three entry points still inject the unqualified
-     * {@code javax.jms.ConnectionFactory}, and with two candidate factories present this is what makes
+     * {@code jakarta.jms.ConnectionFactory}, and with two candidate factories present this is what makes
      * those injections resolve to the producer instead of throwing {@code NonUniqueBeanException}.</p>
      *
      * <p><b>Concrete return type</b> ({@link JmsPoolConnectionFactory}, not the {@code ConnectionFactory}
@@ -156,7 +156,7 @@ public class MqConnectionFactoryFactory {
         MQConnectionFactory mqCf = buildMqConnectionFactory(props);
 
         JmsPoolConnectionFactory pool = new JmsPoolConnectionFactory();
-        // setConnectionFactory accepts the javax.jms.ConnectionFactory interface.
+        // setConnectionFactory accepts the jakarta.jms.ConnectionFactory interface.
         pool.setConnectionFactory(mqCf);
         // Physical connections per pod — keep small so maxConnections × replicas ≤ MAXINST.
         pool.setMaxConnections(2);

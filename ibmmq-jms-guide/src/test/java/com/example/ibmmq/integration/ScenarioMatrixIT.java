@@ -1,8 +1,8 @@
 package com.example.ibmmq.integration;
 
-import com.ibm.msg.client.wmq.WMQConstants;
+import com.ibm.msg.client.jakarta.wmq.WMQConstants;
 import com.ibm.mq.constants.MQConstants;
-import com.ibm.mq.jms.MQConnectionFactory;
+import com.ibm.mq.jakarta.jms.MQConnectionFactory;
 import com.ibm.mq.testcontainers.MQContainer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -12,14 +12,14 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.Container;
 
-import javax.jms.BytesMessage;
-import javax.jms.DeliveryMode;
-import javax.jms.JMSConsumer;
-import javax.jms.JMSContext;
-import javax.jms.JMSProducer;
-import javax.jms.Message;
-import javax.jms.Queue;
-import javax.jms.TextMessage;
+import jakarta.jms.BytesMessage;
+import jakarta.jms.DeliveryMode;
+import jakarta.jms.JMSConsumer;
+import jakarta.jms.JMSContext;
+import jakarta.jms.JMSProducer;
+import jakarta.jms.Message;
+import jakarta.jms.Queue;
+import jakarta.jms.TextMessage;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -632,7 +632,7 @@ class ScenarioMatrixIT {
 
             // A non-transacted AUTO_ACKNOWLEDGE context makes the 3rd send() throw SYNCHRONOUSLY (under a
             // transacted session the queue-full could defer to commit). The JMS 2.0 simplified API's
-            // JMSProducer.send() throws javax.jms.JMSRuntimeException (NOT JMSException — it does not extend
+            // JMSProducer.send() throws jakarta.jms.JMSRuntimeException (NOT JMSException — it does not extend
             // it and has no getLinkedException). We detect MQRC_Q_FULL (2053) by walking the full cause chain
             // to the linked MQException via the stack trace, tolerant of how 2053 surfaces (error code text).
             try (JMSContext ctx = cf.createContext(JMSContext.AUTO_ACKNOWLEDGE)) {

@@ -6,7 +6,7 @@ package com.example.ibmmq.messaging;
  * the {@link com.example.ibmmq.consumer.ReportMessageConsumer} call through this single port, which holds
  * one long-lived consumer connection for the pod's life.
  *
- * <p>Only decoded domain types cross the seam — never a {@code javax.jms.Message}. The implementation owns
+ * <p>Only decoded domain types cross the seam — never a {@code jakarta.jms.Message}. The implementation owns
  * the {@code JMSContext} lifecycle, the {@code queue:///} resolution, the {@code ?mdReadEnabled=true} URI
  * form for the report destination, and all MQMD extraction into a {@link ReportEnvelope}.</p>
  *

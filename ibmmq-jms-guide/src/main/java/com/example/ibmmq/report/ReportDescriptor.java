@@ -1,10 +1,10 @@
 package com.example.ibmmq.report;
 
 import com.example.ibmmq.model.ReportType;
-import com.ibm.msg.client.wmq.WMQConstants;
+import com.ibm.msg.client.jakarta.wmq.WMQConstants;
 
-import javax.jms.JMSException;
-import javax.jms.Message;
+import jakarta.jms.JMSException;
+import jakarta.jms.Message;
 import java.time.LocalDateTime;
 
 /**

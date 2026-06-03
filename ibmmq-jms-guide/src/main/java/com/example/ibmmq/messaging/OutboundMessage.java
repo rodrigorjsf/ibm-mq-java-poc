@@ -4,7 +4,7 @@ package com.example.ibmmq.messaging;
  * Decoded outbound domain envelope that crosses the SEND side of the messaging seam (ADR-0008).
  *
  * <p>It carries everything the adapter needs to build and send a business message WITHOUT exposing any
- * {@code javax.jms} type to the caller: the payload, a domain {@code businessKey} for traceability, the
+ * {@code jakarta.jms} type to the caller: the payload, a domain {@code businessKey} for traceability, the
  * destination (business) queue, the report options (COA/COD), the reply-to queue (where the QMgr delivers
  * the generated reports), and the {@link DeliveryPersistence persistence mode}. The {@link SendPort} returns
  * the assigned {@code messageId} (the correlation key for the future COA/COD reports under the default
