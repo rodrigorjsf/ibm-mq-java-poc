@@ -1,4 +1,4 @@
-# Guia de Produção — Java 25 / Micronaut 4 + IBM MQ via JMS 2.0, com foco em relatórios COA/COD
+# Guia de Produção — Java 25 / Micronaut 4 + IBM MQ via Jakarta Messaging 3.0, com foco em relatórios COA/COD
 
 > Guia técnico, do básico ao avançado, para um engenheiro de software que **não domina IBM MQ** mas precisa integrá-lo e
 > operá-lo em um ambiente **real, crítico e de alta concorrência** (microsserviços). O fio condutor é a entrega confiável
@@ -11,8 +11,8 @@
 |---------------------|----------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Runtime de produção | **Java 25** (LTS)                                                    | Amazon Corretto 25 (`maven.compiler.release=25`). Java 25 é LTS e documentado para o MQ 9.4.x; rode com `--enable-native-access=ALL-UNNAMED` e evite `TLS_RSA_*`. Ver ADR `docs/adr/0001-java-25-runtime.md`.                                       |
 | Framework           | **Micronaut 4.9.4** (BOM `io.micronaut.platform:micronaut-platform`) | A linha 4.9.x do BOM **termina em 4.9.4** — `4.9.9` **não existe** no BOM de plataforma. Plugin Maven `io.micronaut.maven:micronaut-maven-plugin:4.11.6`. |
-| Cliente MQ          | **`com.ibm.mq:com.ibm.mq.allclient:9.4.5.0`**                        | Namespace **`javax.jms`** (JMS 2.0). Linha **CD** (ver nota CD×LTS na Seção 1).                                                                           |
-| Pool JMS            | **`org.messaginghub:pooled-jms:2.0.9`**                              | Linha 2.x ainda é `javax.jms` (3.x já é `jakarta.jms`).                                                                                                   |
+| Cliente MQ          | **`com.ibm.mq:com.ibm.mq.jakarta.client:9.4.5.0`**                  | Namespace **`jakarta.jms`** (Jakarta Messaging 3.0). Linha **CD** (ver nota CD×LTS na Seção 1). O legado `com.ibm.mq.allclient` (`javax.jms`) é a fonte de migração — ver Apêndice 3.                                                                           |
+| Pool JMS            | **`org.messaginghub:pooled-jms:3.2.2`**                             | A linha 3.x liga `jakarta.jms` (a 2.x era `javax.jms`); o pacote Java `org.messaginghub.pooled.jms.*` não muda na transição 2.x→3.x.                                                                                                   |
 | Imagem (testes/dev) | **`icr.io/ibm-messaging/mq:9.4.5.0-r2`**                             | IBM MQ Advanced for Developers. **Não existe** a tag `9.4.5.0` "pura" (formato `9.4.<fixpack>-r<N>`).                                                     |
 
 > ℹ️ **Nota — convenção de idioma.** Toda a prosa, títulos, callouts e legendas estão em português brasileiro. *
@@ -80,7 +80,7 @@ partir das propriedades `JMS_IBM_*`. **COA/COD vivem aqui:** o campo `Report` do
 
 ```mermaid
 flowchart LR
-    APP["Aplicação Java (JMS)<br/>com.ibm.mq.allclient<br/>(CLIENT mode)"]
+    APP["Aplicação Java (JMS)<br/>com.ibm.mq.jakarta.client<br/>(CLIENT mode)"]
     subgraph QM1["Queue Manager (QM1)"]
         direction TB
         LIS["Listener:1414 → MCA<br/>(MCAUSER='app')"]
@@ -116,24 +116,24 @@ O ponto-chave: em **CLIENT mode** a aplicação não tem o QMgr embutido; tudo p
 modo alternativo, **BINDINGS**, exige a aplicação na mesma máquina do QMgr e usa memória compartilhada — não é o cenário
 de microsserviços que tratamos aqui.)
 
-### 1.2 JMS 2.0 vs. IBM MQ nativo (MQI)
+### 1.2 Jakarta Messaging vs. IBM MQ nativo (MQI)
 
 O IBM MQ tem uma API nativa própria, a **MQI** (Message Queue Interface), de baixo nível, com verbos como `MQCONN`,
 `MQOPEN`, `MQPUT`, `MQGET`. Ela é poderosa e expõe **tudo** (inclusive o MQMD cru), mas é verbosa, procedural e acopla o
 código ao MQ.
 
-O **JMS (Java Message Service) 2.0** (namespace `javax.jms`, trazido pelo `com.ibm.mq.allclient`) é a abstração padrão
+O **Jakarta Messaging 3.0** (namespace `jakarta.jms`, trazido pelo `com.ibm.mq.jakarta.client`) é a abstração padrão
 Java para mensageria. Por que usá-la em Java 25?
 
 - **Portabilidade e familiaridade:** a mesma API conceitual de outros brokers JMS; o time não precisa aprender MQI.
-- **Simplificações do JMS 2.0:** o `JMSContext` unifica `Connection` + `Session` em um objeto único e **`AutoCloseable`
+- **Simplificações do Jakarta Messaging:** o `JMSContext` unifica `Connection` + `Session` em um objeto único e **`AutoCloseable`
   ** (fecha conexão e sessão de uma vez em *try-with-resources*); `JMSProducer` e `JMSConsumer` são objetos leves e
   fluentes; mensagens podem ser criadas direto do contexto.
 - **Menos *boilerplate*, menos vazamento de recursos:** o *auto-close* elimina a classe inteira de bugs de "esqueci de
   fechar a Session".
 
 ```java
-// JMS 2.0: um único objeto AutoCloseable cobre conexão + sessão.
+// Jakarta Messaging 3.0: um único objeto AutoCloseable cobre conexão + sessão.
 try(JMSContext context = connectionFactory.createContext(JMSContext.AUTO_ACKNOWLEDGE)){
 JMSProducer producer = context.createProducer();
     producer.
@@ -145,11 +145,11 @@ send(queue, context.createTextMessage("payload"));
 **Onde a abstração JMS "vaza" (e por que isso importa para COA/COD).** O JMS padrão **não conhece** o conceito de
 relatório de entrega do MQ. COA/COD são um recurso **proprietário** do IBM MQ, expostos através de **extensões IBM**: as
 propriedades `JMS_IBM_Report_*` (para pedir o relatório) e `JMS_IBM_Feedback` (para lê-lo), além das constantes inteiras
-`MQRO_*`/`MQFB_*`. Ou seja: para fazer COA/COD você **sai do JMS genérico** e usa `com.ibm.msg.client.wmq.WMQConstants`
+`MQRO_*`/`MQFB_*`. Ou seja: para fazer COA/COD você **sai do JMS genérico** e usa `com.ibm.msg.client.jakarta.wmq.WMQConstants`
 e `com.ibm.mq.constants.MQConstants`. Esta é a principal "fuga" da abstração que este guia explora.
 
 > ⚠️ **Atenção — decisão de arquitetura: JMS manual, não `micronaut-jms`.** Este guia **não** usa o módulo declarativo
-`io.micronaut.jms` (com `@JMSListener`). Motivo técnico: a linha 4.x desse módulo é **jakarta-only** (`jakarta.jms`) e *
+`io.micronaut.jms` (com `@JMSListener`). Agora que a stack é jakarta-primary o requisito `jakarta.jms` do módulo está *alinhado*, não é uma barreira — mas a linha 4.x ainda *
 *abstrai o `JMSContext`** — exatamente o objeto que precisamos controlar à mão para manipular as propriedades de report.
 > O Micronaut entra aqui **apenas** para DI, `@ConfigurationProperties`/`@Factory`, ciclo de vida e injeção do
 `ConnectionFactory`/pool. *Trade-off:* perde-se o `@JMSListener` declarativo (você escreve os loops de consumo), mas
@@ -271,7 +271,7 @@ a DLQ, as **autorizações** (crucial — ver o *gotcha* de `+passid` na Seção
 infraestrutura; a *intenção* de receber relatório está na mensagem.
 
 > ⚠️ **Atenção — `WMQConstants` vs. `MQConstants` (erro comum).** As propriedades JMS de **pedido** (
-`JMS_IBM_REPORT_COA`, `JMS_IBM_FEEDBACK`...) ficam em **`com.ibm.msg.client.wmq.WMQConstants`** — o **nome do campo** é
+`JMS_IBM_REPORT_COA`, `JMS_IBM_FEEDBACK`...) ficam em **`com.ibm.msg.client.jakarta.wmq.WMQConstants`** — o **nome do campo** é
 > UPPER_SNAKE (`JMS_IBM_REPORT_COA`) e o **valor String** é mixed-case (`"JMS_IBM_Report_COA"`). Já os **valores inteiros
 ** `MQRO_*` e `MQFB_*` ficam em **`com.ibm.mq.constants.CMQC`** (agregados por **`MQConstants`**), **não** em
 `WMQConstants`. Referencie sempre como `MQConstants.MQRO_COA`, `MQConstants.MQFB_COD`. (`WMQConstants` declara só 1
@@ -420,7 +420,7 @@ sequenceDiagram
 ## Seção 3 — Configuração do Ambiente (deep dive de propriedades)
 
 Esta seção é a referência das propriedades de conexão. Os **nomes dos campos** são os de
-`com.ibm.msg.client.wmq.WMQConstants` (verificados no bytecode de `com.ibm.mq.allclient:9.4.5.0`). Você as aplica num
+`com.ibm.msg.client.jakarta.wmq.WMQConstants` (verificados no bytecode de `com.ibm.mq.jakarta.client:9.4.5.0`). Você as aplica num
 `MQConnectionFactory` via `setIntProperty`/`setStringProperty`/`setBooleanProperty`.
 
 ### 3.1 Tabela exaustiva (iniciante → avançado)
@@ -588,19 +588,19 @@ As coordenadas exatas (do `pom.xml` real):
 <properties>
     <micronaut.version>4.9.4</micronaut.version>              <!-- BOM 4.9.x termina em 4.9.4 -->
     <micronaut.maven.plugin.version>4.11.6</micronaut.maven.plugin.version>
-    <ibm.mq.version>9.4.5.0</ibm.mq.version>                  <!-- cliente javax.jms / JMS 2.0 -->
-    <pooled.jms.version>2.0.9</pooled.jms.version>            <!-- 2.x ainda é javax; 3.x = jakarta -->
+    <ibm.mq.version>9.4.5.0</ibm.mq.version>                  <!-- cliente jakarta.jms / Jakarta Messaging 3.0 -->
+    <pooled.jms.version>3.2.2</pooled.jms.version>            <!-- 3.x liga jakarta; a 2.x era javax -->
 </properties>
 
-        <!-- allclient = javax.jms (JMS 2.0). Traz com.ibm.mq.*, com.ibm.msg.client.*,
-             com.ibm.mq.constants.* (CMQC/MQConstants) e a javax.jms-api 2.0.1 transitiva. -->
+        <!-- jakarta.client = jakarta.jms (Jakarta Messaging 3.0). Traz com.ibm.mq.*, com.ibm.msg.client.*,
+             com.ibm.mq.constants.* (CMQC/MQConstants) e a jakarta.jms-api 3.x transitiva. -->
 <dependency>
 <groupId>com.ibm.mq</groupId>
-<artifactId>com.ibm.mq.allclient</artifactId>
+<artifactId>com.ibm.mq.jakarta.client</artifactId>
 <version>${ibm.mq.version}</version>
 <scope>compile</scope>
 </dependency>
-        <!-- Pool de conexões JMS (javax). Classe: org.messaginghub.pooled.jms.JmsPoolConnectionFactory. -->
+        <!-- Pool de conexões JMS (jakarta). Classe: org.messaginghub.pooled.jms.JmsPoolConnectionFactory. -->
 <dependency>
 <groupId>org.messaginghub</groupId>
 <artifactId>pooled-jms</artifactId>
@@ -613,7 +613,7 @@ A `@Factory` produz as **duas connection factories por papel** da ADR-0006, não
 producer e o consumer têm ciclos de vida de conexão opostos (`send` curto e em rajada vs. uma conexão de consumer
 longeva por pod), e um único pool não consegue ser ajustado para ambos. As duas embrulham o mesmo
 `MQConnectionFactory` base (cliente IBM MQ, construído na §3.2), mas diferem em pooling e ciclo de vida. A factory
-`@Named(PRODUCER)` é `@Primary`, então os entry points que ainda injetam um `javax.jms.ConnectionFactory`
+`@Named(PRODUCER)` é `@Primary`, então os entry points que ainda injetam um `jakarta.jms.ConnectionFactory`
 não-qualificado resolvem para ela sem um `NonUniqueBeanException`:
 
 ```java
@@ -656,9 +656,9 @@ public MQConnectionFactory consumerConnectionFactory(MqProperties props) throws 
 
 #### O que cada parâmetro controla — `maxConnections` vs `maxSessionsPerConnection`
 
-Esses dois parâmetros limitam **recursos diferentes** e são rotineiramente confundidos. `maxConnections` limita **conexões físicas** (sockets TCP ao QMgr, cada um pagando um handshake TCP + TLS + MQ e um slot no canal SVRCONN). `maxSessionsPerConnection` limita **sessions** — as unidades de trabalho lógicas e baratas, multiplexadas sobre *cada* conexão física como shared conversations. Os valores abaixo são os defaults autênticos do `pooled-jms` 2.0.9 (validados em `research-output/pooled-jms-factory-tuning.md`).
+Esses dois parâmetros limitam **recursos diferentes** e são rotineiramente confundidos. `maxConnections` limita **conexões físicas** (sockets TCP ao QMgr, cada um pagando um handshake TCP + TLS + MQ e um slot no canal SVRCONN). `maxSessionsPerConnection` limita **sessions** — as unidades de trabalho lógicas e baratas, multiplexadas sobre *cada* conexão física como shared conversations. Os valores abaixo são os defaults autênticos do `pooled-jms` (validados em `research-output/pooled-jms-factory-tuning.md`; o pacote Java e esses defaults não mudam na linha 2.x→3.x, então valem identicamente para o `3.2.2` shipped).
 
-| Parâmetro | Limita | Default (2.0.9) | Limite do mundo real |
+| Parâmetro | Limita | Default (3.2.2) | Limite do mundo real |
 |---|---|---|---|
 | `maxConnections` | Conexões TCP físicas seguradas pelo pool | **1** | `maxConnections × réplicas` deve ficar abaixo do `MAXINST` do canal |
 | `maxSessionsPerConnection` | Sessions ativas emprestadas por **cada** conexão | **500** | Mantenha em/abaixo do `SHARECNV` do canal |
@@ -757,7 +757,7 @@ Então trocar poolada ↔ crua, ou compartilhada ↔ por-papel, tem efeito **zer
 
 A ADR-0008 move a fronteira JMS **para fora dos entry points** e para trás de **duas portas por papel**, uma por
 factory da ADR-0006. O producer e os dois consumers param de abrir seu próprio `JMSContext`; eles trocam
-**envelopes de domínio decodificados** com as portas, e *todo* o tratamento `javax.jms` vive dentro dos adapters.
+**envelopes de domínio decodificados** com as portas, e *todo* o tratamento `jakarta.jms` vive dentro dos adapters.
 Dois ganhos: os entry points ficam agnósticos de broker (testáveis sem MQ), e cada porta é ajustada ao ciclo de
 vida da sua factory — `send` curto e poolado vs. uma conexão de receive longeva e segurada por pod.
 
@@ -812,7 +812,7 @@ public interface ReceivePort {
 }
 ```
 
-Os **envelopes decodificados** carregam exatamente o que o domínio precisa — nenhum `javax.jms.Message` jamais
+Os **envelopes decodificados** carregam exatamente o que o domínio precisa — nenhum `jakarta.jms.Message` jamais
 cruza o seam:
 
 ```java
@@ -828,7 +828,7 @@ public record ReportEnvelope(int feedbackCode, String correlationId, String body
 ```
 
 Cada porta tem **dois adapters**: o de produção `PooledJms{Send,Receive}Adapter` — as únicas classes que tocam
-`javax.jms`, cabeadas por default — e um **fake em memória** (`InMemory{Send,Receive}Port` sobre `InMemoryBroker`,
+`jakarta.jms`, cabeadas por default — e um **fake em memória** (`InMemory{Send,Receive}Port` sobre `InMemoryBroker`,
 selecionado por `messaging.adapter=fake`). O fake é o *ponto* do seam: ele modela a causalidade de relatórios do
 QMgr fielmente — um send enfileira o **COA on put (259)**, um consumo destrutivo commitado enfileira o **COD on
 commit (260)**, um rollback não gera **COD nenhum**, e ambos os relatórios carregam `CorrelationId == messageId
@@ -849,7 +849,7 @@ O entry point não abre mais um `JMSContext` — ele monta um `OutboundMessage` 
 // ibmmq-jms-guide/src/main/java/com/example/ibmmq/producer/BusinessMessageProducer.java
 public String send(String businessKey, String jsonPayload) {
     // Envelope outbound decodificado: uma mensagem de negócio persistente com COA+COD solicitados, destinada à
-    // fila de relatórios (reply-to). Nenhum javax.jms aqui — o adapter da SendPort é dono de toda construção JMS.
+    // fila de relatórios (reply-to). Nenhum jakarta.jms aqui — o adapter da SendPort é dono de toda construção JMS.
     OutboundMessage outbound = OutboundMessage.persistentWithCoaCod(
             businessKey, jsonPayload, props.getBusinessQueue(), props.getReportQueue());
 
@@ -862,7 +862,7 @@ public String send(String businessKey, String jsonPayload) {
 ```
 
 Todo o JMS que vivia aqui agora vive no adapter de produção — a única classe do lado do send que toca
-`javax.jms`, puxando um contexto curto da **factory de producer poolada** (ADR-0006):
+`jakarta.jms`, puxando um contexto curto da **factory de producer poolada** (ADR-0006):
 
 ```java
 // ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/PooledJmsSendAdapter.java
@@ -889,7 +889,7 @@ public String send(OutboundMessage message) {
 }
 ```
 
-Pontos a observar: (1) o producer monta um **`OutboundMessage` decodificado** e nunca toca `javax.jms` — o
+Pontos a observar: (1) o producer monta um **`OutboundMessage` decodificado** e nunca toca `jakarta.jms` — o
 `JMSReplyTo`, as opções `JMS_IBM_REPORT_*`, o `DeliveryMode` e a resolução `queue:///` foram todos para dentro do
 `PooledJmsSendAdapter` (ADR-0008); (2) o adapter puxa seu contexto curto da **factory de producer poolada**
 (ADR-0006); (3) o `messageId` que a porta devolve é registrado no `CorrelationStore` **imediatamente após** o
@@ -967,7 +967,7 @@ void close() { /* fecha os contextos de consumer longevos segurados no shutdown 
 
 O coração da reconciliação. O adapter de recebimento já extraiu o relatório para um `ReportEnvelope`
 decodificado; o consumer então classifica pelo feedback code e correlaciona `CorrelationId → MessageId` original
-— sem nunca tocar `javax.jms`. Primeiro, o `decode` do adapter (o único lugar onde o JMS de um relatório é lido):
+— sem nunca tocar `jakarta.jms`. Primeiro, o `decode` do adapter (o único lugar onde o JMS de um relatório é lido):
 
 ```java
 // ibmmq-jms-guide/src/main/java/com/example/ibmmq/messaging/PooledJmsReceiveAdapter.java
@@ -1096,13 +1096,13 @@ Para sobreviver a restart — e para reconciliar entre pods competing-consumer �
 **Unit (sem broker):** `ReportFeedbackRouterTest` exercita os valores inteiros exatos (259/260/258/275/276) e os casos
 de borda (271 = `MQFB_XMIT_Q_MSG_ERROR` **não** vira COA). `InMemoryCorrelationStoreTest` fabrica `ReportEnvelope`
 sintéticos (`ReportEnvelope.synthetic`) — o seam (ADR-0008) entrega envelopes decodificados, nunca um
-`javax.jms.Message` — e valida a correlação:
+`jakarta.jms.Message` — e valida a correlação:
 
 ```java
 // ibmmq-jms-guide/src/test/java/com/example/ibmmq/correlation/InMemoryCorrelationStoreTest.java
 store.register(PendingMessage.newlySent(ORIGINAL_MSG_ID, "pedido-3", "{}"));
 
-// O seam (ADR-0008) entrega um ReportEnvelope decodificado — sem precisar de mock de javax.jms.Message.
+// O seam (ADR-0008) entrega um ReportEnvelope decodificado — sem precisar de mock de jakarta.jms.Message.
 // Default MQRO_COPY_MSG_ID_TO_CORREL_ID: o relatório carrega CorrelationId == MessageId original.
 ReportEnvelope coaReport = ReportEnvelope.synthetic(
         MQConstants.MQFB_COA, ORIGINAL_MSG_ID, "", ReportType.COA);
@@ -1351,7 +1351,7 @@ quadro **mudou no Java 25**:
 > `SHARECNV` do canal. Meça o pinning residual nas chamadas nativas.
 >
 > ❌ **Má prática — `JMSContext` compartilhado entre VTs, ou VT-por-mensagem sem teto.** Compartilhar o contexto corrompe
-> estado (**sintoma:** `javax.jms.IllegalStateException`, mensagens "sumindo"/duplicando). VT-por-mensagem sem limite, sob
+> estado (**sintoma:** `jakarta.jms.IllegalStateException`, mensagens "sumindo"/duplicando). VT-por-mensagem sem limite, sob
 > ~10k rpm, esgota o pool e os limites do QMgr (**sintomas:** `2025 MQRC_MAX_CONNS_LIMIT_REACHED`,
 > `2537 MQRC_CHANNEL_NOT_AVAILABLE`, timeouts de checkout do pool). Em ambos, o *throughput* fica **pior** que com um pool
 > dimensionado de consumidores.
@@ -1412,31 +1412,27 @@ quadro **mudou no Java 25**:
 | **MQCSP**                       | MQ Connection Security Parameters — estrutura do flow moderno de user/senha.                                     |
 | **CHLAUTH**                     | Channel Authentication Records — regras de autorização/identidade por canal (`SET CHLAUTH`).                     |
 
-### Apêndice 3 — Evolução para Jakarta Messaging
+### Apêndice 3 — Migrando de `javax.jms` (JMS 2.0)
 
-A partir do MQ 9.3.0 existem **dois** clientes paralelos. A escolha define o namespace de toda a stack:
+A partir do MQ 9.3.0 existem **dois** clientes paralelos. Este guia **entrega o caminho jakarta** (a coluna primária abaixo); o cliente `javax.jms` / JMS 2.0 é a **fonte de migração** de onde você está vindo. A escolha define o namespace de toda a stack:
 
-| Aspecto         | `com.ibm.mq.allclient` (este guia)                                                       | `com.ibm.mq.jakarta.client`                                 |
+| Aspecto         | `com.ibm.mq.allclient` (legado / fonte de migração)                                                       | `com.ibm.mq.jakarta.client` (este guia / primário, shipped)                                 |
 |-----------------|------------------------------------------------------------------------------------------|-------------------------------------------------------------|
 | Namespace JMS   | **`javax.jms`** (JMS 2.0)                                                                | **`jakarta.jms`** (Jakarta Messaging 3.0)                   |
 | API transitiva  | `javax.jms:javax.jms-api:2.0.1`                                                          | `jakarta.jms:jakarta.jms-api` (3.x)                         |
-| Pool compatível | `pooled-jms` **1.x/2.x** (`2.0.9`)                                                       | `pooled-jms` **3.x** (`jakarta`)                            |
-| Constantes IBM  | `com.ibm.msg.client.wmq.WMQConstants`, `com.ibm.mq.constants.MQConstants` (mesmos nomes) | idem (mesmos nomes de constantes)                           |
+| Pool compatível | `pooled-jms` **1.x/2.x** (`2.0.9`) — pacote Java `org.messaginghub.pooled.jms.*`                                                       | `pooled-jms` **3.x** (`3.2.2`, liga `jakarta.jms`) — **mesmo** pacote `org.messaginghub.pooled.jms.*`, inalterado na transição 2.x→3.x                            |
+| Constantes IBM  | `com.ibm.msg.client.wmq.WMQConstants`, `com.ibm.mq.jms.MQConnectionFactory`, `com.ibm.msg.client.jms.JmsConstants` | **três FQCNs realocam** → `com.ibm.msg.client.jakarta.wmq.WMQConstants`, `com.ibm.mq.jakarta.jms.MQConnectionFactory`, `com.ibm.msg.client.jakarta.jms.JmsConstants`. `com.ibm.mq.constants.MQConstants`/`CMQC` (os inteiros `MQRO_*`/`MQFB_*`) ficam **inalterados**; todo nome de campo `JMS_IBM_*`/`XMSC_*` **e** valor String permanece igual — só o import muda |
 | Ecossistema     | Spring Boot 2 / frameworks legados javax                                                 | Spring Boot 3 / Micronaut 4 nativo / `io.micronaut.jms` 4.x |
 
-**Passos de migração (`javax` → `jakarta`):**
+**O delta `javax` → `jakarta` aplicado (o que mudou quando este guia migrou):**
 
-1. Trocar a dependência `com.ibm.mq.allclient` → `com.ibm.mq.jakarta.client` (mesma versão, ex.: `9.4.5.0`).
-2. Trocar `pooled-jms` 2.x → **3.x**.
-3. Substituir **todos** os imports `javax.jms.*` → `jakarta.jms.*` (os nomes de classe são idênticos; só muda o pacote).
-4. **As constantes IBM (`WMQConstants`, `MQConstants`, `JMS_IBM_*`, `MQRO_*`, `MQFB_*`) permanecem iguais** — a lógica
-   de COA/COD não muda.
-5. Reexecutar os testes (a semântica é idêntica; só o namespace difere).
+1. Trocou a dependência `com.ibm.mq.allclient` → `com.ibm.mq.jakarta.client` (mesma versão, `9.4.5.0` — mudança de namespace, não bump de versão).
+2. Trocou `pooled-jms` `2.0.9` → **`3.2.2`** (o pacote Java `org.messaginghub.pooled.jms.*` é inalterado na transição 2.x→3.x; só mudam a versão e o namespace JMS que ele liga).
+3. Substituiu **todos** os imports `javax.jms.*` → `jakarta.jms.*` (os nomes de classe são idênticos; só muda o pacote).
+4. Repontou os **três FQCNs IBM realocados** — `WMQConstants` → `com.ibm.msg.client.jakarta.wmq.WMQConstants`, `MQConnectionFactory` → `com.ibm.mq.jakarta.jms.MQConnectionFactory`, `JmsConstants` → `com.ibm.msg.client.jakarta.jms.JmsConstants`; `MQConstants`/`CMQC`, os nomes e valores de `JMS_IBM_*`/`MQRO_*`/`MQFB_*`, e a lógica de COA/COD permanecem iguais.
+5. Reexecutou os testes (a semântica é idêntica; só o namespace difere — `MQFB_COA=259`/`MQFB_COD=260` confirmados inalterados no cliente jakarta).
 
-> ℹ️ **Nota — o que o namespace Jakarta agrega.** Nada na *semântica* de COA/COD. O ganho é **alinhamento de ecossistema
-**: frameworks modernos (Spring Boot 3, Micronaut 4) são jakarta-only, e o módulo declarativo `io.micronaut.jms` 4.x só
-> funciona com `jakarta.jms`. Migrar destrava esse tooling — ao custo de abrir mão do controle manual do `JMSContext` se
-> você adotar o módulo declarativo (que abstrai justamente o objeto que COA/COD precisa).
+> ℹ️ **Nota — a mudança do pool 2.x→3.x e o repacote do `WMQConstants`.** Subir o `pooled-jms` de `2.0.9`→`3.2.2` mantém o **mesmo** pacote Java (`org.messaginghub.pooled.jms.*`) — a linha 3.x apenas liga `jakarta.jms` em vez de `javax.jms`, então nenhum import de `pooled.jms` muda. As constantes IBM são o caso oposto: `WMQConstants`, `MQConnectionFactory` e `JmsConstants` **repacotam** sob `com.ibm.msg.client.jakarta.*` / `com.ibm.mq.jakarta.jms.*` (verificado no fact-sheet), então seus imports precisam mudar — enquanto `com.ibm.mq.constants.MQConstants`/`CMQC` e todo valor `JMS_IBM_*`/`XMSC_*` ficam no lugar. O ganho restante é **alinhamento de ecossistema**: frameworks modernos (Spring Boot 3, Micronaut 4) são jakarta-only, e o `io.micronaut.jms` 4.x funciona com `jakarta.jms` — ao custo de abrir mão do controle manual do `JMSContext` se você adotar o módulo declarativo (que abstrai justamente o objeto que COA/COD precisa).
 
 ### Apêndice 4 — Catálogo consolidado: Boas × Más práticas em microsserviços de alta concorrência
 
