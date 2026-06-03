@@ -35,31 +35,30 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Testes unitarios (sem broker) do logging narrado e do MDC ao longo do ciclo de vida COA/COD,
- * exercitando os tres entry points de PRODUCAO ligados ao seam (ADR-0008) — {@link SendPort}/
- * {@link ReceivePort} via os fakes in-memory (ou um mock onde isso simplifica a assercao).
+ * Unit tests (no broker) of narrated logging and MDC across the COA/COD lifecycle, exercising the
+ * three PRODUCTION entry points wired to the seam (ADR-0008) — {@link SendPort}/{@link ReceivePort}
+ * via the in-memory fakes (or a mock where that simplifies the assertion).
  *
- * <p>Valida os pilares do slice:
+ * <p>Validates the slice's pillars:
  * <ol>
- *   <li>cada etapa do ciclo (PRODUCE, CONSUME+COMMIT, COA, COD, CLASSIFY/CORRELATE/RECONCILE) emite
- *       uma linha INFO legivel com uma tag {@code [stage=...]} visivel;</li>
- *   <li>{@code messageId} e {@code correlationId} estao vinculados via MDC e aparecem em CADA linha
- *       <b>do lado de PRODUCE e dos relatorios</b> — de forma que um unico id rastreia o fluxo;</li>
- *   <li>o MDC e limpo apos cada metodo (verificado lendo o snapshot por-evento, nunca o thread-local
- *       apos o retorno).</li>
+ *   <li>each lifecycle stage (PRODUCE, CONSUME+COMMIT, COA, COD, CLASSIFY/CORRELATE/RECONCILE) emits
+ *       a readable INFO line with a visible {@code [stage=...]} tag;</li>
+ *   <li>{@code messageId} and {@code correlationId} are bound via MDC and appear on EACH line
+ *       <b>on the PRODUCE side and the reports side</b> — so a single id traces the entire flow;</li>
+ *   <li>the MDC is cleared after each method (verified by reading the per-event snapshot, never the
+ *       thread-local after the return).</li>
  * </ol>
  *
- * <p><b>Nota de observabilidade (ADR-0008, intencional):</b> o seam de recebimento expoe apenas o CORPO
- * da mensagem consumida (assinatura {@code handle(String body)}), NAO o messageId consumido. Por isso
- * as linhas {@code [stage=CONSUME]}/{@code [stage=COMMIT]} nao podem mais vincular messageId/correlationId
- * no MDC — uma consequencia aceita do seam travado. As assercoes de MDC para essas duas linhas foram
- * removidas; as tags de etapa e o corpo permanecem assertados.</p>
+ * <p><b>Observability note (ADR-0008, intentional):</b> the receive seam exposes only the BODY of the
+ * consumed message (signature {@code handle(String body)}), NOT the consumed messageId. Therefore the
+ * {@code [stage=CONSUME]}/{@code [stage=COMMIT]} lines can no longer bind messageId/correlationId in
+ * the MDC — an accepted consequence of the locked seam. The MDC assertions for those two lines were
+ * removed; the stage tags and body remain asserted.</p>
  *
- * <p><b>Captura de log:</b> usamos um {@link ListAppender} que FORCA a captura preguicosa do MDC
- * dentro de {@code append()} (chamando {@code getMDCPropertyMap()} enquanto o MDC ainda esta
- * vinculado, antes do {@code finally} do codigo de producao limpa-lo). Sem isso, a leitura tardia do
- * mapa MDC no teste devolveria {@code {}} porque o {@code LoggingEvent} do logback so materializa o
- * MDC sob demanda.</p>
+ * <p><b>Log capture:</b> we use a {@link ListAppender} that FORCES eager MDC capture inside
+ * {@code append()} (calling {@code getMDCPropertyMap()} while the MDC is still bound to the thread,
+ * before the production code's {@code finally} clears it). Without this, a late MDC read in the test
+ * would return {@code {}} because the logback {@code LoggingEvent} materialises the MDC lazily.</p>
  */
 class LoggingFlowTest {
 
@@ -68,26 +67,26 @@ class LoggingFlowTest {
     private final List<Logger> attached = new ArrayList<>();
 
     /**
-     * Attacha um {@link ListAppender} (iniciado, com captura de MDC forcada) ao logger da classe dada
-     * e o registra para detach em {@link #detachAll()}.
+     * Attaches a {@link ListAppender} (started, with forced MDC capture) to the logger of the given
+     * class and registers it for detach in {@link #detachAll()}.
      */
     private ListAppender<ILoggingEvent> attachCapturingAppender(Class<?> loggingClass) {
         ListAppender<ILoggingEvent> appender = new ListAppender<>() {
             @Override
             protected void append(ILoggingEvent eventObject) {
-                // Forca a captura preguicosa do MDC enquanto ele ainda esta vinculado a thread
-                // (este append() roda sincronamente dentro de LOG.info, ANTES do finally que limpa).
+                // Force eager MDC capture while it is still bound to the thread
+                // (this append() runs synchronously inside LOG.info, BEFORE the finally that clears it).
                 eventObject.getMDCPropertyMap();
                 super.append(eventObject);
             }
         };
-        // Obrigatorio: AppenderBase.doAppend() ignora silenciosamente eventos se !started.
+        // Required: AppenderBase.doAppend() silently ignores events if !started.
         appender.start();
 
         Logger logger = (Logger) LoggerFactory.getLogger(loggingClass);
-        // Fixa o nivel em INFO no proprio logger: torna o teste auto-contido e imune a qualquer
-        // logback-test.xml (que o logback resolve antes do logback.xml de producao) que pudesse
-        // deixar estes loggers no WARN da raiz e filtrar as linhas INFO antes do appender.
+        // Pin the level to INFO on the logger itself: makes the test self-contained and immune to any
+        // logback-test.xml (which logback resolves before the production logback.xml) that might
+        // leave these loggers at the root WARN level and filter INFO lines before the appender.
         logger.setLevel(Level.INFO);
         logger.addAppender(appender);
         attached.add(logger);
@@ -96,14 +95,14 @@ class LoggingFlowTest {
 
     @AfterEach
     void detachAll() {
-        // Remove os appenders para nao vazar captura para outros testes no mesmo JVM do surefire.
+        // Remove appenders to avoid leaking capture to other tests in the same surefire JVM.
         for (Logger logger : attached) {
             logger.detachAndStopAllAppenders();
         }
         attached.clear();
     }
 
-    /** Localiza o primeiro evento cuja mensagem formatada contem a tag de etapa dada. */
+    /** Finds the first event whose formatted message contains the given stage tag. */
     private static ILoggingEvent eventWithStage(ListAppender<ILoggingEvent> appender, String stageTag) {
         return appender.list.stream()
                 .filter(e -> e.getFormattedMessage().contains(stageTag))
@@ -118,8 +117,8 @@ class LoggingFlowTest {
         @Test
         @DisplayName("send vincula messageId=correlationId=messageId-do-seam e narra a etapa de producao")
         void produceLogsStageAndBindsMdc() {
-            // O messageId ainda volta do seam para o produtor (SendPort.send retorna o id), entao o MDC
-            // de PRODUCE permanece valido. Um mock de SendPort com o id fixo mantem as assercoes verbatim.
+            // The messageId still flows back from the seam to the producer (SendPort.send returns the id),
+            // so the PRODUCE MDC binding remains valid. A SendPort mock with a fixed id keeps the assertions verbatim.
             SendPort sendPort = mock(SendPort.class);
             when(sendPort.send(any(OutboundMessage.class))).thenReturn(MSG_ID);
 
@@ -138,7 +137,7 @@ class LoggingFlowTest {
             assertThat(produceEvent.getFormattedMessage())
                     .contains("Mensagem de negocio enviada")
                     .contains(MSG_ID);
-            // MDC: o id de negocio futuro do relatorio (correlationId) e o proprio messageId.
+            // MDC: the future report correlation id (correlationId) is the messageId itself.
             assertThat(produceEvent.getMDCPropertyMap()).containsEntry("messageId", MSG_ID);
             assertThat(produceEvent.getMDCPropertyMap()).containsEntry("correlationId", MSG_ID);
         }
@@ -151,9 +150,9 @@ class LoggingFlowTest {
         @Test
         @DisplayName("receiveOne narra consumo e commit (seam) e retorna o corpo; sem MDC de id nessas linhas")
         void consumeLogsConsumeAndCommitStages() {
-            // Pre-semeia uma mensagem de negocio no broker in-memory via o send port pareado, depois
-            // consome via o receive port real. Observabilidade (ADR-0008): o seam expoe apenas o corpo,
-            // nao o messageId consumido — por isso CONSUME/COMMIT NAO vinculam id no MDC.
+            // Pre-seeds a business message into the in-memory broker via the paired send port, then
+            // consumes it via the real receive port. Observability (ADR-0008): the seam exposes only the
+            // body, not the consumed messageId — so CONSUME/COMMIT do NOT bind id in the MDC.
             InMemoryBroker broker = new InMemoryBroker();
             SendPort sendPort = new InMemorySendPort(broker);
             ReceivePort receivePort = new InMemoryReceivePort(broker);
@@ -168,8 +167,8 @@ class LoggingFlowTest {
 
             String body = beanConsumer.receiveOne(1_000L);
 
-            // O retorno nao-nulo + a linha [stage=COMMIT] sao a evidencia de que o commit (na UoW do
-            // seam) ocorreu — o COD so e liberado apos esse commit.
+            // The non-null return + the [stage=COMMIT] line are evidence that the commit (in the seam's
+            // UoW) occurred — the COD is only released after that commit.
             assertThat(body).isEqualTo("{\"k\":\"v\"}");
 
             ILoggingEvent consumeEvent = eventWithStage(appender, "[stage=CONSUME]");
@@ -189,8 +188,8 @@ class LoggingFlowTest {
     class ReportStages {
 
         private ReportMessageConsumer reportConsumer(InMemoryCorrelationStore store) {
-            // auditRepository=null: sem datasource neste teste de log; a persistencia de auditoria fica inerte.
-            // A ReceivePort nao e exercitada por handleReport(envelope), entao um mock basta.
+            // auditRepository=null: no datasource in this log test; audit persistence stays inert.
+            // The ReceivePort is not exercised by handleReport(envelope), so a mock suffices.
             return new ReportMessageConsumer(
                     mock(ReceivePort.class), new MqProperties(), store, new ReportFeedbackRouter(), null);
         }
@@ -201,7 +200,7 @@ class LoggingFlowTest {
             InMemoryCorrelationStore store = new InMemoryCorrelationStore();
             store.register(PendingMessage.newlySent(MSG_ID, "pedido-2", "{}"));
 
-            // Default MQRO_COPY_MSG_ID_TO_CORREL_ID: o relatorio chega com correlationId == MessageId original.
+            // Default MQRO_COPY_MSG_ID_TO_CORREL_ID: the report arrives with correlationId == original MessageId.
             ReportEnvelope coaReport = ReportEnvelope.synthetic(
                     MQConstants.MQFB_COA, MSG_ID, "", ReportType.COA);
 
@@ -217,8 +216,8 @@ class LoggingFlowTest {
             assertThat(correlate).as("linha [stage=CORRELATE] emitida").isNotNull();
             assertThat(coa).as("linha [stage=COA] emitida").isNotNull();
 
-            // Toda linha relacionada carrega os mesmos ids: correlId == messageId original (default
-            // MQRO_COPY_MSG_ID_TO_CORREL_ID), entao um unico id grepa o fluxo inteiro.
+            // Every related line carries the same ids: correlId == original messageId (default
+            // MQRO_COPY_MSG_ID_TO_CORREL_ID), so a single id greps the entire flow.
             for (ILoggingEvent e : List.of(classify, correlate, coa)) {
                 assertThat(e.getMDCPropertyMap())
                         .as("MDC em %s", e.getFormattedMessage())
@@ -233,7 +232,7 @@ class LoggingFlowTest {
         void codReportLogsDeliveryAndReconcileStages() {
             InMemoryCorrelationStore store = new InMemoryCorrelationStore();
             store.register(PendingMessage.newlySent(MSG_ID, "pedido-3", "{}"));
-            store.markCoaReceived(MSG_ID); // COA ja recebido — COD completa a entrega.
+            store.markCoaReceived(MSG_ID); // COA already received — COD completes the delivery.
 
             ReportEnvelope codReport = ReportEnvelope.synthetic(
                     MQConstants.MQFB_COD, MSG_ID, "", ReportType.COD);
@@ -255,15 +254,15 @@ class LoggingFlowTest {
                         .containsEntry("correlationId", MSG_ID);
             }
             assertThat(cod.getFormattedMessage()).contains("entrega");
-            // COA+COD confirmados -> pendencia reconciliada e removida.
+            // COA+COD confirmed -> pending entry reconciled and removed.
             assertThat(store.pendingCount()).isZero();
         }
 
         @Test
         @DisplayName("Relatorio COA orfao (sem registro previo) narra [stage=ORPHAN] WARN, incrementa o contador e ainda gera evento")
         void orphanCoaReportLogsOrphanStageAndIncrementsCounter() {
-            // Sem register: o COA chega para um CorrelationId que este consumer nunca registrou
-            // (orphan-on-redelivery, ou um relatorio que este processo nunca registrou).
+            // No register: the COA arrives for a CorrelationId this consumer never registered
+            // (orphan-on-redelivery, or a report this process never registered).
             InMemoryCorrelationStore store = new InMemoryCorrelationStore();
 
             ReportEnvelope coaReport = ReportEnvelope.synthetic(
@@ -272,13 +271,13 @@ class LoggingFlowTest {
             ListAppender<ILoggingEvent> appender = attachCapturingAppender(ReportMessageConsumer.class);
             ReportMessageConsumer consumer = reportConsumer(store);
 
-            // Issue #26: um relatorio orfao ainda gera um DeliveryEvent (comportamento preservado para
-            // conhecidos E orfaos).
+            // Issue #26: an orphan report still generates a DeliveryEvent (behaviour preserved for
+            // both known and orphan reports).
             var event = consumer.handleReport(coaReport);
             assertThat(event).as("relatorio orfao ainda gera DeliveryEvent").isNotNull();
             assertThat(event.reportType()).isEqualTo(ReportType.COA);
 
-            // O outcome ORPHAN e superficializado: WARN [stage=ORPHAN] + contador de taxa de orfaos.
+            // The ORPHAN outcome is surfaced: WARN [stage=ORPHAN] + orphan-rate counter.
             ILoggingEvent orphan = eventWithStage(appender, "[stage=ORPHAN]");
             assertThat(orphan).as("linha [stage=ORPHAN] (WARN) emitida para um COA sem registro previo").isNotNull();
             assertThat(orphan.getLevel()).isEqualTo(Level.WARN);
@@ -302,7 +301,7 @@ class LoggingFlowTest {
 
             reportConsumer(store).handleReport(coaReport);
 
-            // Lido APOS o retorno: o finally do codigo de producao removeu as chaves do thread-local.
+            // Read AFTER return: the production code's finally already removed the keys from the thread-local.
             assertThat(org.slf4j.MDC.get("messageId")).isNull();
             assertThat(org.slf4j.MDC.get("correlationId")).isNull();
         }
