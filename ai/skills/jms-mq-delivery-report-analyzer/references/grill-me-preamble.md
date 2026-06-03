@@ -8,27 +8,50 @@ have not first grounded here.
 
 ```mermaid
 flowchart TD
+    N["Namespace & JDK<br/>(javax vs jakarta, JDK version,<br/>JEP-491 boundary)"]
     T["Topology<br/>(replicas, competing consumers,<br/>state location)"]
     I["Intent<br/>(which reports, how requested)"]
     R["Reconciliation<br/>(join key, store, assertion)"]
     L["Lifecycle<br/>(persistence, transactions,<br/>poison handling)"]
     A["Authority & transport<br/>(2035/+passid, TLS, secrets)"]
 
+    N e0@--> T
     T e1@--> I
     I e2@--> R
     R e3@--> L
     L e4@--> A
+    e0@{ animate: true }
     e1@{ animate: true }
     e2@{ animate: true }
     e3@{ animate: true }
     e4@{ animate: true }
 
+    classDef ns fill:#e8d5ef,stroke:#7a4fa5,color:#1f2430;
     classDef step fill:#cfe0ef,stroke:#4a6fa5,color:#1f2430;
     classDef sec fill:#f4e6c4,stroke:#b08a3e,color:#1f2430;
+    class N ns;
     class T,I,R,L step;
     class A sec;
     linkStyle default stroke:#4a6fa5;
 ```
+
+## Branch 0 — Namespace & JDK (answered first — parameterizes all namespace-sensitive checks)
+
+1. Is the target using **`javax.jms`** (JMS 2.0) or **`jakarta.messaging`** (Jakarta
+   Messaging 3.0)? Check the import statements or the client jar artifact ID in the
+   build manifest (`com.ibm.mq.allclient` → javax; `com.ibm.mq.jakarta.client` → jakarta).
+2. What version of pooled-jms is in use — **2.x** (javax) or **3.x** (jakarta)? The
+   package `org.messaginghub.pooled.jms.*` is unchanged across versions.
+3. Which **JDK version** is the runtime? Specifically: is it **JDK 24 or later** (JEP 491
+   delivered — `synchronized` no longer pins virtual threads) or earlier (JEP 491 absent)?
+4. For the WMQConstants-based property lookups, confirm the target imports from:
+   - **javax:** `com.ibm.msg.client.wmq.WMQConstants`
+   - **jakarta:** `com.ibm.msg.client.jakarta.wmq.WMQConstants`
+   The underlying MQ constant class (`com.ibm.mq.constants.MQConstants` / `CMQC` —
+   `MQFB_COA`, `MQFB_COD`, `MQRO_*`) is **unchanged** across namespaces.
+
+Record namespace and JDK answers before proceeding; they parameterize Cells B (dimension 6)
+and the connection-pool (dimension 4) checks.
 
 ## Branch 1 — Topology (feeds Cells A & B)
 
@@ -67,8 +90,10 @@ flowchart TD
     `constants.md` §6.)
 15. Are sessions transacted or auto-acknowledge? Local transactions or XA?
 16. Is there one `JMSContext`/`Session` per thread, or is a context shared across threads?
-17. Are Virtual Threads used for JMS work, and on what JDK (pre- or post-JEP-491 / JDK 24)?
-    Is `synchronized` held across blocking JMS calls?
+17. Are Virtual Threads used for JMS work? (JDK version already captured in Branch 0;
+    apply that answer here.) Even post-JEP-491 (JDK 24+), the MQ client's native frames
+    still pin virtual threads — confirm whether blocking JMS I/O is on virtual or platform
+    threads. Is `synchronized` held across blocking JMS calls?
 18. Is there a backout threshold (`BOTHRESH`) + backout queue (`BOQNAME`) on the
     report-consuming queue? Is report processing idempotent under redelivery?
 19. Is the reply-to queue dedicated and sized for report volume (~2× business volume when

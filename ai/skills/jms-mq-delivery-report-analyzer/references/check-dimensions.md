@@ -51,21 +51,52 @@ additionally evaporates the map, orphaning thousands of in-flight correlations a
 msg/s. The store must be external (keyed by the join id) and idempotent under
 redelivery.
 
+### Generic practice — MQMD field recovery from reports [practice]
+
+Report messages carry their own MQMD descriptor, which includes six fields that the
+queue manager populates on the report's own PUT: `PutDate`, `PutTime`, `MsgId`,
+`CorrelId`, `BackoutCount`, and the originating `AppName`. These values are recoverable
+**without any producer change and without requesting `_WITH_FULL_DATA`** — they live in
+the report message's own descriptor, not in the payload.
+
+**Look for:** whether the report consumer enables MQMD read on the connection factory
+(the `mdReadEnabled` URI parameter or equivalent connection factory setting) and reads
+the descriptor fields via `getObjectProperty()` for byte-array fields (returned as
+`byte[]`, often hex-encoded for logging) and extracts `PutDate`+`PutTime` in UTC (the
+queue manager writes GMT; parse with explicit `ZoneOffset.UTC`). If MQMD read is not
+enabled, the consumer reads `JMS_IBM_FEEDBACK` (always available) but loses the richer
+descriptor metadata.
+
+**Distributed failure mode:** without MQMD read, a report consumer at 167 msg/s loses
+per-report timing, backout depth, and the queue manager's PUT timestamp for every
+message — metadata that is otherwise unrecoverable after the message is consumed.
+
 ---
 
 ## Cell B — Connectivity, Pooling & Concurrency reviewer
 
 ### Dimension 4 — Connection pooling
 
-**Look for:** use of a JMS connection pool (the `pooled-jms` line — versions 1.x and 2.x
-are `javax.jms`; 3.x is `jakarta.jms`) with a **bounded** maximum connection count, and
-no per-message creation/teardown of connections or sessions. Confirm idle/eviction and
-max-sessions-per-connection are configured.
+**Look for:** use of a JMS connection pool (the `pooled-jms` library — **2.x for
+`javax.jms` [javax]** / **3.x for `jakarta.messaging` [jakarta]**; the package
+`org.messaginghub.pooled.jms.*` is unchanged) with a **bounded** maximum connection
+count, and no per-message creation/teardown of connections or sessions. Confirm
+idle/eviction and max-sessions-per-connection are configured.
+
+**Async MessageListener requires a dedicated non-pooled factory [practice].** A
+`MessageListener` registered via `Session.setMessageListener()` or a JMS listener
+container drives its own session lifecycle and does not benefit from a pooled factory —
+sharing a pooled factory with listeners starves the pool and can deadlock under load.
+The correct pattern is a **role-based factory split**: one pooled factory for producers
+and synchronous consumers, and a separate dedicated (non-pooled) factory configured
+solely for the async listener. The MQ client supports multiple concurrent
+`MQConnectionFactory` instances connected to the same broker.
 
 **Distributed failure mode:** at 167 msg/s × N pods, a pool that is unbounded exhausts
 the queue manager's channel limit (each replica multiplies the connection count); a pool
 that is too small serialises throughput. Per-message connection churn collapses under
-sustained load even though it passes a single-message test.
+sustained load even though it passes a single-message test. A shared pooled factory for
+async listeners can deadlock when the pool drains under peak load.
 
 ### Dimension 5 — Transactions (local vs XA, per-thread JMSContext)
 
@@ -82,18 +113,27 @@ state non-deterministically and surfaces only under the concurrency that product
 produces. Backing out a consumer transaction suppresses the COD, so reconciliation must
 not treat "no COD yet" as "delivered".
 
-### Dimension 6 — Virtual Threads pinning (JEP 491)
+### Dimension 6 — Virtual Threads & the MQ consume path
 
-**Look for:** Virtual Threads carrying JMS work, combined with `synchronized` blocks that
-hold a lock across a blocking JMS call (send/receive/commit). Before JEP 491 (delivered
-in JDK 24), a virtual thread that blocks inside a `synchronized` region **pins** its
-carrier platform thread; JEP 491 removes that pin for `synchronized`, but native frames
-and other pinning sources remain. Confirm either the runtime is JDK 24+ **or** hot JMS
-paths use `ReentrantLock` instead of `synchronized`.
+**Validated conclusion (apply this, not the conceptual framing below):** the correct
+pattern for a blocking JMS consume loop is **one platform thread per consumer +
+replica fan-out** — not virtual threads. JEP 491 (JDK 24) removes the `synchronized`
+pinning boundary, but the IBM MQ client's **native frames still pin virtual threads
+regardless of JDK version**; blocking JMS I/O (`receive()`, `commit()`) inside a virtual
+thread therefore pins a carrier even on JDK 24+. Parallelism is achieved by running
+**more replicas** (competing consumers on a shared queue), not by multiplexing virtual
+threads inside a pod.
+
+**What to look for:** Is blocking JMS work (receive loop, `Session.receive()`,
+`commit()`) assigned to virtual threads? If so, flag it regardless of JDK version — the
+native-frame pinning boundary survives JEP 491. Check the JDK version captured in
+Branch 0: on pre-JDK-24 runtimes the additional `synchronized`-block pinning risk is
+present on top; on JDK 24+ `synchronized` no longer pins but native frames do.
 
 **Distributed failure mode:** pinning silently caps effective parallelism — at 167 msg/s
 a handful of pinned carriers throttles a pod far below its configured concurrency, and
-the symptom (latency, not error) is easy to misattribute to the broker.
+the symptom (latency, not error) is easy to misattribute to the broker. The fix
+(platform-thread consumer + additional replicas) is both simpler and correct.
 
 ---
 

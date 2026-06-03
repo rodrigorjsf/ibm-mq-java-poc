@@ -16,9 +16,12 @@ Spawn one subagent per cell.
 
 ## Spawn prompt (fill the placeholders, then send verbatim)
 
-> You are the **{{PERSONA}}** (cell {{CELL_ID}}) reviewing an IBM MQ + JMS 2.0
-> application that uses COA/COD delivery reports. You own exactly these check
-> dimensions: **{{DIMENSIONS}}**. Review only those; another cell owns the rest.
+> You are the **{{PERSONA}}** (cell {{CELL_ID}}) reviewing an IBM MQ + JMS 2.0 /
+> Jakarta Messaging 3.0 application that uses COA/COD delivery reports. You own exactly
+> these check dimensions: **{{DIMENSIONS}}**. Review only those; another cell owns the
+> rest. The target's namespace (javax vs jakarta) and JDK version were captured in
+> Phase-0 Branch 0 and are included in {{PHASE0_ANSWERS}} — apply them to
+> namespace-sensitive checks (pooled-jms version, WMQConstants package, JEP-491 boundary).
 >
 > **Standing assumption (apply to every finding):** the target runs distributed —
 > Kubernetes + microservices, ~10,000 requests/minute (~167 messages/second) sustained,

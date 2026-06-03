@@ -1,18 +1,27 @@
 # Validated COA/COD constants & report semantics
 
 These values were extracted from authentic IBM MQ client bytecode (the
-`com.ibm.mq.allclient` 9.4.5.0 jar, sha1-verified) and cross-checked against IBM
+`com.ibm.mq.allclient` 9.4.5.0 jar [javax], sha1-verified) and cross-checked against IBM
 documentation. They are reproduced here **inline** so this skill is self-contained: a
 reviewer never needs network access or a sibling repository to ground a finding. Treat
 every value below as domain truth.
 
-> Naming scheme. The integer report-option and feedback constants (`MQRO_*`, `MQFB_*`)
+> **Client jar coordinates (namespace-sensitive):**
+> - **[javax] JMS 2.0:** `com.ibm.mq:allclient` — e.g. `com.ibm.mq:allclient:9.4.5.0`
+> - **[jakarta] Jakarta Messaging 3.0:** `com.ibm.mq:jakarta.client` — e.g.
+>   `com.ibm.mq:jakarta.client:9.4.5.0`
+
+> **Naming scheme.** The integer report-option and feedback constants (`MQRO_*`, `MQFB_*`)
 > are declared in `com.ibm.mq.constants.CMQC` (aggregated by `MQConstants`) — **not** in
-> `WMQConstants`, which declares only one field. In JMS those integers are surfaced as
-> mixed-case message properties whose Java field names are UPPER_SNAKE
-> (`JMS_IBM_REPORT_COA`) but whose string values are mixed-case (`"JMS_IBM_Report_COA"`).
-> The JMS field names live in `com.ibm.msg.client.jms.JmsConstants`, reachable via
-> `WMQConstants`.
+> `WMQConstants`, which declares only one field. These constants are **unchanged across
+> namespaces** (same class, same values in both javax and jakarta client jars). In JMS /
+> Jakarta Messaging those integers are surfaced as mixed-case message properties whose
+> Java field names are UPPER_SNAKE (`JMS_IBM_REPORT_COA`) but whose string values are
+> mixed-case (`"JMS_IBM_Report_COA"`). The JMS field names live in:
+> - **[javax]:** `com.ibm.msg.client.jms.JmsConstants`, reachable via
+>   `com.ibm.msg.client.wmq.WMQConstants`
+> - **[jakarta]:** same logical constants, reachable via
+>   `com.ibm.msg.client.jakarta.wmq.WMQConstants`
 
 ## 1. Feedback codes — `MQFB_*` (read via `JMS_IBM_FEEDBACK`)
 
@@ -110,17 +119,38 @@ that delivery reports are non-persistent by default is **false** — flag any co
 config that relies on it (e.g. sizing a non-persistent reply-to queue for what will
 actually be persistent report traffic).
 
-## 7. Report-PUT context authority (the 2035 trap)
+## 7. MQMD field recovery from reports
+
+A report message carries its own Message Descriptor (MQMD), which the queue manager
+populates on the report's own PUT. The following descriptor fields are recoverable from
+the **report message itself** — no producer change and no `_WITH_FULL_DATA` variant are
+required:
+
+| Field | How to read (JMS API) | Notes |
+| --- | --- | --- |
+| `PutDate` + `PutTime` | `getStringProperty("JMS_IBM_MQMD_PutDate")` / `"JMS_IBM_MQMD_PutTime"` | Queue manager writes GMT; parse with explicit `ZoneOffset.UTC` |
+| `MsgId` | `getObjectProperty("JMS_IBM_MQMD_MsgId")` → `byte[]` | Hex-encode for logging |
+| `CorrelId` | `getObjectProperty("JMS_IBM_MQMD_CorrelId")` → `byte[]` | Matches original `JMSMessageID` bytes under default id propagation |
+| `BackoutCount` | `getIntProperty("JMS_IBM_MQMD_BackoutCount")` | Number of times redelivered |
+| `PutApplName` | `getStringProperty("JMS_IBM_MQMD_PutApplName")` | QMgr's appname for the report PUT |
+
+**Prerequisite:** MQMD read must be enabled on the connection factory. The URI form is
+`queue:///<QUEUE.NAME>?mdReadEnabled=true`; alternatively set it via
+`MQConnectionFactory.setBooleanProperty(WMQConstants.WMQ_MQMD_READ_ENABLED, true)`.
+Without this setting, the `JMS_IBM_MQMD_*` properties return null; `JMS_IBM_FEEDBACK`
+remains available regardless (it is always populated by the JMS layer).
+
+## 8. Report-PUT context authority (the 2035 trap)
 
 To generate and deliver a COA/COD report, the queue manager performs a **PUT with
 context** onto the reply-to queue, on behalf of the principal associated with the
 inbound channel. That principal therefore needs **context authority (`+passid` minimum)**
 on the reply-to queue. The minimum authority it actually requires is **`+passid`** (pass
-identity context) — verified live on k3d, where `+put +setall` *without* `+passid` still
-failed `AMQ8077W … passid`. A low-privilege principal lacking it causes the report PUT to
-fail with `MQRC_NOT_AUTHORIZED (2035)`, and the report **silently lands on the
-dead-letter queue** — the reply-to queue stays empty and the failure is easy to miss. The
-fix is to grant the principal the full context authority set, conceptually:
+identity context) — live-verified: `+put +setall` *without* `+passid` still failed
+`AMQ8077W … passid`. A low-privilege principal lacking it causes the report PUT to fail
+with `MQRC_NOT_AUTHORIZED (2035)`, and the report **silently lands on the dead-letter
+queue** — the reply-to queue stays empty and the failure is easy to miss. The fix is to
+grant the principal the full context authority set, conceptually:
 
 ```
 SET AUTHREC PROFILE('APP.REPORT.QUEUE') OBJTYPE(QUEUE) PRINCIPAL('<app-principal>') AUTHADD(PUT, PASSID, PASSALL, SETID, SETALL)
