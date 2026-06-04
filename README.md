@@ -1,5 +1,7 @@
 # ibm-mq-java-poc — documentation hub
-
+---
+![](docs/readme-logo.png)
+---
 Production-grade reference for integrating **Java 25 / Micronaut 4** with **IBM MQ** via
 **Jakarta Messaging 3.0 (`jakarta.jms`)**, with deep focus on **COA / COD delivery reports**
 (Confirmation On Arrival / Confirmation On Delivery) in a distributed, Kubernetes-hosted,
